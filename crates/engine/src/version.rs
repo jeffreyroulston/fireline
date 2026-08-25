@@ -1,6 +1,9 @@
 use crate::cards::ALL_CARDS;
 use serde::Serialize;
 
+#[cfg(feature = "ts")]
+use ts_rs::TS;
+
 /// Manual bump when solver / model semantics change.
 pub const RULES_VERSION: u32 = 1;
 /// Manual bump when RNG, shuffle, or seed derivation changes.
@@ -10,6 +13,11 @@ pub const ATTRIBUTION_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct EngineVersion {
     pub rules: u32,
     pub sampler: u32,

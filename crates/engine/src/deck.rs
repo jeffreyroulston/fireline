@@ -8,12 +8,22 @@ use crate::{
 };
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "ts")]
+use ts_rs::TS;
+
 use std::collections::BTreeMap;
+use std::ops::ControlFlow;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct DeckEvalRequest {
     pub deck: BTreeMap<String, u8>,
     #[serde(default = "default_samples")]
@@ -28,10 +38,17 @@ pub struct DeckEvalRequest {
     pub sim_type: crate::model::SimType,
     #[serde(default = "default_rollouts")]
     pub rollouts: u16,
+    #[serde(default)]
+    pub budget: crate::budget::Budget,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct SampleHand {
     pub hand: Vec<&'static str>,
     pub damage: u8,
@@ -42,11 +59,17 @@ pub struct SampleHand {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub two_pass: Option<TwoPassResult>,
     #[serde(skip)]
+    #[cfg_attr(feature = "ts", ts(skip))]
     pub line_stats: crate::stats::LineCardStats,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct DeckEvalResult {
     pub sim_type: SimType,
     pub samples: usize,
@@ -67,6 +90,11 @@ pub struct DeckEvalResult {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct OptimizeRequest {
     pub bounds: BTreeMap<String, crate::model::Bounds>,
     pub deck_size: u8,
@@ -79,10 +107,17 @@ pub struct OptimizeRequest {
     pub metric: Metric,
     #[serde(default = "default_seed")]
     pub seed: u64,
+    #[serde(default)]
+    pub budget: crate::budget::Budget,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub enum Metric {
     #[default]
     Mean,
@@ -91,6 +126,11 @@ pub enum Metric {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct HistoryPoint {
     pub iteration: u16,
     pub score: f64,
@@ -98,6 +138,11 @@ pub struct HistoryPoint {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct RankedDeck {
     pub rank: u8,
     pub score: f64,
@@ -106,6 +151,11 @@ pub struct RankedDeck {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct OptimizeProgress {
     pub decks_scored: u32,
     pub total_decks: u32,
@@ -117,6 +167,11 @@ pub struct OptimizeProgress {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct OptimizeResult {
     pub best_counts: BTreeMap<String, u8>,
     pub best_score: f64,
@@ -150,8 +205,123 @@ const fn default_rollouts() -> u16 {
     8
 }
 
-/// Hard cap so a browser tab cannot queue an unbounded full search.
-const MAX_OPTIMIZE_DECKS: u32 = 500;
+/// Legacy alias kept for documentation; use `Budget::default().max_optimize_decks`.
+const _MAX_OPTIMIZE_DECKS: u32 = 500;
+
+#[derive(Clone)]
+struct SampleDraw {
+    drawn: Vec<Card>,
+    key: [u8; CARD_COUNT],
+    sample_index: u16,
+}
+
+fn hand_key(drawn: &[Card]) -> [u8; CARD_COUNT] {
+    let mut key = [0_u8; CARD_COUNT];
+    for &card in drawn {
+        key[card.index()] += 1;
+    }
+    key
+}
+
+fn drawn_from_key(key: [u8; CARD_COUNT]) -> Vec<Card> {
+    let mut drawn = Vec::new();
+    for card in crate::cards::ALL_CARDS {
+        drawn.extend(std::iter::repeat_n(card, key[card.index()] as usize));
+    }
+    drawn
+}
+
+fn solve_sample_hand(
+    drawn: &[Card],
+    request: &DeckEvalRequest,
+    budget: &crate::budget::Budget,
+    max_turns: u8,
+    rollouts: u16,
+    sample_index: u16,
+) -> SampleHand {
+    let hand_ids = drawn.iter().map(|card| card.id().to_string()).collect();
+    let result = solve(&SolveRequest {
+        hand: hand_ids,
+        go_first: request.go_first,
+        max_turns,
+        sim_type: request.sim_type,
+        deck: request.deck.clone(),
+        rollouts,
+        seed: request.seed.wrapping_add(u64::from(sample_index) * 17),
+        budget: *budget,
+    })
+    .expect("deck cards already validated");
+    let damage = match request.sim_type {
+        SimType::MonteCarlo => result
+            .distribution
+            .as_ref()
+            .map(|dist| dist.p50)
+            .unwrap_or(result.max_damage),
+        _ => result.max_damage,
+    };
+    SampleHand {
+        hand: drawn.iter().map(|card| card.id()).collect(),
+        damage,
+        steps: result.steps,
+        nodes: result.nodes,
+        distribution: result.distribution,
+        two_pass: result.two_pass,
+        line_stats: result.line_stats,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn solve_unique_hands(
+    unique: &[(SimType, [u8; CARD_COUNT], u16)],
+    request: &DeckEvalRequest,
+    budget: &crate::budget::Budget,
+    max_turns: u8,
+    rollouts: u16,
+) -> FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand> {
+    use rayon::prelude::*;
+    unique
+        .par_iter()
+        .map(|&(sim_type, key, sample_index)| {
+            let drawn = drawn_from_key(key);
+            let mut sample = solve_sample_hand(
+                &drawn,
+                request,
+                budget,
+                max_turns,
+                rollouts,
+                sample_index,
+            );
+            sample.hand = drawn.iter().map(|card| card.id()).collect();
+            ((sim_type, key), sample)
+        })
+        .collect()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn solve_unique_hands(
+    unique: &[(SimType, [u8; CARD_COUNT], u16)],
+    request: &DeckEvalRequest,
+    budget: &crate::budget::Budget,
+    max_turns: u8,
+    rollouts: u16,
+) -> FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand> {
+    unique
+        .iter()
+        .map(|&(sim_type, key, sample_index)| {
+            let drawn = drawn_from_key(key);
+            let mut sample = solve_sample_hand(
+                &drawn,
+                request,
+                budget,
+                max_turns,
+                rollouts,
+                sample_index,
+            );
+            sample.hand = drawn.iter().map(|card| card.id()).collect();
+            ((sim_type, key), sample)
+        })
+        .collect()
+}
 
 #[derive(Clone, Copy)]
 struct Rng(u64);
@@ -171,77 +341,68 @@ impl Rng {
 }
 
 pub fn evaluate(request: &DeckEvalRequest) -> Result<DeckEvalResult, String> {
-    evaluate_with_progress(request, |_, _| {})
+    evaluate_with_progress(request, |_, _| ControlFlow::Continue(()))
 }
 
 pub fn evaluate_with_progress(
     request: &DeckEvalRequest,
-    mut on_hand: impl FnMut(u16, u16),
+    mut on_hand: impl FnMut(u16, u16) -> ControlFlow<()>,
 ) -> Result<DeckEvalResult, String> {
     #[cfg(not(target_arch = "wasm32"))]
     let started = Instant::now();
+    let budget = request.budget;
     let deck = parse_counts(&request.deck)?;
     if deck.len() < 7 {
         return Err("deck must contain at least seven recognized cards".into());
     }
-    let max_turns = request.max_turns.clamp(2, 3);
-    let rollouts = request.rollouts.clamp(1, 24);
+    let max_turns = request
+        .max_turns
+        .clamp(budget.max_turns_min, budget.max_turns_max);
+    let rollouts = request.rollouts.clamp(1, budget.max_eval_rollouts);
     let mut rng = Rng(request.seed);
-    let mut cache: FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand> = FxHashMap::default();
-    let mut hands = Vec::with_capacity(request.samples as usize);
-    let mut damages = Vec::with_capacity(request.samples as usize);
-    let mut total_nodes = 0;
-    let mut stats_acc = crate::stats::DeckStatAccumulator::with_deck(&deck);
 
+    let mut draws = Vec::with_capacity(request.samples as usize);
     for sample_index in 0..request.samples {
         let mut shuffled = deck.clone();
         shuffle(&mut shuffled, &mut rng);
         let drawn = shuffled[..7].to_vec();
-        let mut key = [0_u8; CARD_COUNT];
-        for &card in &drawn {
-            key[card.index()] += 1;
+        draws.push(SampleDraw {
+            key: hand_key(&drawn),
+            drawn,
+            sample_index,
+        });
+    }
+
+    let mut unique = Vec::new();
+    let mut seen = FxHashMap::default();
+    for draw in &draws {
+        let cache_key = (request.sim_type, draw.key);
+        if seen.insert(cache_key, draw.sample_index).is_none() {
+            unique.push((request.sim_type, draw.key, draw.sample_index));
         }
-        let cache_key = (request.sim_type, key);
-        let sample = cache
-            .entry(cache_key)
-            .or_insert_with(|| {
-                let hand_ids = drawn.iter().map(|card| card.id().to_string()).collect();
-                let result = solve(&SolveRequest {
-                    hand: hand_ids,
-                    go_first: request.go_first,
-                    max_turns,
-                    sim_type: request.sim_type,
-                    deck: request.deck.clone(),
-                    rollouts,
-                    seed: request.seed.wrapping_add(u64::from(sample_index) * 17),
-                })
-                .expect("deck cards already validated");
-                let damage = match request.sim_type {
-                    SimType::MonteCarlo => result
-                        .distribution
-                        .as_ref()
-                        .map(|dist| dist.p50)
-                        .unwrap_or(result.max_damage),
-                    _ => result.max_damage,
-                };
-                SampleHand {
-                    hand: drawn.iter().map(|card| card.id()).collect(),
-                    damage,
-                    steps: result.steps,
-                    nodes: result.nodes,
-                    distribution: result.distribution,
-                    two_pass: result.two_pass,
-                    line_stats: result.line_stats,
-                }
-            })
-            .clone();
-        let mut ordered = sample;
-        ordered.hand = drawn.iter().map(|card| card.id()).collect();
-        total_nodes += ordered.nodes;
-        damages.push(ordered.damage);
-        stats_acc.add_sample(&drawn, &ordered.line_stats);
-        hands.push(ordered);
-        on_hand(sample_index + 1, request.samples);
+    }
+
+    let cache = solve_unique_hands(&unique, request, &budget, max_turns, rollouts);
+
+    let mut hands = Vec::with_capacity(draws.len());
+    let mut damages = Vec::with_capacity(draws.len());
+    let mut total_nodes = 0;
+    let mut stats_acc = crate::stats::DeckStatAccumulator::with_deck(&deck);
+
+    for (index, draw) in draws.iter().enumerate() {
+        let cache_key = (request.sim_type, draw.key);
+        let mut sample = cache
+            .get(&cache_key)
+            .cloned()
+            .expect("every draw key was solved");
+        sample.hand = draw.drawn.iter().map(|card| card.id()).collect();
+        total_nodes += sample.nodes;
+        damages.push(sample.damage);
+        stats_acc.add_sample(&draw.drawn, &sample.line_stats);
+        hands.push(sample);
+        if on_hand(index as u16 + 1, request.samples).is_break() {
+            break;
+        }
     }
 
     let mut sorted = damages.clone();
@@ -283,13 +444,14 @@ pub fn evaluate_with_progress(
             bounds: BTreeMap::new(),
             deck_size: None,
             decks: None,
+            budget,
         },
         card_stats: stats_acc.finish(),
     })
 }
 
 pub fn optimize(request: &OptimizeRequest) -> Result<OptimizeResult, String> {
-    optimize_with_progress(request, |_| {})
+    optimize_with_progress(request, |_| ControlFlow::Continue(()))
 }
 
 /// Number of legal count vectors inside `bounds` that sum to `deck_size`.
@@ -307,17 +469,18 @@ pub fn count_legal_decks(
 
 pub fn optimize_with_progress(
     request: &OptimizeRequest,
-    mut on_progress: impl FnMut(OptimizeProgress),
+    mut on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()>,
 ) -> Result<OptimizeResult, String> {
     #[cfg(not(target_arch = "wasm32"))]
     let started = Instant::now();
+    let budget = request.budget;
     let legal_decks = count_legal_decks(&request.bounds, request.deck_size)?;
     if legal_decks == 0 {
         return Err("no legal lists exist for these bounds and deck size".into());
     }
 
     let target = (request.decks.max(1))
-        .min(MAX_OPTIMIZE_DECKS)
+        .min(budget.max_optimize_decks)
         .min(u32::try_from(legal_decks).unwrap_or(u32::MAX));
     let total_hands = u64::from(target) * u64::from(request.samples);
     let mut decks_scored = 0_u32;
@@ -326,14 +489,18 @@ pub fn optimize_with_progress(
     let mut top: Vec<(f64, BTreeMap<String, u8>)> = Vec::with_capacity(5);
     let mut history = Vec::new();
 
-    on_progress(OptimizeProgress {
+    if on_progress(OptimizeProgress {
         decks_scored: 0,
         total_decks: target,
         legal_decks,
         hands_simulated: 0,
         total_hands,
         best_score: 0.0,
-    });
+    })
+    .is_break()
+    {
+        return Err("cancelled".into());
+    }
 
     let mut rng = Rng(request.seed);
     let mut seen = rustc_hash::FxHashSet::default();
@@ -376,7 +543,7 @@ pub fn optimize_with_progress(
         return Err("could not sample any legal lists".into());
     }
 
-    on_progress(OptimizeProgress {
+    let _ = on_progress(OptimizeProgress {
         decks_scored,
         total_decks: target,
         legal_decks,
@@ -418,6 +585,7 @@ pub fn optimize_with_progress(
             bounds: request.bounds.clone(),
             deck_size: Some(request.deck_size),
             decks: Some(target),
+            budget,
         },
     })
 }
@@ -520,7 +688,7 @@ fn score_optimize_deck(
     legal_decks: u64,
     total_hands: u64,
     best_score: f64,
-    on_progress: &mut impl FnMut(OptimizeProgress),
+    on_progress: &mut impl FnMut(OptimizeProgress) -> ControlFlow<()>,
 ) -> Result<f64, String> {
     *decks_scored += 1;
     let deck_number = *decks_scored;
@@ -534,6 +702,7 @@ fn score_optimize_deck(
             seed: request.seed.wrapping_add(u64::from(deck_number) * 131),
             sim_type: SimType::FireBrick,
             rollouts: 1,
+            budget: request.budget,
         },
         |hand_done, _hand_total| {
             let hands_simulated = u64::from(deck_number.saturating_sub(1)) * u64::from(samples)
@@ -545,7 +714,7 @@ fn score_optimize_deck(
                 hands_simulated,
                 total_hands,
                 best_score,
-            });
+            })
         },
     )?;
     Ok(match request.metric {
@@ -623,6 +792,7 @@ mod tests {
             seed: 9,
             sim_type: SimType::FireBrick,
             rollouts: 1,
+            budget: crate::budget::Budget::default(),
         };
         let one = evaluate(&request).unwrap();
         let two = evaluate(&request).unwrap();
@@ -647,6 +817,7 @@ mod tests {
             decks: 4,
             metric: Metric::Mean,
             seed: 4,
+            budget: crate::budget::Budget::default(),
         })
         .unwrap();
         assert_eq!(
@@ -680,6 +851,7 @@ mod tests {
             seed: 3,
             sim_type: SimType::FireBrick,
             rollouts: 0,
+            budget: crate::budget::Budget::default(),
         })
         .unwrap();
         assert_eq!(result.effective.max_turns, Some(2));
@@ -701,6 +873,7 @@ mod tests {
             seed: 11,
             sim_type: SimType::FireBrick,
             rollouts: 1,
+            budget: crate::budget::Budget::default(),
         })
         .unwrap();
         for stat in &result.card_stats {

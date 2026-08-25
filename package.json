@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "cargo test --workspace --release",
+    "build:contracts": "cargo test -p ga-fire-engine --features ts export_typescript -- --nocapture",
     "bench": "cargo bench -p ga-fire-engine"
   },
   "dependencies": {

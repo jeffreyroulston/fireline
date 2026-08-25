@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "ts")]
+use ts_rs::TS;
+
 pub const CARD_COUNT: usize = 28;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -296,6 +299,59 @@ impl Card {
         }
     }
 
+    pub const fn life(self) -> Option<u8> {
+        Some(match self {
+            Self::Brick => return None,
+            Self::Arthur => 3,
+            Self::KingdomInformant => 2,
+            Self::ClumsyApprentice => 1,
+            Self::SableRemnant => 1,
+            Self::HastyMessenger => 2,
+            Self::RedHare => 3,
+            Self::Racoo => 1,
+            Self::CorhaziCourier => 2,
+            Self::VeteranBlazebearer => 3,
+            Self::Sadi => 2,
+            Self::CaptivatingCutthroat => 1,
+            Self::DazzlingCourtesan => 2,
+            Self::MarchHare => 1,
+            Self::PepperedChef => 1,
+            Self::Rococo => 1,
+            Self::Tweedledum => 2,
+            Self::XiaoQiao => 2,
+            _ => return None,
+        })
+    }
+
+    pub const fn assassin_power_bonus(self) -> Option<u8> {
+        match self {
+            Self::SableRemnant | Self::CaptivatingCutthroat => Some(1),
+            _ => None,
+        }
+    }
+
+    pub const fn kind_label(self) -> &'static str {
+        if self.is_ally() {
+            "ally"
+        } else if self.is_attack() {
+            "attack"
+        } else if self.is_action() {
+            "action"
+        } else if self.is_item() {
+            "item"
+        } else {
+            "brick"
+        }
+    }
+
+    pub const fn element(self) -> &'static str {
+        if self.is_fire() {
+            "fire"
+        } else {
+            "norm"
+        }
+    }
+
     pub const fn is_playable(self) -> bool {
         !matches!(self, Self::Brick)
     }
@@ -361,6 +417,72 @@ pub const PLAYABLE_CARDS: [Card; 27] = [
     Card::XiaoQiao,
     Card::HotCake,
 ];
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
+pub struct CardDef {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub short: &'static str,
+    pub kind: &'static str,
+    pub cost: u8,
+    pub element: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub power: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub life: Option<u8>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stealth: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unique: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assassin_power_bonus: Option<u8>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub floating_memory: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kindle: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepare: Option<u8>,
+}
+
+impl CardDef {
+    pub const fn from_card(card: Card) -> Self {
+        let kindle = card.kindle();
+        let prepare = card.prepare();
+        Self {
+            id: card.id(),
+            name: card.name(),
+            short: card.short(),
+            kind: card.kind_label(),
+            cost: card.cost(),
+            element: card.element(),
+            power: {
+                let power = card.power();
+                if power > 0 {
+                    Some(power)
+                } else {
+                    None
+                }
+            },
+            life: card.life(),
+            stealth: card.is_stealth(),
+            unique: card.is_unique(),
+            assassin_power_bonus: card.assassin_power_bonus(),
+            floating_memory: card.floating_memory(),
+            kindle: if kindle > 0 { Some(kindle) } else { None },
+            prepare: if prepare > 0 { Some(prepare) } else { None },
+        }
+    }
+}
+
+pub fn card_catalog() -> Vec<CardDef> {
+    ALL_CARDS.iter().copied().map(CardDef::from_card).collect()
+}
 
 pub fn parse_card(value: &str) -> Option<Card> {
     let normalized = value

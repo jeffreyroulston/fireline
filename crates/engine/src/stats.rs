@@ -4,6 +4,9 @@ use crate::cards::{ALL_CARDS, CARD_COUNT, Card, PLAYABLE_CARDS};
 use crate::model::{Action, State, Step};
 use serde::Serialize;
 
+#[cfg(feature = "ts")]
+use ts_rs::TS;
+
 #[derive(Clone, Debug, Default)]
 pub struct LineCardStats {
     pub plays: [u32; CARD_COUNT],
@@ -132,6 +135,11 @@ impl LineCardStats {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct CardStat {
     pub card: &'static str,
     pub name: &'static str,

@@ -1,0 +1,21 @@
+[package]
+name = "ga-fire-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Stateless HTTP compute worker for FiZa simulations"
+
+[[bin]]
+name = "ga-fire-worker"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+ga-fire-engine = { path = "../engine" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

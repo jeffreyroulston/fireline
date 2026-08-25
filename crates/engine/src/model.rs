@@ -1,6 +1,11 @@
+use crate::budget::Budget;
 use crate::cards::{ALL_CARDS, CARD_COUNT, Card};
 use crate::version::EngineVersion;
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "ts")]
+use ts_rs::TS;
+
 use std::collections::BTreeMap;
 
 pub const MAT_HAMMER: u8 = 1 << 0;
@@ -520,6 +525,11 @@ pub enum Action {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct Step {
     pub turn: u8,
     pub phase: &'static str,
@@ -562,6 +572,11 @@ impl Step {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct Bounds {
     pub min: u8,
     pub max: u8,
@@ -570,6 +585,11 @@ pub struct Bounds {
 /// Post-clamp inputs that actually ran, for durable persistence and cross-run grouping.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct EffectiveRequest {
     pub engine_version: EngineVersion,
     pub root_seed: u64,
@@ -586,6 +606,7 @@ pub struct EffectiveRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub samples: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
     pub metric: Option<&'static str>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub bounds: BTreeMap<String, Bounds>,
@@ -593,10 +614,16 @@ pub struct EffectiveRequest {
     pub deck_size: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decks: Option<u32>,
+    pub budget: Budget,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct SolveRequest {
     pub hand: Vec<String>,
     #[serde(default = "default_true")]
@@ -612,10 +639,17 @@ pub struct SolveRequest {
     pub rollouts: u16,
     #[serde(default = "default_seed")]
     pub seed: u64,
+    #[serde(default)]
+    pub budget: Budget,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub enum SimType {
     #[default]
     FireBrick,
@@ -625,6 +659,11 @@ pub enum SimType {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct PassResult {
     pub max_damage: u8,
     pub steps: Vec<Step>,
@@ -636,6 +675,11 @@ pub struct PassResult {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct McRollout {
     pub damage: u8,
     pub steps: Vec<Step>,
@@ -644,6 +688,11 @@ pub struct McRollout {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct DamageDistribution {
     pub damages: Vec<u8>,
     pub mean: f64,
@@ -656,6 +705,11 @@ pub struct DamageDistribution {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct TwoPassResult {
     pub brick: PassResult,
     pub oracle: PassResult,
@@ -663,6 +717,11 @@ pub struct TwoPassResult {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct SolveResult {
     pub sim_type: SimType,
     pub max_damage: u8,
@@ -679,6 +738,7 @@ pub struct SolveResult {
     pub card_stats: Vec<crate::stats::CardStat>,
     /// Raw line counters for the headline path (skipped in JSON).
     #[serde(skip)]
+    #[cfg_attr(feature = "ts", ts(skip))]
     pub line_stats: crate::stats::LineCardStats,
 }
 

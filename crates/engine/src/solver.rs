@@ -106,8 +106,10 @@ pub fn solve(request: &SolveRequest) -> Result<SolveResult, String> {
         .iter()
         .map(|card| parse_card(card).ok_or_else(|| format!("unknown card: {card}")))
         .collect::<Result<Vec<_>, _>>()?;
-    let max_turns = request.max_turns.clamp(2, 3);
-    let rollouts = request.rollouts.clamp(1, 48);
+    let max_turns = request
+        .max_turns
+        .clamp(request.budget.max_turns_min, request.budget.max_turns_max);
+    let rollouts = request.rollouts.clamp(1, request.budget.max_solve_rollouts);
     let mut result = match request.sim_type {
         SimType::FireBrick => solve_cards(&hand, request.go_first, max_turns),
         SimType::MonteCarlo => {
@@ -150,10 +152,16 @@ fn solve_effective(request: &SolveRequest, max_turns: u8, rollouts: u16) -> Effe
         bounds: BTreeMap::new(),
         deck_size: None,
         decks: None,
+        budget: request.budget,
     }
 }
 
-fn hand_solve_effective(go_first: bool, max_turns: u8, sim_type: SimType) -> EffectiveRequest {
+fn hand_solve_effective(
+    go_first: bool,
+    max_turns: u8,
+    sim_type: SimType,
+    budget: crate::budget::Budget,
+) -> EffectiveRequest {
     EffectiveRequest {
         engine_version: ENGINE_VERSION,
         root_seed: 0,
@@ -167,6 +175,7 @@ fn hand_solve_effective(go_first: bool, max_turns: u8, sim_type: SimType) -> Eff
         bounds: BTreeMap::new(),
         deck_size: None,
         decks: None,
+        budget,
     }
 }
 
@@ -194,7 +203,7 @@ pub fn solve_cards(hand: &[Card], go_first: bool, max_turns: u8) -> SolveResult 
         two_pass: None,
         card_stats: summarize_line_stats(hand, &line_stats),
         line_stats,
-        effective: hand_solve_effective(go_first, max_turns, SimType::FireBrick),
+        effective: hand_solve_effective(go_first, max_turns, SimType::FireBrick, crate::budget::Budget::default()),
     }
 }
 
@@ -308,7 +317,7 @@ fn solve_monte_carlo(
         two_pass: None,
         card_stats: stats_acc.finish(),
         line_stats: headline_stats,
-        effective: hand_solve_effective(go_first, max_turns, SimType::MonteCarlo),
+        effective: hand_solve_effective(go_first, max_turns, SimType::MonteCarlo, crate::budget::Budget::default()),
     }
 }
 
@@ -349,7 +358,7 @@ fn solve_two_pass(
         two_pass: Some(TwoPassResult { brick, oracle }),
         card_stats,
         line_stats: oracle_stats,
-        effective: hand_solve_effective(go_first, max_turns, SimType::TwoPass),
+        effective: hand_solve_effective(go_first, max_turns, SimType::TwoPass, crate::budget::Budget::default()),
     }
 }
 
@@ -1090,6 +1099,7 @@ mod tests {
             deck: BTreeMap::from([("brick".into(), 58_u8)]),
             rollouts: 99,
             seed: 1,
+            budget: crate::budget::Budget::default(),
         };
         let result = solve(&request).unwrap();
         assert_eq!(result.effective.max_turns, Some(3));

@@ -1,3 +1,4 @@
+pub mod budget;
 pub mod cards;
 pub mod deck;
 pub mod model;
@@ -5,9 +6,14 @@ pub mod solver;
 pub mod stats;
 pub mod version;
 
+#[cfg(feature = "ts")]
+mod bindings;
+
+pub use budget::Budget;
+pub use cards::{card_catalog, CardDef};
 pub use deck::{
     DeckEvalRequest, DeckEvalResult, OptimizeProgress, OptimizeRequest, OptimizeResult,
-    count_legal_decks, evaluate, optimize, optimize_with_progress,
+    count_legal_decks, evaluate, evaluate_with_progress, optimize, optimize_with_progress,
 };
 pub use model::{EffectiveRequest, SimType, SolveRequest, SolveResult};
 pub use version::{EngineVersion, ENGINE_VERSION};
@@ -59,6 +65,7 @@ mod wasm {
             if let Ok(json) = serde_json::to_string(&progress) {
                 let _ = on_progress.call1(&JsValue::NULL, &JsValue::from_str(&json));
             }
+            std::ops::ControlFlow::Continue(())
         })
         .map_err(|error| JsValue::from_str(&error))?;
         serde_json::to_string(&result).map_err(|error| JsValue::from_str(&error.to_string()))
