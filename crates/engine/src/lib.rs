@@ -3,12 +3,14 @@ pub mod deck;
 pub mod model;
 pub mod solver;
 pub mod stats;
+pub mod version;
 
 pub use deck::{
     DeckEvalRequest, DeckEvalResult, OptimizeProgress, OptimizeRequest, OptimizeResult,
     count_legal_decks, evaluate, optimize, optimize_with_progress,
 };
-pub use model::{SimType, SolveRequest, SolveResult};
+pub use model::{EffectiveRequest, SimType, SolveRequest, SolveResult};
+pub use version::{EngineVersion, ENGINE_VERSION};
 pub use solver::{solve, solve_cards};
 
 pub fn solve_json(input: &str) -> Result<String, String> {

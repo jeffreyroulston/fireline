@@ -184,6 +184,7 @@ export interface CardStat {
   playRate: number;
   playWhenSeen: number;
   damageWhenSeen: number;
+  damageWhenSeenSum: number;
   damagePerPlay: number;
   damageShare: number;
 }

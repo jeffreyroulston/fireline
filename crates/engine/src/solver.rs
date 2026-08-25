@@ -1,10 +1,11 @@
 use crate::{
     cards::{ALL_CARDS, Card, parse_card},
     model::{
-        Action, DamageDistribution, MAT_BLADE, MAT_DAGGER, MAT_HAMMER, MAT_SOULKNIFE, MAT_ZANDER,
-        McRollout, PassResult, Phase, SimType, SolveRequest, SolveResult, State, Step, TwoPassResult,
-        Weapon,
+        Action, DamageDistribution, EffectiveRequest, MAT_BLADE, MAT_DAGGER, MAT_HAMMER,
+        MAT_SOULKNIFE, MAT_ZANDER, McRollout, PassResult, Phase, SimType, SolveRequest,
+        SolveResult, State, Step, TwoPassResult, Weapon,
     },
+    version::ENGINE_VERSION,
 };
 use rustc_hash::FxHashMap;
 use std::collections::BTreeMap;
@@ -106,29 +107,66 @@ pub fn solve(request: &SolveRequest) -> Result<SolveResult, String> {
         .map(|card| parse_card(card).ok_or_else(|| format!("unknown card: {card}")))
         .collect::<Result<Vec<_>, _>>()?;
     let max_turns = request.max_turns.clamp(2, 3);
-    match request.sim_type {
-        SimType::FireBrick => Ok(solve_cards(&hand, request.go_first, max_turns)),
+    let rollouts = request.rollouts.clamp(1, 48);
+    let mut result = match request.sim_type {
+        SimType::FireBrick => solve_cards(&hand, request.go_first, max_turns),
         SimType::MonteCarlo => {
             let remaining = remaining_deck(&request.deck, &hand)?;
-            Ok(solve_monte_carlo(
+            solve_monte_carlo(
                 &hand,
                 &remaining,
                 request.go_first,
                 max_turns,
-                request.rollouts.clamp(1, 48),
+                rollouts,
                 request.seed,
-            ))
+            )
         }
         SimType::TwoPass => {
             let remaining = remaining_deck(&request.deck, &hand)?;
-            Ok(solve_two_pass(
+            solve_two_pass(
                 &hand,
                 &remaining,
                 request.go_first,
                 max_turns,
                 request.seed,
-            ))
+            )
         }
+    };
+    result.effective = solve_effective(request, max_turns, rollouts);
+    Ok(result)
+}
+
+fn solve_effective(request: &SolveRequest, max_turns: u8, rollouts: u16) -> EffectiveRequest {
+    EffectiveRequest {
+        engine_version: ENGINE_VERSION,
+        root_seed: request.seed,
+        sim_type: Some(request.sim_type),
+        deck: request.deck.clone(),
+        go_first: Some(request.go_first),
+        max_turns: Some(max_turns),
+        rollouts: Some(rollouts),
+        samples: None,
+        metric: None,
+        bounds: BTreeMap::new(),
+        deck_size: None,
+        decks: None,
+    }
+}
+
+fn hand_solve_effective(go_first: bool, max_turns: u8, sim_type: SimType) -> EffectiveRequest {
+    EffectiveRequest {
+        engine_version: ENGINE_VERSION,
+        root_seed: 0,
+        sim_type: Some(sim_type),
+        deck: BTreeMap::new(),
+        go_first: Some(go_first),
+        max_turns: Some(max_turns),
+        rollouts: None,
+        samples: None,
+        metric: None,
+        bounds: BTreeMap::new(),
+        deck_size: None,
+        decks: None,
     }
 }
 
@@ -156,6 +194,7 @@ pub fn solve_cards(hand: &[Card], go_first: bool, max_turns: u8) -> SolveResult 
         two_pass: None,
         card_stats: summarize_line_stats(hand, &line_stats),
         line_stats,
+        effective: hand_solve_effective(go_first, max_turns, SimType::FireBrick),
     }
 }
 
@@ -269,6 +308,7 @@ fn solve_monte_carlo(
         two_pass: None,
         card_stats: stats_acc.finish(),
         line_stats: headline_stats,
+        effective: hand_solve_effective(go_first, max_turns, SimType::MonteCarlo),
     }
 }
 
@@ -309,6 +349,7 @@ fn solve_two_pass(
         two_pass: Some(TwoPassResult { brick, oracle }),
         card_stats,
         line_stats: oracle_stats,
+        effective: hand_solve_effective(go_first, max_turns, SimType::TwoPass),
     }
 }
 
@@ -954,6 +995,7 @@ fn advance_after_pass(state: &mut State, steps: &mut Vec<Step>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::version::ENGINE_VERSION;
 
     #[test]
     fn drill_three_meets_published_twenty() {
@@ -968,6 +1010,9 @@ mod tests {
         ];
         let result = solve_cards(&hand, true, 3);
         assert!(result.max_damage >= 20, "{result:#?}");
+        assert_eq!(result.effective.engine_version, ENGINE_VERSION);
+        assert_eq!(result.effective.max_turns, Some(3));
+        assert_eq!(result.effective.sim_type, Some(SimType::FireBrick));
     }
 
     #[test]
@@ -983,6 +1028,7 @@ mod tests {
         ];
         let result = solve_cards(&hand, true, 3);
         assert_eq!(result.max_damage, 24, "{result:#?}");
+        assert_eq!(result.effective.go_first, Some(true));
     }
 
     #[test]
@@ -1020,6 +1066,7 @@ mod tests {
             "Hot Cake + Clumsy should reach at least 4 damage, got {}",
             result.max_damage
         );
+        assert_eq!(result.effective.max_turns, Some(1));
     }
 
     #[test]
@@ -1027,5 +1074,26 @@ mod tests {
         let hand = [Card::Rococo, Card::Brick];
         let result = solve_cards(&hand, true, 2);
         assert!(result.max_damage >= 2, "{result:#?}");
+        assert_eq!(result.effective.engine_version.card_digest, ENGINE_VERSION.card_digest);
+    }
+
+    #[test]
+    fn solve_clamps_turns_and_rollouts_in_effective() {
+        use crate::model::SolveRequest;
+        use std::collections::BTreeMap;
+
+        let request = SolveRequest {
+            hand: vec!["rococo".into(), "brick".into()],
+            go_first: true,
+            max_turns: 9,
+            sim_type: SimType::MonteCarlo,
+            deck: BTreeMap::from([("brick".into(), 58_u8)]),
+            rollouts: 99,
+            seed: 1,
+        };
+        let result = solve(&request).unwrap();
+        assert_eq!(result.effective.max_turns, Some(3));
+        assert_eq!(result.effective.rollouts, Some(48));
+        assert_eq!(result.effective.root_seed, 1);
     }
 }

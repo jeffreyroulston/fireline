@@ -1,4 +1,5 @@
 use crate::cards::{ALL_CARDS, CARD_COUNT, Card};
+use crate::version::EngineVersion;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -560,6 +561,40 @@ impl Step {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct Bounds {
+    pub min: u8,
+    pub max: u8,
+}
+
+/// Post-clamp inputs that actually ran, for durable persistence and cross-run grouping.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectiveRequest {
+    pub engine_version: EngineVersion,
+    pub root_seed: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sim_type: Option<SimType>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub deck: BTreeMap<String, u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub go_first: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollouts: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub samples: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric: Option<&'static str>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bounds: BTreeMap<String, Bounds>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deck_size: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decks: Option<u32>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SolveRequest {
@@ -635,6 +670,7 @@ pub struct SolveResult {
     pub nodes: u64,
     pub memo_entries: usize,
     pub elapsed_ms: f64,
+    pub effective: EffectiveRequest,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub distribution: Option<DamageDistribution>,
     #[serde(skip_serializing_if = "Option::is_none")]

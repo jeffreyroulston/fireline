@@ -147,6 +147,7 @@ pub struct CardStat {
     pub plays: u32,
     pub attacks: u32,
     pub damage: u32,
+    pub damage_when_seen_sum: u32,
     pub open_rate: f64,
     pub see_rate: f64,
     /// Plays per sample.
@@ -240,6 +241,7 @@ impl DeckStatAccumulator {
                     plays,
                     attacks: self.line.attacks[index],
                     damage,
+                    damage_when_seen_sum: self.damage_when_seen_sum[index],
                     open_rate: f64::from(self.opened[index]) / samples,
                     see_rate: f64::from(seen) / samples,
                     play_rate: f64::from(plays) / samples,

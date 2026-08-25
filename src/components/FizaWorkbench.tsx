@@ -403,6 +403,7 @@ export default function FizaWorkbench() {
         samples: ratioSamples,
         decks,
         metric,
+        seed: makeSeed(),
       },
       (result) => {
         setRatioResult(result as RatioResult);

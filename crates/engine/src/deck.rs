@@ -1,7 +1,10 @@
 use crate::{
     cards::{CARD_COUNT, Card},
-    model::{DamageDistribution, SimType, SolveRequest, Step, TwoPassResult},
+    model::{
+        DamageDistribution, EffectiveRequest, SimType, SolveRequest, Step, TwoPassResult,
+    },
     solver::solve,
+    version::ENGINE_VERSION,
 };
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -57,20 +60,15 @@ pub struct DeckEvalResult {
     pub unique_hands: usize,
     pub states_searched: u64,
     pub elapsed_ms: f64,
+    pub effective: EffectiveRequest,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub card_stats: Vec<crate::stats::CardStat>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-pub struct Bounds {
-    pub min: u8,
-    pub max: u8,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OptimizeRequest {
-    pub bounds: BTreeMap<String, Bounds>,
+    pub bounds: BTreeMap<String, crate::model::Bounds>,
     pub deck_size: u8,
     #[serde(default = "default_ratio_samples")]
     pub samples: u16,
@@ -127,6 +125,7 @@ pub struct OptimizeResult {
     pub legal_decks: u64,
     pub decks_scored: u32,
     pub elapsed_ms: f64,
+    pub effective: EffectiveRequest,
 }
 
 const fn default_samples() -> u16 {
@@ -185,6 +184,8 @@ pub fn evaluate_with_progress(
     if deck.len() < 7 {
         return Err("deck must contain at least seven recognized cards".into());
     }
+    let max_turns = request.max_turns.clamp(2, 3);
+    let rollouts = request.rollouts.clamp(1, 24);
     let mut rng = Rng(request.seed);
     let mut cache: FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand> = FxHashMap::default();
     let mut hands = Vec::with_capacity(request.samples as usize);
@@ -208,10 +209,10 @@ pub fn evaluate_with_progress(
                 let result = solve(&SolveRequest {
                     hand: hand_ids,
                     go_first: request.go_first,
-                    max_turns: request.max_turns.clamp(2, 3),
+                    max_turns,
                     sim_type: request.sim_type,
                     deck: request.deck.clone(),
-                    rollouts: request.rollouts.clamp(1, 24),
+                    rollouts,
                     seed: request.seed.wrapping_add(u64::from(sample_index) * 17),
                 })
                 .expect("deck cards already validated");
@@ -268,6 +269,20 @@ pub fn evaluate_with_progress(
             {
                 started.elapsed().as_secs_f64() * 1000.0
             }
+        },
+        effective: EffectiveRequest {
+            engine_version: ENGINE_VERSION,
+            root_seed: request.seed,
+            sim_type: Some(request.sim_type),
+            deck: request.deck.clone(),
+            go_first: Some(request.go_first),
+            max_turns: Some(max_turns),
+            rollouts: Some(rollouts),
+            samples: Some(request.samples),
+            metric: None,
+            bounds: BTreeMap::new(),
+            deck_size: None,
+            decks: None,
         },
         card_stats: stats_acc.finish(),
     })
@@ -386,6 +401,23 @@ pub fn optimize_with_progress(
             {
                 started.elapsed().as_secs_f64() * 1000.0
             }
+        },
+        effective: EffectiveRequest {
+            engine_version: ENGINE_VERSION,
+            root_seed: request.seed,
+            sim_type: Some(SimType::FireBrick),
+            deck: BTreeMap::new(),
+            go_first: Some(true),
+            max_turns: Some(3),
+            rollouts: Some(1),
+            samples: Some(request.samples),
+            metric: Some(match request.metric {
+                Metric::Mean => "mean",
+                Metric::P50 => "p50",
+            }),
+            bounds: request.bounds.clone(),
+            deck_size: Some(request.deck_size),
+            decks: Some(target),
         },
     })
 }
@@ -556,6 +588,8 @@ fn initial_counts(
     Ok(counts)
 }
 
+pub use crate::model::Bounds;
+
 fn shuffle(values: &mut [Card], rng: &mut Rng) {
     for index in (1..values.len()).rev() {
         values.swap(index, rng.index(index + 1));
@@ -593,6 +627,11 @@ mod tests {
         let one = evaluate(&request).unwrap();
         let two = evaluate(&request).unwrap();
         assert_eq!(one.damages, two.damages);
+        assert_eq!(one.effective.root_seed, 9);
+        assert_eq!(one.effective.max_turns, Some(2));
+        assert_eq!(one.effective.rollouts, Some(1));
+        assert_eq!(one.effective.samples, Some(2));
+        assert_eq!(one.effective.engine_version, two.effective.engine_version);
     }
 
     #[test]
@@ -620,5 +659,59 @@ mod tests {
         );
         assert!(result.decks_scored >= 1);
         assert!(result.legal_decks >= result.decks_scored as u64);
+        assert_eq!(result.effective.decks, Some(4));
+        assert_eq!(result.effective.deck_size, Some(7));
+        assert_eq!(result.effective.samples, Some(1));
+        assert_eq!(result.effective.metric, Some("mean"));
+    }
+
+    #[test]
+    fn evaluate_clamps_turns_and_rollouts() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 3),
+            ("kingdom_informant".into(), 3),
+            ("clumsy_apprentice".into(), 3),
+        ]);
+        let result = evaluate(&DeckEvalRequest {
+            deck,
+            samples: 1,
+            go_first: true,
+            max_turns: 1,
+            seed: 3,
+            sim_type: SimType::FireBrick,
+            rollouts: 0,
+        })
+        .unwrap();
+        assert_eq!(result.effective.max_turns, Some(2));
+        assert_eq!(result.effective.rollouts, Some(1));
+    }
+
+    #[test]
+    fn card_stats_expose_damage_when_seen_sum() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 3),
+            ("kingdom_informant".into(), 3),
+            ("clumsy_apprentice".into(), 3),
+        ]);
+        let result = evaluate(&DeckEvalRequest {
+            deck,
+            samples: 4,
+            go_first: true,
+            max_turns: 2,
+            seed: 11,
+            sim_type: SimType::FireBrick,
+            rollouts: 1,
+        })
+        .unwrap();
+        for stat in &result.card_stats {
+            if stat.seen > 0 {
+                assert_eq!(
+                    stat.damage_when_seen,
+                    f64::from(stat.damage_when_seen_sum) / f64::from(stat.seen)
+                );
+            } else {
+                assert_eq!(stat.damage_when_seen_sum, 0);
+            }
+        }
     }
 }

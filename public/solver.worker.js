@@ -48,7 +48,7 @@ self.onmessage = async (event) => {
           samples: payload.samples,
           decks: payload.decks ?? payload.iterations ?? 32,
           metric: payload.metric,
-          seed: 7,
+          seed: payload.seed ?? (Math.floor(Math.random() * 0xffffffff) >>> 0),
         }),
         (progressJson) => {
           self.postMessage({
