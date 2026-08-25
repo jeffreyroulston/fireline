@@ -2,33 +2,17 @@
   "name": "ga-fire-math",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "npm run build:wasm && next dev --turbopack",
-    "build": "npm run build:wasm && next build --turbopack",
-    "build:wasm": "wasm-pack build crates/engine --target web --out-dir ../../public/wasm --release -- --features wasm",
-    "start": "next start",
-    "lint": "eslint",
+    "dev": "npm run dev -w @ga-fire/web",
+    "dev:api": "npm run dev -w @ga-fire/api",
+    "build": "npm run build -w @ga-fire/web",
+    "build:wasm": "npm run build:wasm -w @ga-fire/web",
+    "build:contracts": "cargo test -p ga-fire-engine --features ts export_typescript -- --nocapture && node scripts/fix-contracts.mjs",
     "test": "cargo test --workspace --release",
-    "build:contracts": "cargo test -p ga-fire-engine --features ts export_typescript -- --nocapture",
     "bench": "cargo bench -p ga-fire-engine"
-  },
-  "dependencies": {
-    "@fontsource/barlow-condensed": "^5.3.0",
-    "@fontsource/ibm-plex-mono": "^5.3.0",
-    "@fontsource/ibm-plex-sans": "^5.3.0",
-    "next": "15.5.23",
-    "react": "19.1.0",
-    "react-dom": "19.1.0"
-  },
-  "devDependencies": {
-    "@eslint/eslintrc": "^3",
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "15.5.23",
-    "tailwindcss": "^4",
-    "typescript": "^5"
   }
 }
