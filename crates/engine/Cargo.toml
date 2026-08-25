@@ -1,0 +1,31 @@
+[package]
+name = "ga-fire-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Optimized FiZa max-damage and deck-ratio simulation engine"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+wasm = ["dep:wasm-bindgen", "dep:js-sys", "dep:console_error_panic_hook"]
+
+[dependencies]
+rustc-hash = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+
+[dev-dependencies]
+criterion = "0.7"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[[bench]]
+name = "solver"
+harness = false

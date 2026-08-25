@@ -1,0 +1,382 @@
+import type { CardDef, CardId, MaterialId } from "./types";
+
+export const CARDS: Record<CardId, CardDef> = {
+  brick: {
+    id: "brick",
+    name: "Fire Brick",
+    short: "Brick",
+    kind: "brick",
+    cost: 9,
+    element: "fire",
+  },
+  arthur: {
+    id: "arthur",
+    name: "Arthur, Young Heir",
+    short: "Arthu",
+    kind: "ally",
+    cost: 4,
+    element: "fire",
+    power: 2,
+    life: 3,
+    unique: true,
+  },
+  kingdom_informant: {
+    id: "kingdom_informant",
+    name: "Kingdom Informant",
+    short: "Kingd",
+    kind: "ally",
+    cost: 2,
+    element: "norm",
+    power: 1,
+    life: 2,
+    stealth: true,
+    floatingMemory: true,
+  },
+  clumsy_apprentice: {
+    id: "clumsy_apprentice",
+    name: "Clumsy Apprentice",
+    short: "Clums",
+    kind: "ally",
+    cost: 2,
+    element: "fire",
+    power: 1,
+    life: 1,
+  },
+  sable_remnant: {
+    id: "sable_remnant",
+    name: "Sable Remnant",
+    short: "Sable",
+    kind: "ally",
+    cost: 2,
+    element: "norm",
+    power: 1,
+    life: 1,
+    floatingMemory: true,
+    assassinPowerBonus: 1,
+  },
+  hasty_messenger: {
+    id: "hasty_messenger",
+    name: "Hasty Messenger",
+    short: "Hasty",
+    kind: "ally",
+    cost: 2,
+    element: "fire",
+    power: 1,
+    life: 2,
+  },
+  red_hare: {
+    id: "red_hare",
+    name: "Red Hare, Unrivaled Stallion",
+    short: "Red H",
+    kind: "ally",
+    cost: 2,
+    element: "fire",
+    power: 3,
+    life: 3,
+    unique: true,
+  },
+  ignited_stab: {
+    id: "ignited_stab",
+    name: "Ignited Stab",
+    short: "Ignit",
+    kind: "attack",
+    cost: 1,
+    element: "fire",
+    power: 2,
+  },
+  rending_flames: {
+    id: "rending_flames",
+    name: "Rending Flames",
+    short: "Rendi",
+    kind: "attack",
+    cost: 3,
+    element: "fire",
+    power: 3,
+  },
+  blazing_throw: {
+    id: "blazing_throw",
+    name: "Blazing Throw",
+    short: "Blazi",
+    kind: "action",
+    cost: 1,
+    element: "fire",
+  },
+  racoo: {
+    id: "racoo",
+    name: "Racoo, Aggro Extender",
+    short: "Racoo",
+    kind: "ally",
+    cost: 2,
+    element: "fire",
+    power: 1,
+    life: 1,
+    stealth: true,
+  },
+  corhazi_courier: {
+    id: "corhazi_courier",
+    name: "Corhazi Courier",
+    short: "Corha",
+    kind: "ally",
+    cost: 3,
+    element: "fire",
+    power: 1,
+    life: 2,
+    stealth: true,
+  },
+  veteran_blazebearer: {
+    id: "veteran_blazebearer",
+    name: "Veteran Blazebearer",
+    short: "VBlaz",
+    kind: "ally",
+    cost: 3,
+    element: "fire",
+    power: 2,
+    life: 3,
+  },
+  sadi: {
+    id: "sadi",
+    name: "Sadi, Blood Harvester",
+    short: "Sadi",
+    kind: "ally",
+    cost: 3,
+    element: "norm",
+    power: 2,
+    life: 2,
+    unique: true,
+  },
+  captivating_cutthroat: {
+    id: "captivating_cutthroat",
+    name: "Captivating Cutthroat",
+    short: "CaptC",
+    kind: "ally",
+    cost: 2,
+    element: "fire",
+    power: 2,
+    life: 1,
+    assassinPowerBonus: 1,
+  },
+  dazzling_courtesan: {
+    id: "dazzling_courtesan",
+    name: "Dazzling Courtesan",
+    short: "Dazzl",
+    kind: "ally",
+    cost: 3,
+    element: "fire",
+    power: 2,
+    life: 2,
+    kindle: 3,
+  },
+  fiery_interference: {
+    id: "fiery_interference",
+    name: "Fiery Interference",
+    short: "FInt",
+    kind: "action",
+    cost: 2,
+    element: "fire",
+  },
+  heated_vengeance: {
+    id: "heated_vengeance",
+    name: "Heated Vengeance",
+    short: "HeatV",
+    kind: "attack",
+    cost: 3,
+    element: "fire",
+    power: 2,
+  },
+  intensified_pyre: {
+    id: "intensified_pyre",
+    name: "Intensified Pyre",
+    short: "IPyre",
+    kind: "action",
+    cost: 3,
+    element: "fire",
+    kindle: 3,
+  },
+  march_hare: {
+    id: "march_hare",
+    name: "March Hare, Mottled Host",
+    short: "March",
+    kind: "ally",
+    cost: 1,
+    element: "fire",
+    power: 1,
+    life: 1,
+    unique: true,
+  },
+  mark_the_target: {
+    id: "mark_the_target",
+    name: "Mark the Target",
+    short: "MarkT",
+    kind: "action",
+    cost: 1,
+    element: "fire",
+  },
+  peppered_chef: {
+    id: "peppered_chef",
+    name: "Peppered Chef",
+    short: "PChef",
+    kind: "ally",
+    cost: 2,
+    element: "fire",
+    power: 2,
+    life: 1,
+  },
+  planted_explosive: {
+    id: "planted_explosive",
+    name: "Planted Explosive",
+    short: "PExpl",
+    kind: "action",
+    cost: 2,
+    element: "fire",
+    prepare: 1,
+  },
+  rococo: {
+    id: "rococo",
+    name: "Rococo, Explosive Maven",
+    short: "Rococ",
+    kind: "ally",
+    cost: 1,
+    element: "fire",
+    power: 1,
+    life: 1,
+    unique: true,
+  },
+  tweedledum: {
+    id: "tweedledum",
+    name: "Tweedledum, Rattled Dancer",
+    short: "Tweed",
+    kind: "ally",
+    cost: 3,
+    element: "fire",
+    power: 3,
+    life: 2,
+    unique: true,
+    stealth: true,
+  },
+  vermilion_decree: {
+    id: "vermilion_decree",
+    name: "Vermilion Decree",
+    short: "VermD",
+    kind: "action",
+    cost: 3,
+    element: "fire",
+  },
+  xiao_qiao: {
+    id: "xiao_qiao",
+    name: "Xiao Qiao, Cinderkeeper",
+    short: "XiaoQ",
+    kind: "ally",
+    cost: 2,
+    element: "fire",
+    power: 1,
+    life: 2,
+    unique: true,
+    stealth: true,
+  },
+  hot_cake: {
+    id: "hot_cake",
+    name: "Hot Cake",
+    short: "HCake",
+    kind: "item",
+    cost: 3,
+    element: "fire",
+    floatingMemory: true,
+  },
+};
+
+export const CARD_LIST = Object.values(CARDS);
+
+export const MATERIAL_NAMES: Record<MaterialId, string> = {
+  impact_hammer: "Impact Hammer",
+  mercenary_blade: "Mercenary's Blade",
+  poisoned_dagger: "Poisoned Dagger",
+  zander_1: "Zander, Prepared Scout",
+  varuckan_soulknife: "Varuckan Soulknife",
+};
+
+export const DEFAULT_MATERIALS: MaterialId[] = [
+  "impact_hammer",
+  "mercenary_blade",
+  "poisoned_dagger",
+  "zander_1",
+  "varuckan_soulknife",
+];
+
+export const PLAYABLE_CARD_IDS: CardId[] = CARD_LIST.filter(
+  (c) => c.id !== "brick",
+).map((c) => c.id);
+
+export function shortName(id: CardId): string {
+  return CARDS[id]?.short ?? id;
+}
+
+export function parseCardToken(token: string): CardId | null {
+  const t = token.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  if (!t) return null;
+  if (t in CARDS) return t as CardId;
+  if (t === "kurhazi_courier") return "corhazi_courier";
+  if (t === "sadi_blood_harvester") return "sadi";
+  if (t === "march_hare_mottled_host") return "march_hare";
+  if (t === "rococo_explosive_maven") return "rococo";
+  if (t === "tweedledum_rattled_dancer") return "tweedledum";
+  if (t === "xiao_qiao_cinderkeeper") return "xiao_qiao";
+  if (t === "arthur_young_heir") return "arthur";
+  if (t === "red_hare_unrivaled_stallion") return "red_hare";
+  for (const c of CARD_LIST) {
+    if (
+      c.short.toLowerCase() === token.trim().toLowerCase() ||
+      c.name.toLowerCase() === token.trim().toLowerCase() ||
+      c.id.replace(/_/g, " ") === token.trim().toLowerCase()
+    ) {
+      return c.id;
+    }
+  }
+  for (const c of CARD_LIST) {
+    if (
+      c.short.toLowerCase().startsWith(token.trim().toLowerCase().slice(0, 5)) ||
+      c.name.toLowerCase().startsWith(token.trim().toLowerCase())
+    ) {
+      return c.id;
+    }
+  }
+  return null;
+}
+
+/** Parse a decklist / hand line like "3 Arthur, Young Heir" or "arthur arthur". */
+export function parseCardLine(line: string): CardId[] {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) {
+    return [];
+  }
+  if (
+    /^(materials?|main\s*deck|maindeck|sideboard|side\s*board)\b/i.test(
+      trimmed,
+    )
+  ) {
+    return [];
+  }
+
+  // Accept: "4× Name", "4x Name", "4xName", "4 Name"
+  // Do not treat the leading X in names like "Xiao Qiao" as a multiplier.
+  const countMatch =
+    trimmed.match(/^(\d+)\s*×\s*(.+)$/) ||
+    trimmed.match(/^(\d+)x\s*(.+)$/i) ||
+    trimmed.match(/^(\d+)\s+(.+)$/);
+  if (countMatch) {
+    const n = Math.min(60, parseInt(countMatch[1], 10));
+    const id = parseCardToken(countMatch[2]);
+    if (!id) return [];
+    return Array(n).fill(id);
+  }
+
+  const id = parseCardToken(trimmed);
+  return id ? [id] : [];
+}
+
+export function parseDecklist(text: string): CardId[] {
+  const out: CardId[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    out.push(...parseCardLine(line));
+  }
+  return out;
+}
