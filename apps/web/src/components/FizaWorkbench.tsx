@@ -4,7 +4,6 @@ import {
   startTransition,
   useDeferredValue,
   useEffect,
-  useRef,
   useState,
 } from "react";
 import {
@@ -28,13 +27,17 @@ import {
   type SolveResult,
   type TwoPassResult,
 } from "@/lib/engine";
+import { hydrateCardCatalogFromApi } from "@/lib/api/catalog";
+import { solve as apiSolve } from "@/lib/api/client";
+import { useRun, type OptimizeProgress } from "@/lib/api/useRun";
 import {
-  createDeck,
-  createDefaultStore,
-  loadDeckStore,
+  createDeckRemote,
+  deleteDeckRemote,
+  loadDecksFromApi,
   nextDeckName,
   normalizeDeckName,
-  saveDeckStore,
+  saveActiveDeckId,
+  scheduleDeckSave,
   type SavedDeck,
 } from "@/lib/decks";
 import { DRILL_3_HAND } from "@/lib/fixtures/drills";
@@ -81,23 +84,10 @@ interface RatioResult {
   history: { iteration: number; score: number }[];
 }
 
-interface OptimizeProgress {
-  decksScored: number;
-  totalDecks: number;
-  legalDecks: number;
-  handsSimulated: number;
-  totalHands: number;
-  bestScore: number;
-}
-
 function makeBounds(): OptimizeBounds {
   return Object.fromEntries(
     PLAYABLE_CARD_IDS.map((id) => [id, { min: 0, max: 4 }]),
   );
-}
-
-function makeJobId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function makeSeed() {
@@ -131,9 +121,8 @@ export default function FizaWorkbench() {
   const [simType, setSimType] = useState<SimType>("fire_brick");
   const [rollouts, setRollouts] = useState(12);
   const [lineResult, setLineResult] = useState<SolveResult | null>(null);
-  const defaultStore = createDefaultStore();
-  const [decks, setDecks] = useState<SavedDeck[]>(defaultStore.decks);
-  const [activeDeckId, setActiveDeckId] = useState(defaultStore.activeDeckId);
+  const [decks, setDecks] = useState<SavedDeck[]>([]);
+  const [activeDeckId, setActiveDeckId] = useState("");
   const [decksHydrated, setDecksHydrated] = useState(false);
   const [isRenamingDeck, setIsRenamingDeck] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
@@ -153,29 +142,48 @@ export default function FizaWorkbench() {
   const [progress, setProgress] = useState<OptimizeProgress | null>(null);
   const [busy, setBusy] = useState<JobType | null>(null);
   const [error, setError] = useState("");
-  const workerRef = useRef<Worker | null>(null);
+  const { startStreamingRun, cancel: cancelRun } = useRun();
 
   useEffect(() => {
-    return () => workerRef.current?.terminate();
+    let cancelled = false;
+    void (async () => {
+      try {
+        await hydrateCardCatalogFromApi();
+        const store = await loadDecksFromApi();
+        if (cancelled) {
+          return;
+        }
+        setDecks(store.decks);
+        setActiveDeckId(store.activeDeckId);
+        setDecksHydrated(true);
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Could not load decks from the API.",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
-    const store = loadDeckStore();
-    setDecks(store.decks);
-    setActiveDeckId(store.activeDeckId);
-    setDecksHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (!decksHydrated || decks.length === 0) {
+    if (!decksHydrated || !activeDeckId) {
       return;
     }
-    saveDeckStore({
-      version: 1,
-      decks,
-      activeDeckId,
-    });
-  }, [activeDeckId, decks, decksHydrated]);
+    saveActiveDeckId(activeDeckId);
+  }, [activeDeckId, decksHydrated]);
+
+  useEffect(() => {
+    if (!decksHydrated || !activeDeck) {
+      return;
+    }
+    return scheduleDeckSave(activeDeck);
+  }, [activeDeck, decksHydrated]);
 
   function updateActiveDeckText(text: string) {
     if (!activeDeck) {
@@ -196,7 +204,11 @@ export default function FizaWorkbench() {
     setIsRenamingDeck(false);
   }
 
-  function saveRatioDecklist(counts: DeckCounts, score: number, rank: number) {
+  async function saveRatioDecklist(
+    counts: DeckCounts,
+    score: number,
+    rank: number,
+  ) {
     const lines = Object.entries(counts)
       .filter(([, count]) => count > 0)
       .sort((a, b) => {
@@ -212,19 +224,35 @@ export default function FizaWorkbench() {
       decks,
       `Ratio #${rank} · ${score.toFixed(2)}`,
     );
-    const deck = createDeck(name, text);
-    setDecks((current) => [...current, deck]);
-    setActiveDeckId(deck.id);
-    setError("");
+    try {
+      const deck = await createDeckRemote(name, text);
+      setDecks((current) => [...current, deck]);
+      setActiveDeckId(deck.id);
+      setError("");
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Could not save the deck.",
+      );
+    }
   }
 
-  function createNewDeck() {
-    const deck = createDeck(nextDeckName(decks), "");
-    setDecks((current) => [...current, deck]);
-    setActiveDeckId(deck.id);
-    setDeckResult(null);
-    setError("");
-    setIsRenamingDeck(false);
+  async function createNewDeck() {
+    try {
+      const deck = await createDeckRemote(nextDeckName(decks), "");
+      setDecks((current) => [...current, deck]);
+      setActiveDeckId(deck.id);
+      setDeckResult(null);
+      setError("");
+      setIsRenamingDeck(false);
+    } catch (createError) {
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Could not create a deck.",
+      );
+    }
   }
 
   function startRenamingDeck() {
@@ -253,60 +281,34 @@ export default function FizaWorkbench() {
     setRenameDraft("");
   }
 
-  function deleteActiveDeck() {
+  async function deleteActiveDeck() {
     if (!activeDeck) {
       return;
     }
-    if (decks.length === 1) {
-      const deck = createDeck(nextDeckName([]), "");
-      setDecks([deck]);
-      setActiveDeckId(deck.id);
-    } else {
-      const remaining = decks.filter((deck) => deck.id !== activeDeck.id);
-      setDecks(remaining);
-      setActiveDeckId(remaining[0]?.id ?? "");
-    }
-    setDeckResult(null);
-    setError("");
-    setIsRenamingDeck(false);
-  }
-
-  function runWorker(
-    type: JobType,
-    payload: object,
-    onResult: (result: unknown) => void,
-  ) {
-    workerRef.current?.terminate();
-    const worker = new Worker("/solver.worker.js", { type: "module" });
-    workerRef.current = worker;
-    const id = makeJobId();
-    setBusy(type);
-    setError("");
-    setProgress(null);
-
-    worker.onmessage = (event) => {
-      if (event.data.id !== id) return;
-      if (event.data.type === "progress") {
-        setProgress(event.data.progress as OptimizeProgress);
-        return;
-      }
-      if (event.data.type === "error") {
-        setError(event.data.error);
+    try {
+      await deleteDeckRemote(activeDeck.id);
+      if (decks.length === 1) {
+        const deck = await createDeckRemote(nextDeckName([]), "");
+        setDecks([deck]);
+        setActiveDeckId(deck.id);
       } else {
-        startTransition(() => onResult(event.data.result));
+        const remaining = decks.filter((deck) => deck.id !== activeDeck.id);
+        setDecks(remaining);
+        setActiveDeckId(remaining[0]?.id ?? "");
       }
-      setBusy(null);
-      worker.terminate();
-      workerRef.current = null;
-    };
-    worker.onerror = () => {
-      setError("The calculation worker stopped unexpectedly.");
-      setBusy(null);
-    };
-    worker.postMessage({ id, type, payload });
+      setDeckResult(null);
+      setError("");
+      setIsRenamingDeck(false);
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Could not delete the deck.",
+      );
+    }
   }
 
-  function solveHand() {
+  async function solveHand() {
     if (hand.length < 2) {
       setError("Add at least two cards to solve a line.");
       return;
@@ -320,40 +322,72 @@ export default function FizaWorkbench() {
       return;
     }
     const deck = needsDeck ? deckCountsCoveringHand(deckCards, hand) : undefined;
-    runWorker(
-      "solve",
-      {
+    setBusy("solve");
+    setError("");
+    try {
+      const result = await apiSolve({
         hand,
         goFirst,
         maxTurns: turns,
         simType,
         rollouts,
-        seed: 42,
+        seed: 42 as unknown as bigint,
         ...(deck ? { deck } : {}),
-      },
-      (result) => setLineResult(result as SolveResult),
-    );
+      } as Parameters<typeof apiSolve>[0]);
+      startTransition(() => setLineResult(result as unknown as SolveResult));
+    } catch (solveError) {
+      setError(
+        solveError instanceof Error
+          ? solveError.message
+          : "The line solve failed.",
+      );
+    } finally {
+      setBusy(null);
+    }
   }
 
-  function evaluateCurrentDeck() {
+  async function evaluateCurrentDeck() {
     const cards = parseDecklist(deferredDeckText);
     if (cards.length < 7) {
       setError("The decklist needs at least seven recognized cards.");
       return;
     }
-    runWorker(
-      "evaluate",
-      {
-        counts: listToCounts(cards),
-        samples,
-        goFirst,
-        maxTurns: turns,
-        simType,
-        rollouts,
-        seed: makeSeed(),
-      },
-      (result) => setDeckResult(result as DeckResult),
-    );
+    setBusy("evaluate");
+    setError("");
+    setProgress(null);
+    try {
+      await startStreamingRun(
+        "evaluate",
+        {
+          deck: listToCounts(cards),
+          samples,
+          goFirst,
+          maxTurns: turns,
+          simType,
+          rollouts,
+          seed: makeSeed() as unknown as bigint,
+        },
+        activeDeck?.id,
+        {
+          onProgress: () => {},
+          onComplete: (result) => {
+            startTransition(() => setDeckResult(result as DeckResult));
+            setBusy(null);
+          },
+          onError: (message) => {
+            setError(message);
+            setBusy(null);
+          },
+        },
+      );
+    } catch (evaluateError) {
+      setError(
+        evaluateError instanceof Error
+          ? evaluateError.message
+          : "Deck evaluation failed.",
+      );
+      setBusy(null);
+    }
   }
 
   function applyRatioDecklist(text: string) {
@@ -374,7 +408,7 @@ export default function FizaWorkbench() {
     setError("");
   }
 
-  function optimizeCurrentBounds() {
+  async function optimizeCurrentBounds() {
     const min = Object.values(bounds).reduce((sum, item) => sum + item.min, 0);
     const max = Object.values(bounds).reduce((sum, item) => sum + item.max, 0);
     if (deckSize < min || deckSize > max) {
@@ -395,35 +429,57 @@ export default function FizaWorkbench() {
       setError("Choose at least one deck to attempt.");
       return;
     }
-    runWorker(
-      "optimize",
-      {
-        bounds,
-        deckSize,
-        samples: ratioSamples,
-        decks,
-        metric,
-        seed: makeSeed(),
-      },
-      (result) => {
-        setRatioResult(result as RatioResult);
-        setProgress((current) =>
-          current
-            ? {
-                ...current,
-                decksScored: current.totalDecks,
-                handsSimulated: current.totalHands,
-                bestScore: (result as RatioResult).bestScore,
-              }
-            : current,
-        );
-      },
-    );
+    setBusy("optimize");
+    setError("");
+    setProgress(null);
+    try {
+      await startStreamingRun(
+        "optimize",
+        {
+          bounds,
+          deckSize,
+          samples: ratioSamples,
+          decks,
+          metric,
+          seed: makeSeed() as unknown as bigint,
+        },
+        undefined,
+        {
+          onProgress: (progressUpdate) => setProgress(progressUpdate),
+          onComplete: (result) => {
+            const ratio = result as RatioResult;
+            startTransition(() => setRatioResult(ratio));
+            setProgress((current) =>
+              current
+                ? {
+                    ...current,
+                    decksScored: current.totalDecks,
+                    handsSimulated: current.totalHands,
+                    bestScore: ratio.bestScore,
+                  }
+                : current,
+            );
+            setBusy(null);
+          },
+          onError: (message) => {
+            setError(message);
+            setBusy(null);
+            setProgress(null);
+          },
+        },
+      );
+    } catch (optimizeError) {
+      setError(
+        optimizeError instanceof Error
+          ? optimizeError.message
+          : "Deck optimization failed.",
+      );
+      setBusy(null);
+    }
   }
 
   function cancelJob() {
-    workerRef.current?.terminate();
-    workerRef.current = null;
+    void cancelRun();
     setBusy(null);
     setProgress(null);
     setError("Calculation cancelled.");

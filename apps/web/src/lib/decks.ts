@@ -1,16 +1,17 @@
+import {
+  createDeckOnApi,
+  deleteDeckOnApi,
+  fetchDecks,
+  updateDeckOnApi,
+} from "./api/client";
+
 export interface SavedDeck {
   id: string;
   name: string;
   text: string;
 }
 
-export interface DeckStore {
-  version: 1;
-  decks: SavedDeck[];
-  activeDeckId: string;
-}
-
-const STORAGE_KEY = "fireline-decks-v1";
+const ACTIVE_DECK_KEY = "fireline-active-deck-id";
 
 export const DEFAULT_SAMPLE_DECK_TEXT = `4 Sable Remnant
 1 Sadi, Blood Harvester
@@ -37,11 +38,18 @@ export const DEFAULT_SAMPLE_DECK_TEXT = `4 Sable Remnant
 3 Vermilion Decree
 2 Xiao Qiao, Cinderkeeper`;
 
-function generateDeckId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+interface ApiDeckRow {
+  id: string;
+  name: string;
+  text: string;
+}
+
+function rowToSavedDeck(row: ApiDeckRow): SavedDeck {
+  return {
+    id: row.id,
+    name: normalizeDeckName(row.name),
+    text: row.text,
+  };
 }
 
 export function normalizeDeckName(name: string, fallback = "Untitled deck"): string {
@@ -49,85 +57,73 @@ export function normalizeDeckName(name: string, fallback = "Untitled deck"): str
   return trimmed.length > 0 ? trimmed : fallback;
 }
 
-export function createDeck(name: string, text = ""): SavedDeck {
-  return {
-    id: generateDeckId(),
-    name: normalizeDeckName(name),
-    text,
-  };
-}
-
-export function createDefaultStore(): DeckStore {
-  const deck = createDeck("Sample deck", DEFAULT_SAMPLE_DECK_TEXT);
-  return {
-    version: 1,
-    decks: [deck],
-    activeDeckId: deck.id,
-  };
-}
-
-function isSavedDeck(value: unknown): value is SavedDeck {
-  if (!value || typeof value !== "object") return false;
-  const deck = value as SavedDeck;
-  return (
-    typeof deck.id === "string" &&
-    typeof deck.name === "string" &&
-    typeof deck.text === "string"
-  );
-}
-
-function parseDeckStore(raw: string): DeckStore | null {
-  try {
-    const parsed = JSON.parse(raw) as Partial<DeckStore>;
-    if (parsed.version !== 1 || !Array.isArray(parsed.decks)) {
-      return null;
-    }
-
-    const decks = parsed.decks.filter(isSavedDeck).map((deck) => ({
-      id: deck.id,
-      name: normalizeDeckName(deck.name),
-      text: deck.text,
-    }));
-
-    if (decks.length === 0) {
-      return null;
-    }
-
-    const activeDeckId =
-      typeof parsed.activeDeckId === "string" &&
-      decks.some((deck) => deck.id === parsed.activeDeckId)
-        ? parsed.activeDeckId
-        : decks[0].id;
-
-    return {
-      version: 1,
-      decks,
-      activeDeckId,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function loadDeckStore(): DeckStore {
+export function loadActiveDeckId(decks: SavedDeck[]): string {
   if (typeof window === "undefined") {
-    return createDefaultStore();
+    return decks[0]?.id ?? "";
   }
-
-  const raw = window.localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    return createDefaultStore();
+  const stored = window.localStorage.getItem(ACTIVE_DECK_KEY);
+  if (stored && decks.some((deck) => deck.id === stored)) {
+    return stored;
   }
-
-  return parseDeckStore(raw) ?? createDefaultStore();
+  return decks[0]?.id ?? "";
 }
 
-export function saveDeckStore(store: DeckStore): void {
+export function saveActiveDeckId(id: string): void {
   if (typeof window === "undefined") {
     return;
   }
+  window.localStorage.setItem(ACTIVE_DECK_KEY, id);
+}
 
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+export async function loadDecksFromApi(): Promise<{
+  decks: SavedDeck[];
+  activeDeckId: string;
+}> {
+  const rows = (await fetchDecks()) as ApiDeckRow[];
+  let decks = rows.map(rowToSavedDeck);
+  if (decks.length === 0) {
+    const created = (await createDeckOnApi(
+      "Sample deck",
+      DEFAULT_SAMPLE_DECK_TEXT,
+    )) as ApiDeckRow;
+    decks = [rowToSavedDeck(created)];
+  }
+  return {
+    decks,
+    activeDeckId: loadActiveDeckId(decks),
+  };
+}
+
+const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+export function scheduleDeckSave(deck: SavedDeck): () => void {
+  const existing = saveTimers.get(deck.id);
+  if (existing) {
+    clearTimeout(existing);
+  }
+  const timer = setTimeout(() => {
+    saveTimers.delete(deck.id);
+    void updateDeckOnApi(deck.id, { name: deck.name, text: deck.text }).catch(
+      () => {},
+    );
+  }, 400);
+  saveTimers.set(deck.id, timer);
+  return () => {
+    clearTimeout(timer);
+    saveTimers.delete(deck.id);
+  };
+}
+
+export async function createDeckRemote(
+  name: string,
+  text = "",
+): Promise<SavedDeck> {
+  const row = (await createDeckOnApi(name, text)) as ApiDeckRow;
+  return rowToSavedDeck(row);
+}
+
+export async function deleteDeckRemote(id: string): Promise<void> {
+  await deleteDeckOnApi(id);
 }
 
 export function nextDeckName(decks: SavedDeck[], preferred?: string): string {
