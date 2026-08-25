@@ -29,7 +29,29 @@ The browser no longer runs WebAssembly. All simulation runs on the Rust compute 
 
 Shared request/response types live in `packages/contracts` (generated from the engine via `ts-rs`).
 
-## Run locally
+This repo uses [pnpm](https://pnpm.io/) workspaces (`pnpm-workspace.yaml`). Enable it via Corepack (`corepack enable`) or install pnpm globally.
+
+## Run with Docker Compose
+
+The production stack runs behind Caddy on port 80. The worker is internal-only; only the data API holds `DATABASE_URL`.
+
+```bash
+# Optional: stamp engine builds with the current git revision
+export GIT_SHA="$(git rev-parse --short HEAD)"
+
+docker compose up --build
+```
+
+Open [http://localhost](http://localhost). Browser requests to `/api/*` go to the data API; everything else goes to the Next.js UI.
+
+Useful overrides:
+
+- `FIRELINE_PORT=8080` — bind the proxy to a different host port
+- `WORKER_CONCURRENCY` / `API_CONCURRENCY` — cap parallel simulations
+
+Postgres data persists in the `pgdata` Compose volume. Migrations run automatically when the data API starts.
+
+## Run locally (development)
 
 You need Postgres, the compute worker, the data API, and the web app.
 
@@ -42,12 +64,12 @@ cargo run -p ga-fire-worker
 
 # Terminal 3 — data API (:8080)
 # apps/api/.env needs DATABASE_URL=postgres://postgres@localhost:5432/fireline
-npm run migrate -w @ga-fire/api
-npm run dev:api
+pnpm migrate
+pnpm dev:api
 
 # Terminal 4 — web UI (:3000, proxies /api → :8080)
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
@@ -74,16 +96,16 @@ cargo run -p ga-fire-cli --release -- optimize optimize-request.json
 ## Verify
 
 ```bash
-npm test
-npm run lint
-npm run build
-npm run bench
+pnpm test
+pnpm lint
+pnpm build
+pnpm bench
 ```
 
 Regenerate shared TypeScript contracts after engine API changes:
 
 ```bash
-npm run build:contracts
+pnpm build:contracts
 ```
 
 ## Current scope

@@ -1,0 +1,15 @@
+.git
+.gitignore
+.cursor
+node_modules
+**/node_modules
+**/dist
+**/.next
+target
+**/*.tsbuildinfo
+.env
+**/.env
+!.env.example
+apps/api/.env
+*.md
+!README.md
