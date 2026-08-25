@@ -9,6 +9,7 @@ export interface SavedDeck {
   id: string;
   name: string;
   text: string;
+  deckHash: string;
 }
 
 const ACTIVE_DECK_KEY = "fireline-active-deck-id";
@@ -42,6 +43,7 @@ interface ApiDeckRow {
   id: string;
   name: string;
   text: string;
+  deck_hash: string;
 }
 
 function rowToSavedDeck(row: ApiDeckRow): SavedDeck {
@@ -49,6 +51,7 @@ function rowToSavedDeck(row: ApiDeckRow): SavedDeck {
     id: row.id,
     name: normalizeDeckName(row.name),
     text: row.text,
+    deckHash: row.deck_hash,
   };
 }
 

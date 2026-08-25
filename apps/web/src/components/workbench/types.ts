@@ -8,7 +8,7 @@ import type {
   TwoPassResult,
 } from "@/lib/engine";
 
-export type Tab = "line" | "deck" | "ratios";
+export type Tab = "line" | "deck" | "ratios" | "history";
 export type JobType = "solve" | "evaluate" | "optimize";
 
 export interface SampleHand {

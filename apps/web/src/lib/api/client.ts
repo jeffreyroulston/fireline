@@ -97,3 +97,156 @@ export async function deleteRun(id: string): Promise<void> {
 export function runEventsUrl(runId: string): string {
   return `${API_PREFIX}/runs/${runId}/events`;
 }
+
+export interface RunHistoryRow {
+  id: string;
+  kind: string;
+  status: string;
+  simType: string | null;
+  deckHash: string | null;
+  rootSeed: string | null;
+  samples: number | null;
+  meanDamage: number | null;
+  p50Damage: number | null;
+  bestScore: number | null;
+  rulesVersion: number | null;
+  samplerVersion: number | null;
+  attributionVersion: number | null;
+  cardDigest: string | null;
+  build: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  elapsedMs: number | null;
+}
+
+export interface VersionGroup {
+  rulesVersion: number;
+  samplerVersion: number;
+  cardDigest: string;
+  attributionVersion: number | null;
+  runCount: number;
+}
+
+export interface PooledDamageResponse {
+  runCount: number;
+  distribution: {
+    totalSamples: number;
+    mean: number;
+    p50: number;
+    p90: number;
+    min: number;
+    max: number;
+    buckets: number[];
+  } | null;
+}
+
+export interface CardLeaderboardResponse {
+  runCount: number;
+  totalSamples: number;
+  cards: Array<{
+    cardId: string;
+    seeRate: number;
+    playWhenSeen: number;
+    damageWhenSeen: number;
+    damageShare: number;
+  }>;
+}
+
+export interface RankedCandidatesResponse {
+  candidates: Array<{
+    rank: number;
+    deckHash: string;
+    appearances: number;
+    wins: number;
+    avgScore: number;
+    bestScore: number;
+  }>;
+}
+
+function analysisQuery(params: Record<string, string | number | undefined>) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") {
+      search.set(key, String(value));
+    }
+  }
+  const query = search.toString();
+  return query ? `?${query}` : "";
+}
+
+export async function fetchRunHistory(deckHash?: string) {
+  const response = await apiFetch(
+    `/analysis/history${analysisQuery({ deck_hash: deckHash })}`,
+  );
+  return response.json() as Promise<RunHistoryRow[]>;
+}
+
+export async function fetchVersionGroups(options: {
+  deckHash?: string;
+  simType?: string;
+  kind?: "evaluate" | "optimize";
+}) {
+  const response = await apiFetch(
+    `/analysis/groups${analysisQuery({
+      deck_hash: options.deckHash,
+      sim_type: options.simType,
+      kind: options.kind,
+    })}`,
+  );
+  return response.json() as Promise<VersionGroup[]>;
+}
+
+export async function fetchPooledDamage(options: {
+  deckHash: string;
+  simType: string;
+  rulesVersion: number;
+  samplerVersion: number;
+  cardDigest: string;
+}) {
+  const response = await apiFetch(
+    `/analysis/pooled-damage${analysisQuery({
+      deck_hash: options.deckHash,
+      sim_type: options.simType,
+      rules_version: options.rulesVersion,
+      sampler_version: options.samplerVersion,
+      card_digest: options.cardDigest,
+    })}`,
+  );
+  return response.json() as Promise<PooledDamageResponse>;
+}
+
+export async function fetchCardLeaderboard(options: {
+  deckHash: string;
+  simType: string;
+  rulesVersion: number;
+  samplerVersion: number;
+  cardDigest: string;
+  attributionVersion: number;
+}) {
+  const response = await apiFetch(
+    `/analysis/card-leaderboard${analysisQuery({
+      deck_hash: options.deckHash,
+      sim_type: options.simType,
+      rules_version: options.rulesVersion,
+      sampler_version: options.samplerVersion,
+      card_digest: options.cardDigest,
+      attribution_version: options.attributionVersion,
+    })}`,
+  );
+  return response.json() as Promise<CardLeaderboardResponse>;
+}
+
+export async function fetchRankedCandidates(options: {
+  rulesVersion: number;
+  samplerVersion: number;
+  cardDigest: string;
+}) {
+  const response = await apiFetch(
+    `/analysis/candidates${analysisQuery({
+      rules_version: options.rulesVersion,
+      sampler_version: options.samplerVersion,
+      card_digest: options.cardDigest,
+    })}`,
+  );
+  return response.json() as Promise<RankedCandidatesResponse>;
+}

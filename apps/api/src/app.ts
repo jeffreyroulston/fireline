@@ -9,6 +9,14 @@ import type { RunDispatcher } from "./services/dispatch.js";
 import { markRunCancelled } from "./services/persist.js";
 import { runHub } from "./services/run-hub.js";
 import { fetchWorkerJson, WorkerError } from "./services/worker.js";
+import {
+  cardLeaderboard,
+  listRunHistory,
+  listVersionGroups,
+  pooledDamageDistribution,
+  rankedCandidates,
+} from "./services/analysis.js";
+import { parseAttributionVersion, parseVersionTriple } from "./lib/version.js";
 
 export function createApp(options: {
   db: Kysely<Database>;
@@ -116,6 +124,82 @@ export function createApp(options: {
       .orderBy("started_at", "desc")
       .limit(100)
       .execute();
+    return c.json(rows);
+  });
+
+  app.get("/analysis/groups", async (c) => {
+    const deckHash = c.req.query("deck_hash") || undefined;
+    const simType = c.req.query("sim_type") || undefined;
+    const kind = c.req.query("kind");
+    const groups = await listVersionGroups(options.db, {
+      deckHash,
+      simType,
+      kind:
+        kind === "evaluate" || kind === "optimize" ? kind : undefined,
+    });
+    return c.json(groups);
+  });
+
+  app.get("/analysis/pooled-damage", async (c) => {
+    const deckHash = c.req.query("deck_hash");
+    const simType = c.req.query("sim_type");
+    if (!deckHash || !simType) {
+      return c.json({ error: "deck_hash and sim_type are required" }, 400);
+    }
+    const version = parseVersionTriple(new URL(c.req.url).searchParams);
+    if ("error" in version) {
+      return c.json({ error: version.error }, 400);
+    }
+    const result = await pooledDamageDistribution(options.db, {
+      deckHash,
+      simType,
+      version,
+    });
+    return c.json(result);
+  });
+
+  app.get("/analysis/card-leaderboard", async (c) => {
+    const deckHash = c.req.query("deck_hash");
+    const simType = c.req.query("sim_type");
+    if (!deckHash || !simType) {
+      return c.json({ error: "deck_hash and sim_type are required" }, 400);
+    }
+    const params = new URL(c.req.url).searchParams;
+    const version = parseVersionTriple(params);
+    if ("error" in version) {
+      return c.json({ error: version.error }, 400);
+    }
+    const attributionVersion = parseAttributionVersion(params);
+    if (typeof attributionVersion === "object" && "error" in attributionVersion) {
+      return c.json({ error: attributionVersion.error }, 400);
+    }
+    const result = await cardLeaderboard(options.db, {
+      deckHash,
+      simType,
+      version,
+      attributionVersion,
+    });
+    return c.json(result);
+  });
+
+  app.get("/analysis/candidates", async (c) => {
+    const version = parseVersionTriple(new URL(c.req.url).searchParams);
+    if ("error" in version) {
+      return c.json({ error: version.error }, 400);
+    }
+    const result = await rankedCandidates(options.db, { version });
+    return c.json(result);
+  });
+
+  app.get("/analysis/history", async (c) => {
+    const deckHash = c.req.query("deck_hash") || undefined;
+    const kind = c.req.query("kind");
+    const rows = await listRunHistory(options.db, {
+      deckHash,
+      kind:
+        kind === "evaluate" || kind === "optimize" ? kind : undefined,
+      limit: 200,
+    });
     return c.json(rows);
   });
 

@@ -43,6 +43,7 @@ import {
   RatioImportPanel,
   RatioResults,
 } from "./ratios";
+import { HistoryPanel } from "./history";
 import { ActionBar } from "./shared";
 import type { DeckResult, JobType, RatioResult, SampleHand, Tab } from "./types";
 import { deckCountsCoveringHand, makeBounds, makeSeed } from "./utils";
@@ -77,6 +78,7 @@ export default function FizaWorkbench() {
   const [progress, setProgress] = useState<OptimizeProgress | null>(null);
   const [busy, setBusy] = useState<JobType | null>(null);
   const [error, setError] = useState("");
+  const [historyDeckFilter, setHistoryDeckFilter] = useState(false);
   const { startStreamingRun, cancel: cancelRun } = useRun();
 
   useEffect(() => {
@@ -485,6 +487,7 @@ export default function FizaWorkbench() {
             ["line", "Hand solver"],
             ["deck", "Deck damage"],
             ["ratios", "Ratio lab"],
+            ["history", "History"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -630,7 +633,15 @@ export default function FizaWorkbench() {
           </div>
         )}
 
-        {error && (
+        {tab === "history" && (
+          <HistoryPanel
+            activeDeck={activeDeck}
+            filterToActiveDeck={historyDeckFilter}
+            onFilterToActiveDeckChange={setHistoryDeckFilter}
+          />
+        )}
+
+        {error && tab !== "history" && (
           <p className="error-banner" role="alert">
             {error}
           </p>
