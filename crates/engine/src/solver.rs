@@ -9,7 +9,6 @@ use crate::{
 };
 use rustc_hash::FxHashMap;
 use std::collections::BTreeMap;
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
 #[derive(Default)]
@@ -180,7 +179,6 @@ fn hand_solve_effective(
 }
 
 pub fn solve_cards(hand: &[Card], go_first: bool, max_turns: u8) -> SolveResult {
-    #[cfg(not(target_arch = "wasm32"))]
     let started = Instant::now();
     let (pass, line_stats) = solve_pass(hand, go_first, max_turns, &[]);
     SolveResult {
@@ -189,16 +187,7 @@ pub fn solve_cards(hand: &[Card], go_first: bool, max_turns: u8) -> SolveResult 
         steps: pass.steps,
         nodes: pass.nodes,
         memo_entries: pass.memo_entries,
-        elapsed_ms: {
-            #[cfg(target_arch = "wasm32")]
-            {
-                0.0
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                started.elapsed().as_secs_f64() * 1000.0
-            }
-        },
+        elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
         distribution: None,
         two_pass: None,
         card_stats: summarize_line_stats(hand, &line_stats),
@@ -248,7 +237,6 @@ fn solve_monte_carlo(
     rollouts: u16,
     seed: u64,
 ) -> SolveResult {
-    #[cfg(not(target_arch = "wasm32"))]
     let started = Instant::now();
     let mut rng = Rng(seed);
     let mut damages = Vec::with_capacity(rollouts as usize);
@@ -295,16 +283,7 @@ fn solve_monte_carlo(
         steps: headline.steps.clone(),
         nodes: total_nodes,
         memo_entries: total_memo,
-        elapsed_ms: {
-            #[cfg(target_arch = "wasm32")]
-            {
-                0.0
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                started.elapsed().as_secs_f64() * 1000.0
-            }
-        },
+        elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
         distribution: Some(DamageDistribution {
             damages,
             mean,
@@ -328,7 +307,6 @@ fn solve_two_pass(
     max_turns: u8,
     seed: u64,
 ) -> SolveResult {
-    #[cfg(not(target_arch = "wasm32"))]
     let started = Instant::now();
     let (brick, _) = solve_pass(hand, go_first, max_turns, &[]);
     let mut queue = remaining.to_vec();
@@ -344,16 +322,7 @@ fn solve_two_pass(
         steps: brick.steps.clone(),
         nodes: brick.nodes + oracle.nodes,
         memo_entries: brick.memo_entries + oracle.memo_entries,
-        elapsed_ms: {
-            #[cfg(target_arch = "wasm32")]
-            {
-                0.0
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                started.elapsed().as_secs_f64() * 1000.0
-            }
-        },
+        elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
         distribution: None,
         two_pass: Some(TwoPassResult { brick, oracle }),
         card_stats,

@@ -10,7 +10,6 @@
     "dev": "npm run dev -w @ga-fire/web",
     "dev:api": "npm run dev -w @ga-fire/api",
     "build": "npm run build -w @ga-fire/web",
-    "build:wasm": "npm run build:wasm -w @ga-fire/web",
     "build:contracts": "cargo test -p ga-fire-engine --features ts export_typescript -- --nocapture && node scripts/fix-contracts.mjs",
     "test": "cargo test --workspace --release",
     "bench": "cargo bench -p ga-fire-engine"

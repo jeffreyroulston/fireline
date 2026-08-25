@@ -14,8 +14,9 @@ use ts_rs::TS;
 
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+
+use rayon::prelude::*;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -270,7 +271,6 @@ fn solve_sample_hand(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn solve_unique_hands(
     unique: &[(SimType, [u8; CARD_COUNT], u16)],
     request: &DeckEvalRequest,
@@ -278,35 +278,8 @@ fn solve_unique_hands(
     max_turns: u8,
     rollouts: u16,
 ) -> FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand> {
-    use rayon::prelude::*;
     unique
         .par_iter()
-        .map(|&(sim_type, key, sample_index)| {
-            let drawn = drawn_from_key(key);
-            let mut sample = solve_sample_hand(
-                &drawn,
-                request,
-                budget,
-                max_turns,
-                rollouts,
-                sample_index,
-            );
-            sample.hand = drawn.iter().map(|card| card.id()).collect();
-            ((sim_type, key), sample)
-        })
-        .collect()
-}
-
-#[cfg(target_arch = "wasm32")]
-fn solve_unique_hands(
-    unique: &[(SimType, [u8; CARD_COUNT], u16)],
-    request: &DeckEvalRequest,
-    budget: &crate::budget::Budget,
-    max_turns: u8,
-    rollouts: u16,
-) -> FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand> {
-    unique
-        .iter()
         .map(|&(sim_type, key, sample_index)| {
             let drawn = drawn_from_key(key);
             let mut sample = solve_sample_hand(
@@ -348,7 +321,6 @@ pub fn evaluate_with_progress(
     request: &DeckEvalRequest,
     mut on_hand: impl FnMut(u16, u16) -> ControlFlow<()>,
 ) -> Result<DeckEvalResult, String> {
-    #[cfg(not(target_arch = "wasm32"))]
     let started = Instant::now();
     let budget = request.budget;
     let deck = parse_counts(&request.deck)?;
@@ -421,16 +393,7 @@ pub fn evaluate_with_progress(
         min: sorted.first().copied().unwrap_or(0),
         unique_hands: cache.len(),
         states_searched: total_nodes,
-        elapsed_ms: {
-            #[cfg(target_arch = "wasm32")]
-            {
-                0.0
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                started.elapsed().as_secs_f64() * 1000.0
-            }
-        },
+        elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
         effective: EffectiveRequest {
             engine_version: ENGINE_VERSION,
             root_seed: request.seed,
@@ -471,7 +434,6 @@ pub fn optimize_with_progress(
     request: &OptimizeRequest,
     mut on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()>,
 ) -> Result<OptimizeResult, String> {
-    #[cfg(not(target_arch = "wasm32"))]
     let started = Instant::now();
     let budget = request.budget;
     let legal_decks = count_legal_decks(&request.bounds, request.deck_size)?;
@@ -559,16 +521,7 @@ pub fn optimize_with_progress(
         history,
         legal_decks,
         decks_scored,
-        elapsed_ms: {
-            #[cfg(target_arch = "wasm32")]
-            {
-                0.0
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                started.elapsed().as_secs_f64() * 1000.0
-            }
-        },
+        elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
         effective: EffectiveRequest {
             engine_version: ENGINE_VERSION,
             root_seed: request.seed,

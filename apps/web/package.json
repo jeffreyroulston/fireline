@@ -3,9 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "npm run build:wasm && next dev --turbopack",
-    "build": "npm run build:wasm && next build --turbopack",
-    "build:wasm": "wasm-pack build ../../crates/engine --target web --out-dir ./public/wasm --release -- --features wasm",
+    "dev": "next dev --turbopack",
+    "build": "next build --turbopack",
     "start": "next start",
     "lint": "eslint"
   },
