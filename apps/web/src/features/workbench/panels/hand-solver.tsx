@@ -2,13 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { CARDS, CARD_LIST, type CardId, type CardStat, type DamageDistribution, type SimType, type SolveResult, type TwoPassResult } from "@/lib/engine";
+import type { SavedDeck } from "@/lib/decks";
 import { DRILL_3_HAND } from "@/lib/fixtures/drills";
-import { CardStatsPanel, CombatTape, RunSettings, ActionBar, TwoPassCompare } from "./shared";
-import { SIM_TYPE_LABELS } from "./types";
+import { CardStatsPanel, OptimalLine, RunSettings, ActionBar, TwoPassCompare } from "../ui";
+import { SIM_TYPE_LABELS } from "../types";
+import { OPENING_HAND_SIZE } from "../utils";
 
 export function HandBuilder({
   hand,
   selectedCard,
+  decks,
+  activeDeck,
+  recognizedDeckCount,
   goFirst,
   turns,
   simType,
@@ -16,6 +21,8 @@ export function HandBuilder({
   busy,
   onHandChange,
   onSelectedCardChange,
+  onSwitchDeck,
+  onDrawRandomHand,
   onGoFirstChange,
   onTurnsChange,
   onSimTypeChange,
@@ -25,6 +32,9 @@ export function HandBuilder({
 }: {
   hand: CardId[];
   selectedCard: CardId;
+  decks: SavedDeck[];
+  activeDeck: SavedDeck | null;
+  recognizedDeckCount: number;
   goFirst: boolean;
   turns: number;
   simType: SimType;
@@ -32,6 +42,8 @@ export function HandBuilder({
   busy: boolean;
   onHandChange: (hand: CardId[]) => void;
   onSelectedCardChange: (id: CardId) => void;
+  onSwitchDeck: (deckId: string) => void;
+  onDrawRandomHand: () => void;
   onGoFirstChange: (value: boolean) => void;
   onTurnsChange: (value: number) => void;
   onSimTypeChange: (value: SimType) => void;
@@ -39,6 +51,9 @@ export function HandBuilder({
   onSolve: () => void;
   onCancel: () => void;
 }) {
+  const canDraw =
+    decks.length > 0 && recognizedDeckCount >= OPENING_HAND_SIZE;
+
   return (
     <div className="mode-layout line-mode">
       <div className="controls">
@@ -64,8 +79,41 @@ export function HandBuilder({
             </button>
           ))}
           {hand.length === 0 && (
-            <p className="empty-note">Choose cards below to build a hand.</p>
+            <p className="empty-note">
+              Draw from a saved deck or add cards below.
+            </p>
           )}
+        </div>
+
+        <div className="deck-toolbar">
+          <label className="deck-picker">
+            Draw from deck
+            <select
+              value={activeDeck?.id ?? ""}
+              onChange={(event) => onSwitchDeck(event.target.value)}
+              disabled={decks.length === 0}
+            >
+              {decks.length === 0 && <option value="">No saved decks</option>}
+              {decks.map((deck) => (
+                <option key={deck.id} value={deck.id}>
+                  {deck.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="secondary-action"
+            type="button"
+            onClick={onDrawRandomHand}
+            disabled={!canDraw}
+            title={
+              canDraw
+                ? `Draw ${OPENING_HAND_SIZE} cards from the selected deck`
+                : `Need a saved deck with at least ${OPENING_HAND_SIZE} recognized cards`
+            }
+          >
+            Draw random hand
+          </button>
         </div>
 
         <div className="add-card-row">
@@ -188,56 +236,12 @@ export function ResultRail({
       {result.cardStats && result.cardStats.length > 0 && (
         <CardStatsPanel stats={result.cardStats} samples={1} mode={mode} />
       )}
-      <div className="combat-tape">
-        <div className="tape-heading">
-          <span>OPTIMAL LINE</span>
-          <span>{result.steps.length} steps</span>
-        </div>
-        <CombatTape steps={result.steps} resetKey={result} />
-      </div>
+      <OptimalLine
+        sampleId={result.sampleId}
+        steps={result.steps}
+        resetKey={result}
+      />
     </aside>
-  );
-}
-
-export function McRangeColumn({
-  min,
-  max,
-  p50,
-  scaleMax,
-  selected,
-  title,
-  onClick,
-}: {
-  min: number;
-  max: number;
-  p50: number;
-  scaleMax: number;
-  selected?: boolean;
-  title: string;
-  onClick: () => void;
-}) {
-  const whiskerBottom = (min / scaleMax) * 100;
-  const whiskerHeight = Math.max(((max - min) / scaleMax) * 100, 1.5);
-
-  return (
-    <button
-      type="button"
-      className={`mc-range-col ${selected ? "is-selected" : ""}`}
-      title={title}
-      aria-pressed={selected}
-      onClick={onClick}
-    >
-      <span className="mc-range-track">
-        <span
-          className="mc-whisker"
-          style={{ bottom: `${whiskerBottom}%`, height: `${whiskerHeight}%` }}
-        />
-        <span
-          className="mc-fill"
-          style={{ height: `${Math.max(8, (p50 / scaleMax) * 100)}%` }}
-        />
-      </span>
-    </button>
   );
 }
 
@@ -309,18 +313,11 @@ export function MonteCarloResult({
         ))}
       </div>
       {rollout && (
-        <div className="combat-tape">
-          <div className="tape-heading">
-            <span>
-              ROLLOUT {selected! + 1} · {rollout.damage} DAMAGE
-            </span>
-            <span>{rollout.steps.length} steps</span>
-          </div>
-          <CombatTape
-            steps={rollout.steps}
-            resetKey={`mc-${selected}-${rollout.damage}`}
-          />
-        </div>
+        <OptimalLine
+          label={`ROLLOUT ${selected! + 1} · ${rollout.damage} DAMAGE`}
+          steps={rollout.steps}
+          resetKey={`mc-${selected}-${rollout.damage}`}
+        />
       )}
     </aside>
   );

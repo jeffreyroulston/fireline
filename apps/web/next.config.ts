@@ -9,12 +9,14 @@ const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(rootDir, "../.."),
   async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${apiOrigin}/:path*`,
-      },
-    ];
+    return {
+      fallback: [
+        {
+          source: "/api/:path*",
+          destination: `${apiOrigin}/:path*`,
+        },
+      ],
+    };
   },
 };
 

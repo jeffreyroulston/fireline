@@ -1,4 +1,4 @@
-import FizaWorkbench from "@/components/FizaWorkbench";
+import FizaWorkbench from "@/features/workbench";
 
 export default function Home() {
   return <FizaWorkbench />;

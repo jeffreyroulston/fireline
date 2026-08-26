@@ -12,12 +12,13 @@ mod bindings;
 pub use budget::Budget;
 pub use cards::{card_catalog, CardDef};
 pub use deck::{
-    DeckEvalRequest, DeckEvalResult, OptimizeProgress, OptimizeRequest, OptimizeResult,
-    count_legal_decks, evaluate, evaluate_with_progress, optimize, optimize_with_progress,
+    DeckEvalRequest, DeckEvalResult, EvalProgress, OptimizeProgress, OptimizeRequest,
+    OptimizeResult, count_legal_decks, evaluate, evaluate_with_progress,
+    evaluate_with_serial_progress, optimize, optimize_with_progress,
 };
-pub use model::{EffectiveRequest, SimType, SolveRequest, SolveResult};
+pub use model::{EffectiveRequest, PassResult, SimType, SolveRequest, SolveResult};
 pub use version::{EngineVersion, ENGINE_VERSION};
-pub use solver::{solve, solve_cards};
+pub use solver::{solve, solve_cards, solve_pass, solve_with_progress};
 
 pub fn solve_json(input: &str) -> Result<String, String> {
     let request: SolveRequest =

@@ -1,0 +1,438 @@
+"use client";
+
+import { cardImageUrl } from "@/lib/card-images";
+import type { SavedDeck } from "@/lib/decks";
+import { isDeckCardlistLocked } from "@/lib/decks";
+import { CARDS, MIN_VALID_DECK_SIZE } from "@/lib/engine";
+import type { CardDef, CardId } from "@/lib/engine/types";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import { createPortal } from "react-dom";
+
+const CARD_PREVIEW_DELAY_MS = 450;
+const CARD_PREVIEW_WIDTH = 312;
+const CARD_PREVIEW_MARGIN = 12;
+
+function tallyCards(cards: CardId[]): { id: CardId; qty: number }[] {
+  const counts = new Map<CardId, number>();
+  for (const id of cards) {
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([id, qty]) => ({ id, qty }));
+}
+
+function cardTraitLines(card: CardDef): string[] {
+  const traits: string[] = [];
+  if (card.unique) traits.push("Unique");
+  if (card.stealth) traits.push("Stealth");
+  if (card.floatingMemory) traits.push("Floating Memory");
+  if (card.assassinPowerBonus) {
+    traits.push(`Assassin +${card.assassinPowerBonus} power`);
+  }
+  if (card.assassinStealth) traits.push("Assassin Stealth");
+  if (card.automaton) traits.push("Automaton");
+  if (card.fast) traits.push("Fast");
+  if (card.kindle) traits.push(`Kindle ${card.kindle}`);
+  if (card.prepare) traits.push(`Prepare ${card.prepare}`);
+  return traits;
+}
+
+function clampPreviewPosition(
+  anchor: DOMRect,
+  previewWidth: number,
+  previewHeight: number,
+): { top: number; left: number } {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const margin = CARD_PREVIEW_MARGIN;
+  const maxLeft = Math.max(margin, vw - previewWidth - margin);
+  const maxTop = Math.max(margin, vh - previewHeight - margin);
+
+  const preferRight = vw - anchor.right >= previewWidth + margin * 2;
+  let left = preferRight
+    ? anchor.right + margin
+    : anchor.left - previewWidth - margin;
+  left = Math.min(Math.max(margin, left), maxLeft);
+
+  let top = anchor.top;
+  top = Math.min(Math.max(margin, top), maxTop);
+
+  return { top, left };
+}
+
+function DeckCardPreview({
+  card,
+  qty,
+  src,
+  anchor,
+  onClose,
+}: {
+  card: CardDef;
+  qty: number;
+  src: string | null;
+  anchor: DOMRect;
+  onClose: () => void;
+}) {
+  const previewRef = useRef<HTMLDivElement>(null);
+  const [style, setStyle] = useState<CSSProperties>({
+    position: "fixed",
+    top: 0,
+    left: 0,
+    width: CARD_PREVIEW_WIDTH,
+    maxHeight: `calc(100vh - ${CARD_PREVIEW_MARGIN * 2}px)`,
+    visibility: "hidden",
+  });
+
+  function placePreview() {
+    const node = previewRef.current;
+    if (!node) return;
+    const { width, height } = node.getBoundingClientRect();
+    const { top, left } = clampPreviewPosition(
+      anchor,
+      width || CARD_PREVIEW_WIDTH,
+      height || 1,
+    );
+    setStyle({
+      position: "fixed",
+      top,
+      left,
+      width: CARD_PREVIEW_WIDTH,
+      maxHeight: `calc(100vh - ${CARD_PREVIEW_MARGIN * 2}px)`,
+      visibility: "visible",
+    });
+  }
+
+  useLayoutEffect(() => {
+    placePreview();
+  }, [anchor]);
+
+  useEffect(() => {
+    function reposition() {
+      placePreview();
+    }
+    function hide() {
+      onClose();
+    }
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", hide, true);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", hide, true);
+    };
+  }, [anchor, onClose]);
+
+  const traits = cardTraitLines(card);
+  const combat =
+    card.power != null || card.life != null
+      ? `${card.power ?? "—"} power / ${card.life ?? "—"} life`
+      : null;
+
+  return (
+    <div
+      ref={previewRef}
+      className="deck-card-preview"
+      role="tooltip"
+      style={style}
+    >
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element -- remote GATCG art; no next/image domain config
+        <img src={src} alt="" onLoad={placePreview} />
+      ) : (
+        <div
+          className={`card-tile deck-card-preview-fallback${card.element === "fire" ? " is-fire" : ""}`}
+        >
+          <span>{card.element}</span>
+          <b>{card.name}</b>
+          <small>
+            {card.cost} · {card.kind}
+          </small>
+        </div>
+      )}
+      <div className="deck-card-preview-body">
+        <p className="deck-card-preview-qty">{qty}×</p>
+        <h3>{card.name}</h3>
+        <p>
+          {card.kind} · {card.element} · cost {card.cost}
+        </p>
+        {combat && <p>{combat}</p>}
+        {traits.length > 0 && (
+          <ul>
+            {traits.map((trait) => (
+              <li key={trait}>{trait}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DeckCardFace({ id, qty }: { id: CardId; qty: number }) {
+  const card = CARDS[id];
+  const src = cardImageUrl(id);
+  const faceRef = useRef<HTMLElement>(null);
+  const timerRef = useRef<number | null>(null);
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+
+  function clearTimer() {
+    if (timerRef.current != null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }
+
+  const hidePreview = useCallback(() => {
+    clearTimer();
+    setAnchor(null);
+  }, []);
+
+  function showPreviewSoon() {
+    clearTimer();
+    timerRef.current = window.setTimeout(() => {
+      const el = faceRef.current;
+      if (!el) return;
+      setAnchor(el.getBoundingClientRect());
+    }, CARD_PREVIEW_DELAY_MS);
+  }
+
+  useEffect(() => () => clearTimer(), []);
+
+  return (
+    <figure
+      ref={faceRef}
+      className="deck-card-face"
+      onMouseEnter={showPreviewSoon}
+      onMouseLeave={hidePreview}
+      onFocus={showPreviewSoon}
+      onBlur={hidePreview}
+      tabIndex={0}
+    >
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element -- remote GATCG art; no next/image domain config
+        <img src={src} alt={card.name} loading="lazy" />
+      ) : (
+        <div
+          className={`card-tile deck-card-fallback${card.element === "fire" ? " is-fire" : ""}`}
+        >
+          <span>{card.element}</span>
+          <b>{card.name}</b>
+          <small>
+            {card.cost} · {card.kind}
+          </small>
+        </div>
+      )}
+      <figcaption>
+        <span className="deck-card-qty" aria-label={`Quantity ${qty}`}>
+          {qty}
+        </span>
+        <span className="deck-card-name">{card.name}</span>
+      </figcaption>
+      {anchor &&
+        createPortal(
+          <DeckCardPreview
+            card={card}
+            qty={qty}
+            src={src}
+            anchor={anchor}
+            onClose={hidePreview}
+          />,
+          document.body,
+        )}
+    </figure>
+  );
+}
+
+function DeckCardGrid({ cards }: { cards: CardId[] }) {
+  const entries = tallyCards(cards);
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="deck-card-panel">
+      <div className="section-heading">
+        <span>CARD LIST</span>
+        <strong>{entries.length} unique</strong>
+      </div>
+      <div className="deck-card-grid" aria-label="Deck card images">
+        {entries.map(({ id, qty }) => (
+          <DeckCardFace key={id} id={id} qty={qty} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function DecksManage({
+  decks,
+  activeDeck,
+  deckText,
+  deckCards,
+  recognizedDeckCount,
+  unrecognizedLines,
+  isRenamingDeck,
+  renameDraft,
+  onSwitchDeck,
+  onCreateDeck,
+  onDuplicateDeck,
+  onStartRename,
+  onDeleteDeck,
+  onRenameDraftChange,
+  onCommitRename,
+  onCancelRename,
+  onDeckTextChange,
+}: {
+  decks: SavedDeck[];
+  activeDeck: SavedDeck | null;
+  deckText: string;
+  deckCards: CardId[];
+  recognizedDeckCount: number;
+  unrecognizedLines: string[];
+  isRenamingDeck: boolean;
+  renameDraft: string;
+  onSwitchDeck: (deckId: string) => void;
+  onCreateDeck: () => void;
+  onDuplicateDeck: () => void;
+  onStartRename: () => void;
+  onDeleteDeck: () => void;
+  onRenameDraftChange: (value: string) => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+  onDeckTextChange: (text: string) => void;
+}) {
+  const locked = activeDeck ? isDeckCardlistLocked(activeDeck) : false;
+  const underSize = recognizedDeckCount < MIN_VALID_DECK_SIZE;
+  const issues: string[] = [];
+  if (underSize) {
+    issues.push(
+      `Deck needs at least ${MIN_VALID_DECK_SIZE} recognized cards (${recognizedDeckCount} so far).`,
+    );
+  }
+  for (const line of unrecognizedLines) {
+    issues.push(`Unrecognized card: ${line}`);
+  }
+
+  return (
+    <div className="mode-layout line-mode">
+      <div className="controls">
+        <div className="section-heading">
+          <span>DECKS</span>
+          <strong>
+            {recognizedDeckCount} recognized
+            {underSize ? ` · need ${MIN_VALID_DECK_SIZE}+` : ""}
+          </strong>
+        </div>
+        <div className="deck-toolbar">
+          <label className="deck-picker">
+            Saved deck
+            <select
+              value={activeDeck?.id ?? ""}
+              onChange={(event) => onSwitchDeck(event.target.value)}
+              disabled={decks.length === 0}
+            >
+              {decks.map((deck) => (
+                <option key={deck.id} value={deck.id}>
+                  {deck.name}
+                  {isDeckCardlistLocked(deck) ? " · locked" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="deck-toolbar-actions">
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={onCreateDeck}
+            >
+              New deck
+            </button>
+            <button
+              className="text-action"
+              type="button"
+              onClick={onDuplicateDeck}
+              disabled={!activeDeck}
+            >
+              Duplicate
+            </button>
+            <button
+              className="text-action"
+              type="button"
+              onClick={onStartRename}
+              disabled={!activeDeck}
+            >
+              Rename
+            </button>
+            <button
+              className="text-action is-danger"
+              type="button"
+              onClick={onDeleteDeck}
+              disabled={!activeDeck}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+        {isRenamingDeck && activeDeck && (
+          <form
+            className="deck-rename-row"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onCommitRename();
+            }}
+          >
+            <label>
+              Deck name
+              <input
+                autoFocus
+                value={renameDraft}
+                onChange={(event) => onRenameDraftChange(event.target.value)}
+              />
+            </label>
+            <button className="secondary-action" type="submit">
+              Save name
+            </button>
+            <button
+              className="text-action"
+              type="button"
+              onClick={onCancelRename}
+            >
+              Cancel
+            </button>
+          </form>
+        )}
+        {locked && (
+          <p className="deck-lock-note">
+            Cardlist locked after simulations — duplicate to edit.
+          </p>
+        )}
+        <label className="deck-input">
+          One card per line, with quantity
+          <textarea
+            value={deckText}
+            onChange={(event) => onDeckTextChange(event.target.value)}
+            spellCheck={false}
+            readOnly={locked}
+          />
+        </label>
+        {issues.length > 0 && (
+          <div className="deck-issues" role="alert">
+            <div className="section-heading">
+              <span>ISSUES</span>
+              <strong>{issues.length}</strong>
+            </div>
+            <ul>
+              {issues.map((issue, index) => (
+                <li key={`${issue}-${index}`}>{issue}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <DeckCardGrid cards={deckCards} />
+      </div>
+    </div>
+  );
+}

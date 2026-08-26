@@ -3,9 +3,12 @@ import type {
   DeckEvalResult,
   EffectiveRequest,
   OptimizeResult,
+  SolveRequest,
+  SolveResult,
 } from "@ga-fire/contracts";
 import type { Database } from "../db/types.js";
 import { deckHash, damageHistogram, handHash, newId } from "../lib/deck.js";
+import { toJsonb } from "../lib/jsonb.js";
 
 function normalizeCounts(counts: Record<string, number | undefined>): Record<string, number> {
   return Object.fromEntries(
@@ -24,22 +27,82 @@ function effectiveVersionFields(effective: EffectiveRequest) {
 }
 
 function effectiveRunFields(effective: EffectiveRequest) {
+  const bounds = (effective.bounds ?? null) as Record<string, { min: number; max: number }> | null;
   return {
     sim_type: effective.simType ?? null,
     root_seed: effective.rootSeed != null ? String(effective.rootSeed) : null,
-    deck_counts: normalizeCounts(effective.deck ?? {}),
+    deck_counts: toJsonb(normalizeCounts(effective.deck ?? {})),
     go_first: effective.goFirst ?? null,
     max_turns: effective.maxTurns ?? null,
     rollouts: effective.rollouts ?? null,
     samples: effective.samples ?? null,
-    budget: effective.budget ?? null,
+    budget: effective.budget != null ? toJsonb(effective.budget) : null,
     metric: effective.metric ?? null,
-    bounds: (effective.bounds ?? null) as Record<string, { min: number; max: number }> | null,
+    bounds: bounds != null ? toJsonb(bounds) : null,
     deck_size: effective.deckSize ?? null,
     decks_requested: effective.decks ?? null,
     deck_hash: deckHash(normalizeCounts(effective.deck ?? {})),
     ...effectiveVersionFields(effective),
   };
+}
+
+/** Persist a hand-solver result and return the `run_samples` row id. */
+export async function persistSolveResult(
+  db: Kysely<Database>,
+  request: SolveRequest,
+  result: SolveResult,
+): Promise<{ runId: string; sampleId: string }> {
+  const runId = newId();
+  const sampleId = newId();
+  const now = new Date();
+  const hand = [...request.hand];
+  const damage = result.maxDamage;
+
+  await db.transaction().execute(async (trx) => {
+    await trx
+      .insertInto("runs")
+      .values({
+        id: runId,
+        kind: "solve",
+        status: "complete",
+        started_at: now,
+        completed_at: now,
+        elapsed_ms: result.elapsedMs,
+        mean_damage: damage,
+        p50_damage: damage,
+        p90_damage: damage,
+        max_damage: damage,
+        min_damage: damage,
+        request_body: toJsonb({
+          hand,
+          goFirst: request.goFirst,
+          maxTurns: request.maxTurns,
+          simType: request.simType,
+          deck: request.deck ?? {},
+          rollouts: request.rollouts,
+          seed:
+            request.seed != null ? String(request.seed) : null,
+        }),
+        ...effectiveRunFields(result.effective),
+      })
+      .execute();
+
+    await trx
+      .insertInto("run_samples")
+      .values({
+        id: sampleId,
+        run_id: runId,
+        hand_hash: handHash(hand),
+        card_ids: toJsonb(hand),
+        occurrence_count: 1,
+        damage,
+        nodes: String(result.nodes),
+        steps: result.steps != null ? toJsonb(result.steps) : null,
+      })
+      .execute();
+  });
+
+  return { runId, sampleId };
 }
 
 export async function persistEvaluateResult(
@@ -78,7 +141,8 @@ export async function persistEvaluateResult(
         p90_damage: result.p90,
         max_damage: result.max,
         min_damage: result.min,
-        damage_histogram: damageHistogram(result.damages),
+        damage_histogram: toJsonb(damageHistogram(result.damages)),
+        sample_damages: toJsonb(result.damages),
         ...effectiveRunFields(effective),
       })
       .where("id", "=", runId)
@@ -91,11 +155,11 @@ export async function persistEvaluateResult(
           id: newId(),
           run_id: runId,
           hand_hash: hash,
-          card_ids: sample.cardIds,
+          card_ids: toJsonb(sample.cardIds),
           occurrence_count: sample.count,
           damage: sample.damage,
           nodes: sample.nodes,
-          steps: sample.steps,
+          steps: sample.steps != null ? toJsonb(sample.steps) : null,
         })
         .execute();
     }
@@ -136,10 +200,12 @@ export async function persistOptimizeResult(
         completed_at: new Date(),
         elapsed_ms: result.elapsedMs,
         best_score: result.bestScore,
-        optimize_history: result.history.map((point) => ({
-          iteration: point.iteration,
-          score: point.score,
-        })),
+        optimize_history: toJsonb(
+          result.history.map((point) => ({
+            iteration: point.iteration,
+            score: point.score,
+          })),
+        ),
         ...effectiveRunFields(effective),
       })
       .where("id", "=", runId)
@@ -152,7 +218,7 @@ export async function persistOptimizeResult(
           run_id: runId,
           rank: candidate.rank,
           score: candidate.score,
-          counts: normalizeCounts(candidate.counts) as Record<string, number>,
+          counts: toJsonb(normalizeCounts(candidate.counts)),
           deck_hash: deckHash(normalizeCounts(candidate.counts)),
         })
         .execute();

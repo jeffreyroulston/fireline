@@ -42,7 +42,9 @@ export async function fetchCards() {
   return response.json();
 }
 
-export async function solve(request: SolveRequest): Promise<SolveResult> {
+export async function solve(
+  request: SolveRequest,
+): Promise<SolveResult & { sampleId?: string | null }> {
   const response = await apiFetch("/solve", {
     method: "POST",
     body: JSON.stringify(request),
@@ -104,6 +106,8 @@ export interface RunHistoryRow {
   status: string;
   simType: string | null;
   deckHash: string | null;
+  deckId: string | null;
+  deckName: string | null;
   rootSeed: string | null;
   samples: number | null;
   meanDamage: number | null;
@@ -127,6 +131,14 @@ export interface VersionGroup {
   runCount: number;
 }
 
+export interface PooledRunSamples {
+  id: string;
+  startedAt: string;
+  samples: number | null;
+  meanDamage: number | null;
+  damages: number[];
+}
+
 export interface PooledDamageResponse {
   runCount: number;
   distribution: {
@@ -138,6 +150,7 @@ export interface PooledDamageResponse {
     max: number;
     buckets: number[];
   } | null;
+  runs?: PooledRunSamples[];
 }
 
 export interface CardLeaderboardResponse {
@@ -145,11 +158,23 @@ export interface CardLeaderboardResponse {
   totalSamples: number;
   cards: Array<{
     cardId: string;
+    deckCopies: number;
     seeRate: number;
-    playWhenSeen: number;
+    playWhenInHand: number;
     damageWhenSeen: number;
     damageShare: number;
   }>;
+}
+
+export interface PooledSampleHighlight {
+  runId: string;
+  sampleIndex: number;
+  inHand: string[];
+  played: string[];
+}
+
+export interface PooledSampleHighlightsResponse {
+  samples: PooledSampleHighlight[];
 }
 
 export interface RankedCandidatesResponse {
@@ -174,21 +199,29 @@ function analysisQuery(params: Record<string, string | number | undefined>) {
   return query ? `?${query}` : "";
 }
 
-export async function fetchRunHistory(deckHash?: string) {
+export async function fetchRunHistory(options?: {
+  deckHash?: string;
+  deckId?: string;
+}) {
   const response = await apiFetch(
-    `/analysis/history${analysisQuery({ deck_hash: deckHash })}`,
+    `/analysis/history${analysisQuery({
+      deck_hash: options?.deckHash,
+      deck_id: options?.deckId,
+    })}`,
   );
   return response.json() as Promise<RunHistoryRow[]>;
 }
 
 export async function fetchVersionGroups(options: {
   deckHash?: string;
+  deckId?: string;
   simType?: string;
   kind?: "evaluate" | "optimize";
 }) {
   const response = await apiFetch(
     `/analysis/groups${analysisQuery({
       deck_hash: options.deckHash,
+      deck_id: options.deckId,
       sim_type: options.simType,
       kind: options.kind,
     })}`,
@@ -234,6 +267,49 @@ export async function fetchCardLeaderboard(options: {
     })}`,
   );
   return response.json() as Promise<CardLeaderboardResponse>;
+}
+
+export interface PooledSampleResponse {
+  runId: string;
+  sampleId: string | null;
+  sampleIndex: number;
+  simType: string | null;
+  hand: string[];
+  damage: number;
+  nodes: number;
+  steps: Array<Record<string, unknown>>;
+}
+
+export async function fetchPooledSampleHighlights(options: {
+  deckHash: string;
+  simType: string;
+  rulesVersion: number;
+  samplerVersion: number;
+  cardDigest: string;
+}) {
+  const response = await apiFetch(
+    `/analysis/pooled-sample-highlights${analysisQuery({
+      deck_hash: options.deckHash,
+      sim_type: options.simType,
+      rules_version: options.rulesVersion,
+      sampler_version: options.samplerVersion,
+      card_digest: options.cardDigest,
+    })}`,
+  );
+  return response.json() as Promise<PooledSampleHighlightsResponse>;
+}
+
+export async function fetchPooledSample(options: {
+  runId: string;
+  sampleIndex: number;
+}) {
+  const response = await apiFetch(
+    `/analysis/pooled-sample${analysisQuery({
+      run_id: options.runId,
+      sample_index: options.sampleIndex,
+    })}`,
+  );
+  return response.json() as Promise<PooledSampleResponse>;
 }
 
 export async function fetchRankedCandidates(options: {

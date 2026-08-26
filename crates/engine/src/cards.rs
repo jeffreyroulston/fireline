@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "ts")]
 use ts_rs::TS;
 
-pub const CARD_COUNT: usize = 28;
+pub const CARD_COUNT: usize = 31;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -37,6 +37,9 @@ pub enum Card {
     VermilionDecree = 25,
     XiaoQiao = 26,
     HotCake = 27,
+    UncannyRealization = 28,
+    Virgil = 29,
+    ViciousSlice = 30,
 }
 
 impl Card {
@@ -75,6 +78,9 @@ impl Card {
             Self::VermilionDecree => "vermilion_decree",
             Self::XiaoQiao => "xiao_qiao",
             Self::HotCake => "hot_cake",
+            Self::UncannyRealization => "uncanny_realization",
+            Self::Virgil => "virgil",
+            Self::ViciousSlice => "vicious_slice",
         }
     }
 
@@ -108,6 +114,9 @@ impl Card {
             Self::VermilionDecree => "Vermilion Decree",
             Self::XiaoQiao => "Xiao Qiao, Cinderkeeper",
             Self::HotCake => "Hot Cake",
+            Self::UncannyRealization => "Uncanny Realization",
+            Self::Virgil => "Virgil, Altered Future",
+            Self::ViciousSlice => "Vicious Slice",
         }
     }
 
@@ -141,6 +150,9 @@ impl Card {
             Self::VermilionDecree => "VermD",
             Self::XiaoQiao => "XiaoQ",
             Self::HotCake => "HCake",
+            Self::UncannyRealization => "UReal",
+            Self::Virgil => "Virgi",
+            Self::ViciousSlice => "VSlic",
         }
     }
 
@@ -157,7 +169,8 @@ impl Card {
             | Self::VermilionDecree
             | Self::RendingFlames
             | Self::VeteranBlazebearer
-            | Self::HotCake => 3,
+            | Self::HotCake
+            | Self::Virgil => 3,
             Self::KingdomInformant
             | Self::ClumsyApprentice
             | Self::SableRemnant
@@ -173,13 +186,18 @@ impl Card {
             | Self::BlazingThrow
             | Self::MarchHare
             | Self::MarkTheTarget
-            | Self::Rococo => 1,
+            | Self::Rococo
+            | Self::UncannyRealization
+            | Self::ViciousSlice => 1,
         }
     }
 
     pub const fn power(self) -> u8 {
         match self {
-            Self::Tweedledum | Self::RedHare | Self::RendingFlames => 3,
+            Self::Tweedledum
+            | Self::RedHare
+            | Self::RendingFlames
+            | Self::UncannyRealization => 3,
             Self::Arthur
             | Self::IgnitedStab
             | Self::VeteranBlazebearer
@@ -187,7 +205,9 @@ impl Card {
             | Self::CaptivatingCutthroat
             | Self::DazzlingCourtesan
             | Self::HeatedVengeance
-            | Self::PepperedChef => 2,
+            | Self::PepperedChef
+            | Self::Virgil
+            | Self::ViciousSlice => 2,
             Self::KingdomInformant
             | Self::ClumsyApprentice
             | Self::SableRemnant
@@ -221,13 +241,18 @@ impl Card {
                 | Self::Rococo
                 | Self::Tweedledum
                 | Self::XiaoQiao
+                | Self::Virgil
         )
     }
 
     pub const fn is_attack(self) -> bool {
         matches!(
             self,
-            Self::IgnitedStab | Self::RendingFlames | Self::HeatedVengeance
+            Self::IgnitedStab
+                | Self::RendingFlames
+                | Self::HeatedVengeance
+                | Self::UncannyRealization
+                | Self::ViciousSlice
         )
     }
 
@@ -250,19 +275,37 @@ impl Card {
     pub const fn is_fire(self) -> bool {
         !matches!(
             self,
-            Self::KingdomInformant | Self::SableRemnant | Self::Sadi
+            Self::KingdomInformant
+                | Self::SableRemnant
+                | Self::Sadi
+                | Self::UncannyRealization
+                | Self::Virgil
+                | Self::ViciousSlice
         )
+    }
+
+    pub const fn is_automaton(self) -> bool {
+        matches!(self, Self::Rococo | Self::Virgil)
+    }
+
+    /// Command Automaton attacks must be performed by an Automaton ally.
+    pub const fn is_command_automaton(self) -> bool {
+        matches!(self, Self::UncannyRealization)
+    }
+
+    pub const fn is_fast(self) -> bool {
+        matches!(self, Self::Virgil)
     }
 
     pub const fn is_stealth(self) -> bool {
         matches!(
             self,
-            Self::KingdomInformant
-                | Self::Racoo
-                | Self::CorhaziCourier
-                | Self::Tweedledum
-                | Self::XiaoQiao
+            Self::KingdomInformant | Self::Racoo | Self::CorhaziCourier | Self::XiaoQiao
         )
+    }
+
+    pub const fn assassin_stealth(self) -> bool {
+        matches!(self, Self::Tweedledum)
     }
 
     pub const fn is_unique(self) -> bool {
@@ -275,6 +318,7 @@ impl Card {
                 | Self::Rococo
                 | Self::Tweedledum
                 | Self::XiaoQiao
+                | Self::Virgil
         )
     }
 
@@ -319,6 +363,7 @@ impl Card {
             Self::Rococo => 1,
             Self::Tweedledum => 2,
             Self::XiaoQiao => 2,
+            Self::Virgil => 2,
             _ => return None,
         })
     }
@@ -386,9 +431,12 @@ pub const ALL_CARDS: [Card; CARD_COUNT] = [
     Card::VermilionDecree,
     Card::XiaoQiao,
     Card::HotCake,
+    Card::UncannyRealization,
+    Card::Virgil,
+    Card::ViciousSlice,
 ];
 
-pub const PLAYABLE_CARDS: [Card; 27] = [
+pub const PLAYABLE_CARDS: [Card; 30] = [
     Card::Arthur,
     Card::KingdomInformant,
     Card::ClumsyApprentice,
@@ -416,6 +464,9 @@ pub const PLAYABLE_CARDS: [Card; 27] = [
     Card::VermilionDecree,
     Card::XiaoQiao,
     Card::HotCake,
+    Card::UncannyRealization,
+    Card::Virgil,
+    Card::ViciousSlice,
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -442,6 +493,12 @@ pub struct CardDef {
     pub unique: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assassin_power_bonus: Option<u8>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub assassin_stealth: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub automaton: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fast: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub floating_memory: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -473,6 +530,9 @@ impl CardDef {
             stealth: card.is_stealth(),
             unique: card.is_unique(),
             assassin_power_bonus: card.assassin_power_bonus(),
+            assassin_stealth: card.assassin_stealth(),
+            automaton: card.is_automaton(),
+            fast: card.is_fast(),
             floating_memory: card.floating_memory(),
             kindle: if kindle > 0 { Some(kindle) } else { None },
             prepare: if prepare > 0 { Some(prepare) } else { None },
@@ -523,6 +583,9 @@ pub fn parse_card(value: &str) -> Option<Card> {
         "vermilion_decree" => Card::VermilionDecree,
         "xiao_qiao" | "xiao_qiao_cinderkeeper" => Card::XiaoQiao,
         "hot_cake" => Card::HotCake,
+        "uncanny_realization" => Card::UncannyRealization,
+        "virgil" | "virgil_altered_future" => Card::Virgil,
+        "vicious_slice" => Card::ViciousSlice,
         _ => return None,
     })
 }

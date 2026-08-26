@@ -1,3 +1,43 @@
+export function coerceHistogram(value: unknown): number[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  return value.map((entry) => {
+    const count = typeof entry === "number" ? entry : Number(entry);
+    return Number.isFinite(count) && count > 0 ? count : 0;
+  });
+}
+
+export function coerceSampleDamages(value: unknown): number[] | null {
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(parsed)) {
+    return null;
+  }
+  const damages = parsed
+    .map((entry) => (typeof entry === "number" ? entry : Number(entry)))
+    .filter((entry) => Number.isFinite(entry));
+  return damages.length > 0 ? damages : null;
+}
+
+/** Expand a 256-bucket histogram into one damage value per sample. */
+export function expandHistogram(buckets: number[]): number[] {
+  const damages: number[] = [];
+  for (let damage = 0; damage < buckets.length; damage += 1) {
+    const count = buckets[damage] ?? 0;
+    for (let n = 0; n < count; n += 1) {
+      damages.push(damage);
+    }
+  }
+  return damages;
+}
+
 /** Merge 256-bucket damage histograms from multiple runs. */
 export function mergeHistograms(histograms: number[][]): number[] {
   const merged = Array.from({ length: 256 }, () => 0);

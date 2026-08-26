@@ -12,7 +12,13 @@ import { runHub } from "./run-hub.js";
 import { postWorkerNdjson, WorkerError } from "./worker.js";
 
 type EvaluateEvent =
-  | { kind: "progress"; sample: number; total: number }
+  | {
+      kind: "progress";
+      sample: number;
+      total: number;
+      rollout?: number;
+      totalRollouts?: number;
+    }
   | { kind: "result" } & DeckEvalResult
   | { kind: "error"; message: string };
 
@@ -56,6 +62,7 @@ export class RunDispatcher {
   ) {}
 
   enqueue(job: DispatchJob): void {
+    runHub.register(job.runId);
     this.queue.push(job);
     void this.drain();
   }
@@ -129,6 +136,10 @@ export class RunDispatcher {
               type: "progress" as const,
               sample: event.sample,
               total: event.total,
+              ...(event.rollout != null ? { rollout: event.rollout } : {}),
+              ...(event.totalRollouts != null
+                ? { totalRollouts: event.totalRollouts }
+                : {}),
             };
             runHub.publish(runId, payload);
           } else if (event.kind === "error") {

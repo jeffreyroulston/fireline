@@ -22,9 +22,9 @@ seen: number, plays: number, attacks: number, damage: number, damageWhenSeenSum:
  */
 playRate: number, 
 /**
- * Plays / seen samples.
+ * Plays / in-hand copies (opened + drawn).
  */
-playWhenSeen: number, 
+playWhenInHand: number, 
 /**
  * Mean damage on samples where seen.
  */

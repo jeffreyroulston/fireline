@@ -5,11 +5,11 @@ use serde::Serialize;
 use ts_rs::TS;
 
 /// Manual bump when solver / model semantics change.
-pub const RULES_VERSION: u32 = 1;
+pub const RULES_VERSION: u32 = 8;
 /// Manual bump when RNG, shuffle, or seed derivation changes.
 pub const SAMPLER_VERSION: u32 = 1;
 /// Manual bump when stats attribution labels or parsing changes.
-pub const ATTRIBUTION_VERSION: u32 = 1;
+pub const ATTRIBUTION_VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,6 +77,10 @@ pub const fn compute_card_digest() -> u64 {
         hash = fnv1a_bool(hash, card.is_item());
         hash = fnv1a_bool(hash, card.is_fire());
         hash = fnv1a_bool(hash, card.is_stealth());
+        hash = fnv1a_bool(hash, card.assassin_stealth());
+        hash = fnv1a_bool(hash, card.is_automaton());
+        hash = fnv1a_bool(hash, card.is_command_automaton());
+        hash = fnv1a_bool(hash, card.is_fast());
         hash = fnv1a_bool(hash, card.is_unique());
         hash = fnv1a_bool(hash, card.floating_memory());
         hash = fnv1a_byte(hash, card.kindle());
@@ -92,7 +96,7 @@ mod tests {
 
     #[test]
     fn card_digest_is_stable() {
-        assert_eq!(compute_card_digest(), 17_300_453_209_286_711_596);
+        assert_eq!(compute_card_digest(), 567_310_198_894_808_703);
     }
 
     #[test]

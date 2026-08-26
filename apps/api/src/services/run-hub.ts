@@ -1,20 +1,41 @@
-export type RunProgress =
-  | { type: "evaluate"; sample: number; total: number }
-  | { type: "optimize"; progress: Record<string, unknown> };
-
 type Subscriber = (event: unknown) => void;
 
 interface ActiveRun {
   abort: AbortController;
   subscribers: Set<Subscriber>;
+  buffer: unknown[];
+  terminal: boolean;
+}
+
+function isTerminalEvent(event: unknown): boolean {
+  if (!event || typeof event !== "object") {
+    return false;
+  }
+  const type = (event as { type?: unknown }).type;
+  return type === "complete" || type === "error" || type === "cancelled";
+}
+
+export function sseJson(event: unknown): string {
+  return JSON.stringify(event, (_key, value) =>
+    typeof value === "bigint" ? Number(value) : value,
+  );
 }
 
 export class RunHub {
   private readonly active = new Map<string, ActiveRun>();
 
   register(runId: string): AbortController {
+    const existing = this.active.get(runId);
+    if (existing) {
+      return existing.abort;
+    }
     const abort = new AbortController();
-    this.active.set(runId, { abort, subscribers: new Set() });
+    this.active.set(runId, {
+      abort,
+      subscribers: new Set(),
+      buffer: [],
+      terminal: false,
+    });
     return abort;
   }
 
@@ -23,22 +44,49 @@ export class RunHub {
   }
 
   publish(runId: string, event: unknown): void {
-    for (const subscriber of this.active.get(runId)?.subscribers ?? []) {
+    const entry = this.active.get(runId);
+    if (!entry) {
+      return;
+    }
+    entry.buffer.push(event);
+    if (isTerminalEvent(event)) {
+      entry.terminal = true;
+    }
+    for (const subscriber of entry.subscribers) {
       subscriber(event);
     }
   }
 
   subscribe(runId: string, send: Subscriber): () => void {
-    const entry = this.active.get(runId);
-    if (!entry) {
-      return () => undefined;
-    }
+    const entry = this.active.get(runId) ?? this.registerAndGet(runId);
     entry.subscribers.add(send);
-    return () => entry.subscribers.delete(send);
+    for (const event of entry.buffer) {
+      send(event);
+    }
+    return () => {
+      entry.subscribers.delete(send);
+    };
   }
 
   close(runId: string): void {
-    this.active.delete(runId);
+    const entry = this.active.get(runId);
+    if (!entry) {
+      return;
+    }
+    setTimeout(() => {
+      if (this.active.get(runId) === entry) {
+        this.active.delete(runId);
+      }
+    }, 120_000);
+  }
+
+  private registerAndGet(runId: string): ActiveRun {
+    this.register(runId);
+    const entry = this.active.get(runId);
+    if (!entry) {
+      throw new Error("run hub register failed");
+    }
+    return entry;
   }
 }
 

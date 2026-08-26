@@ -1,53 +1,55 @@
 use crate::{
     cards::{ALL_CARDS, Card, parse_card},
     model::{
-        Action, DamageDistribution, EffectiveRequest, MAT_BLADE, MAT_DAGGER, MAT_HAMMER,
-        MAT_SOULKNIFE, MAT_ZANDER, McRollout, PassResult, Phase, SimType, SolveRequest,
-        SolveResult, State, Step, TwoPassResult, Weapon,
+        Action, DamageDistribution, DRAW_QUEUE_CAP, EffectiveRequest, MAT_BLADE, MAT_DAGGER,
+        MAT_HAMMER, MAT_SOULKNIFE, MAT_ZANDER, McRollout, PassResult, Phase, SimType,
+        SolveRequest, SolveResult, State, Step, TwoPassResult, Weapon,
     },
     version::ENGINE_VERSION,
 };
 use rustc_hash::FxHashMap;
 use std::collections::BTreeMap;
+use std::ops::ControlFlow;
 use std::time::Instant;
 
-#[derive(Default)]
 struct Search {
     memo: FxHashMap<State, u8>,
-    dominance: FxHashMap<State, u8>,
     nodes: u64,
+    queue_tail: ([u8; DRAW_QUEUE_CAP], u8),
 }
 
 impl Search {
+    fn new(initial: State) -> Self {
+        Self {
+            memo: FxHashMap::with_capacity_and_hasher(16_384, Default::default()),
+            nodes: 0,
+            queue_tail: (initial.queue, initial.queue_len),
+        }
+    }
+
     fn visit(&mut self, state: State) -> u8 {
+        debug_assert!(
+            state.queue == self.queue_tail.0 && state.queue_len == self.queue_tail.1,
+            "draw queue mutated during search"
+        );
         self.nodes += 1;
         if state.is_terminal() {
             return state.damage;
         }
-        if let Some(&damage) = self.memo.get(&state) {
-            return damage;
-        }
-
         let mut board = state;
         board.damage = 0;
-        if self
-            .dominance
-            .get(&board)
-            .is_some_and(|&damage| state.damage < damage)
-        {
-            return state.damage;
+        if let Some(&gain) = self.memo.get(&board) {
+            return state.damage.saturating_add(gain);
         }
-        self.dominance
-            .entry(board)
-            .and_modify(|damage| *damage = (*damage).max(state.damage))
-            .or_insert(state.damage);
 
         let mut best = state.damage;
         for action in actions(state) {
             let (next, _) = apply(state, action);
             best = best.max(self.visit(next));
         }
-        self.memo.insert(state, best);
+        debug_assert!(best >= state.damage);
+        debug_assert!(best < u8::MAX);
+        self.memo.insert(board, best - state.damage);
         best
     }
 
@@ -97,6 +99,14 @@ fn shuffle_cards(values: &mut [Card], rng: &mut Rng) {
 }
 
 pub fn solve(request: &SolveRequest) -> Result<SolveResult, String> {
+    solve_with_progress(request, |_, _| ControlFlow::Continue(()))
+}
+
+/// Like [`solve`], but reports Monte Carlo rollout progress as `(done, total)`.
+pub fn solve_with_progress(
+    request: &SolveRequest,
+    on_rollout: impl FnMut(u16, u16) -> ControlFlow<()>,
+) -> Result<SolveResult, String> {
     if request.hand.len() < 2 || request.hand.len() > 8 {
         return Err("hand must contain 2–8 cards".to_string());
     }
@@ -120,7 +130,8 @@ pub fn solve(request: &SolveRequest) -> Result<SolveResult, String> {
                 max_turns,
                 rollouts,
                 request.seed,
-            )
+                on_rollout,
+            )?
         }
         SimType::TwoPass => {
             let remaining = remaining_deck(&request.deck, &hand)?;
@@ -203,7 +214,7 @@ pub fn solve_pass(
     queue: &[Card],
 ) -> (PassResult, crate::stats::LineCardStats) {
     let initial = State::with_queue(hand, go_first, max_turns, queue);
-    let mut search = Search::default();
+    let mut search = Search::new(initial);
     let max_damage = search.visit(initial);
     let mut steps = vec![Step::new(initial, "Main", "Start of Game")];
     let mut line_stats = crate::stats::LineCardStats::default();
@@ -236,7 +247,8 @@ fn solve_monte_carlo(
     max_turns: u8,
     rollouts: u16,
     seed: u64,
-) -> SolveResult {
+    mut on_rollout: impl FnMut(u16, u16) -> ControlFlow<()>,
+) -> Result<SolveResult, String> {
     let started = Instant::now();
     let mut rng = Rng(seed);
     let mut damages = Vec::with_capacity(rollouts as usize);
@@ -246,7 +258,11 @@ fn solve_monte_carlo(
     let mut total_memo = 0;
     let mut stats_acc = crate::stats::DeckStatAccumulator::with_deck(hand);
 
-    for _ in 0..rollouts {
+    if on_rollout(0, rollouts).is_break() {
+        return Err("cancelled".into());
+    }
+
+    for done in 1..=rollouts {
         let mut queue = remaining.to_vec();
         shuffle_cards(&mut queue, &mut rng);
         let (pass, line_stats) = solve_pass(hand, go_first, max_turns, &queue);
@@ -260,6 +276,9 @@ fn solve_monte_carlo(
         });
         stats_acc.add_sample(hand, &line_stats);
         rollout_stats.push(line_stats);
+        if on_rollout(done, rollouts).is_break() {
+            return Err("cancelled".into());
+        }
     }
 
     let mut sorted = damages.clone();
@@ -277,7 +296,7 @@ fn solve_monte_carlo(
         .cloned()
         .unwrap_or_default();
 
-    SolveResult {
+    Ok(SolveResult {
         sim_type: SimType::MonteCarlo,
         max_damage: headline.damage,
         steps: headline.steps.clone(),
@@ -297,7 +316,7 @@ fn solve_monte_carlo(
         card_stats: stats_acc.finish(),
         line_stats: headline_stats,
         effective: hand_solve_effective(go_first, max_turns, SimType::MonteCarlo, crate::budget::Budget::default()),
-    }
+    })
 }
 
 fn solve_two_pass(
@@ -377,9 +396,34 @@ fn percentile(sorted: &[u8], percentile: usize) -> u8 {
     sorted[index]
 }
 
+fn push_fast_ally_plays(state: State, result: &mut Vec<Action>) {
+    for card in ALL_CARDS {
+        if !card.is_ally() || !card.is_fast() || !state.has(card) {
+            continue;
+        }
+        if card.is_unique()
+            && state.allies[..state.ally_len as usize]
+                .iter()
+                .any(|ally| ally.card() == card)
+        {
+            continue;
+        }
+        let reserve = card.cost();
+        if state.hand_len.saturating_sub(1) < reserve {
+            continue;
+        }
+        result.push(Action::PlayAlly {
+            card,
+            kindle: 0,
+            sacrifice: false,
+            hot_cake_sacrifice: false,
+        });
+    }
+}
+
 fn actions(state: State) -> Vec<Action> {
     if state.phase == Phase::Materialize {
-        let mut result = Vec::with_capacity(12);
+        let mut result = Vec::with_capacity(16);
         if state.turn == 1 {
             if state.has_material(MAT_HAMMER) {
                 result.push(Action::MaterializeHammer);
@@ -396,14 +440,19 @@ fn actions(state: State) -> Vec<Action> {
                 result.push(Action::MaterializeZanderMemory);
             }
         }
+        // Fast activations before recollect (e.g. Virgil for Command Automaton / float).
+        push_fast_ally_plays(state, &mut result);
         result.push(Action::SkipMaterialize);
         return result;
     }
 
-    let mut result = Vec::with_capacity(48);
+    // Safe reduction: activating Poisoned Dagger first always weakly dominates.
+    // Amplify sticks for the rest of the turn and buffs every later damage hit.
     if state.dagger && state.dagger_ready {
-        result.push(Action::ActivateDagger);
+        return vec![Action::ActivateDagger];
     }
+
+    let mut result = Vec::with_capacity(48);
 
     for index in 0..state.ally_len as usize {
         if state.allies[index].card() == Card::Sadi && state.hand_len >= 2 {
@@ -411,14 +460,19 @@ fn actions(state: State) -> Vec<Action> {
         }
     }
 
+    let mut arthur_ready = false;
     for index in 0..state.ally_len as usize {
         if state.allies[index].card() == Card::Arthur && state.can_ally_attack(index) {
             result.push(Action::AttackArthur(index as u8));
+            arthur_ready = true;
             break;
         }
     }
-    if (0..state.ally_len as usize)
-        .any(|index| state.allies[index].card() != Card::Arthur && state.can_ally_attack(index))
+    // Safe reduction: never attack other allies while Arthur can still attack.
+    // Resting Arthur first always dominates for the +1 rested buff.
+    if !arthur_ready
+        && (0..state.ally_len as usize)
+            .any(|index| state.allies[index].card() != Card::Arthur && state.can_ally_attack(index))
     {
         result.push(Action::AttackOthers);
     }
@@ -495,6 +549,7 @@ fn actions(state: State) -> Vec<Action> {
             Card::IgnitedStab,
             Card::RendingFlames,
             Card::HeatedVengeance,
+            Card::ViciousSlice,
         ] {
             if !state.has(card) || state.hand_len.saturating_sub(1) < card.cost() {
                 continue;
@@ -510,6 +565,7 @@ fn actions(state: State) -> Vec<Action> {
                         weapon,
                         prepared: true,
                         doubled: false,
+                        command_ally: None,
                     });
                 }
                 result.push(Action::PlayAttack {
@@ -517,8 +573,33 @@ fn actions(state: State) -> Vec<Action> {
                     weapon,
                     prepared: false,
                     doubled: double,
+                    command_ally: None,
                 });
             }
+        }
+        // Weapon-only champion attack (no attack card required).
+        if state.weapon != Weapon::None {
+            result.push(Action::AttackWithWeapon);
+        }
+    }
+
+    // Command Automaton: an Automaton ally performs the attack (champion need not be awake).
+    if !(state.go_first && state.turn == 0)
+        && state.has(Card::UncannyRealization)
+        && state.hand_len.saturating_sub(1) >= Card::UncannyRealization.cost()
+    {
+        for index in 0..state.ally_len as usize {
+            let ally = state.allies[index];
+            if !ally.card().is_automaton() || !ally.awake() {
+                continue;
+            }
+            result.push(Action::PlayAttack {
+                card: Card::UncannyRealization,
+                weapon: false,
+                prepared: false,
+                doubled: false,
+                command_ally: Some(index as u8),
+            });
         }
     }
 
@@ -690,7 +771,16 @@ fn apply(mut state: State, action: Action) -> (State, Vec<Step>) {
             weapon,
             prepared,
             doubled,
-        } => play_attack(&mut state, card, weapon, prepared, doubled, &mut steps),
+            command_ally,
+        } => play_attack(
+            &mut state,
+            card,
+            weapon,
+            prepared,
+            doubled,
+            command_ally,
+            &mut steps,
+        ),
         Action::PlayAction {
             card,
             kindle,
@@ -721,8 +811,30 @@ fn apply(mut state: State, action: Action) -> (State, Vec<Step>) {
                 "Materialize Mercenary's Blade (prep)",
             ));
         }
+        Action::AttackWithWeapon => attack_with_weapon(&mut state, &mut steps),
     }
     (state, steps)
+}
+
+fn attack_with_weapon(state: &mut State, steps: &mut Vec<Step>) {
+    if state.weapon == Weapon::None || !state.champion_awake {
+        return;
+    }
+    let name = state.weapon.name();
+    let power = state.weapon.power();
+    steps.push(Step::new(
+        *state,
+        "Main",
+        format!("USE IN BELOW ATTACK ({name})"),
+    ));
+    state.consume_weapon();
+    state.champion_awake = false;
+    state.add_damage(power);
+    steps.push(Step::new(
+        *state,
+        "Main",
+        format!("Attack with {name}"),
+    ));
 }
 
 fn play_ally(
@@ -749,40 +861,53 @@ fn play_ally(
         }
     }
     state.add_ally(card, !arthur, immortal);
+    let phase = if state.phase == Phase::Materialize {
+        "Mate"
+    } else {
+        "Main"
+    };
     let label = if kindle > 0 {
         format!("Activate {} (Kindle {kindle})", card.name())
+    } else if card.is_fast() && state.phase == Phase::Materialize {
+        format!("Fast Activate {}", card.name())
     } else {
         format!("Activate {}", card.name())
     };
-    steps.push(Step::new(*state, "Main", label));
+    steps.push(Step::new(*state, phase, label));
     if arthur {
-        steps.push(Step::new(*state, "Main", "Immortalize the King"));
+        steps.push(Step::new(*state, phase, "Immortalize the King"));
     } else if card == Card::ClumsyApprentice {
         let drawn = state.draw_unknown();
         steps.push(Step::new(
             *state,
-            "Main",
+            phase,
             format!("Clumsy On-Enter draw ({})", drawn.short()),
         ));
     } else if card == Card::Racoo {
         state.add_damage(2);
-        steps.push(Step::new(*state, "Main", "Racoo On-Enter damage"));
+        steps.push(Step::new(*state, phase, "Racoo On-Enter damage"));
     } else if card == Card::Rococo {
         let influence = state.hand_len.saturating_add(state.memory_len);
         if influence <= 4 {
             state.add_damage(2);
-            steps.push(Step::new(*state, "Main", "Rococo On-Enter damage"));
+            steps.push(Step::new(*state, phase, "Rococo On-Enter damage"));
         }
     } else if card == Card::PepperedChef && sacrificed {
         state.agility = state.agility.saturating_add(2);
-        steps.push(Step::new(*state, "Main", "Peppered Chef +2 POWER"));
+        steps.push(Step::new(*state, phase, "Peppered Chef +2 POWER"));
     }
     if hot_cake_sacrifice && state.hot_cake > 0 {
         state.hot_cake -= 1;
         state.send_to_gy(Card::HotCake);
         let index = state.ally_len as usize - 1;
-        state.allies[index].attack_buff = state.allies[index].attack_buff.saturating_add(3);
-        steps.push(Step::new(*state, "Main", "Hot Cake sacrifice (+3 next attack)"));
+        state.allies[index].set_attack_buff(
+            state.allies[index].attack_buff().saturating_add(3),
+        );
+        steps.push(Step::new(
+            *state,
+            phase,
+            "Hot Cake sacrifice (+3 next attack)",
+        ));
     }
 }
 
@@ -798,23 +923,34 @@ fn play_item(state: &mut State, card: Card, steps: &mut Vec<Step>) {
 fn attack_ally(state: &mut State, index: usize, steps: &mut Vec<Step>) {
     let ally = state.allies[index];
     let card = ally.card();
+    let arthur_buff = u8::from(card != Card::Arthur && state.arthur_rested());
+    let hot_cake_buff = ally.attack_buff();
+    if hot_cake_buff > 0 {
+        state.allies[index].set_attack_buff(0);
+    }
     let mut power = state.ally_power(ally);
     if card == Card::PepperedChef && state.agility > 0 {
         let buff = state.agility.min(2);
         power = power.saturating_add(buff);
         state.agility = state.agility.saturating_sub(buff);
     }
-    if ally.attack_buff > 0 {
-        power = power.saturating_add(ally.attack_buff);
-        state.allies[index].attack_buff = 0;
-    }
+    power = power.saturating_add(hot_cake_buff);
     state.add_damage(power);
-    state.allies[index].awake = false;
-    steps.push(Step::new(
-        *state,
-        "Main",
-        format!("Attack from {}", card.name()),
-    ));
+    state.allies[index].set_awake(false);
+    let mut label = format!("Attack from {}", card.name());
+    let mut bonuses = Vec::new();
+    if arthur_buff > 0 {
+        bonuses.push(format!("Arthur +{arthur_buff}"));
+    }
+    if hot_cake_buff > 0 {
+        bonuses.push(format!("Hot Cake +{hot_cake_buff}"));
+    }
+    if !bonuses.is_empty() {
+        label.push_str(" (");
+        label.push_str(&bonuses.join(", "));
+        label.push(')');
+    }
+    steps.push(Step::new(*state, "Main", label));
     if card == Card::CaptivatingCutthroat && state.is_assassin() {
         state.champion_damaged = true;
         steps.push(Step::new(*state, "Main", "Cutthroat On-Attack self 1"));
@@ -856,8 +992,61 @@ fn play_attack(
     use_weapon: bool,
     prepared: bool,
     doubled: bool,
+    command_ally: Option<u8>,
     steps: &mut Vec<Step>,
 ) {
+    if card.is_command_automaton() {
+        let Some(index) = command_ally.map(|i| i as usize) else {
+            return;
+        };
+        if index >= state.ally_len as usize {
+            return;
+        }
+        let ally = state.allies[index];
+        if !ally.card().is_automaton() || !ally.awake() {
+            return;
+        }
+
+        state.remove_hand(card);
+        state.pay_reserve(card.cost());
+        let unique_bonus = u8::from(ally.card().is_unique()) * 2;
+        let arthur_buff = u8::from(ally.card() != Card::Arthur && state.arthur_rested());
+        let hot_cake_buff = ally.attack_buff();
+        if hot_cake_buff > 0 {
+            state.allies[index].set_attack_buff(0);
+        }
+        let power = card
+            .power()
+            .saturating_add(unique_bonus)
+            .saturating_add(arthur_buff)
+            .saturating_add(hot_cake_buff);
+        state.send_to_gy(card);
+        state.allies[index].set_awake(false);
+        state.add_damage(power);
+
+        let mut bonuses = Vec::new();
+        if unique_bonus > 0 {
+            bonuses.push(format!("unique +{unique_bonus}"));
+        }
+        if arthur_buff > 0 {
+            bonuses.push(format!("Arthur +{arthur_buff}"));
+        }
+        if hot_cake_buff > 0 {
+            bonuses.push(format!("Hot Cake +{hot_cake_buff}"));
+        }
+        let mut label = format!(
+            "Uncanny Realization (Command {})",
+            ally.card().name()
+        );
+        if !bonuses.is_empty() {
+            label.push_str(" (");
+            label.push_str(&bonuses.join(", "));
+            label.push(')');
+        }
+        steps.push(Step::new(*state, "Main", label));
+        return;
+    }
+
     state.remove_hand(card);
     state.pay_reserve(card.cost());
     let mut power = card.power();
@@ -867,6 +1056,11 @@ fn play_attack(
     }
     if card == Card::HeatedVengeance && state.champion_damaged {
         power += 3;
+    }
+    // Champions are Human; Class Bonus +1 always applies while Assassin.
+    let human_bonus = card == Card::ViciousSlice && state.is_assassin();
+    if human_bonus {
+        power += 1;
     }
     if use_weapon && state.weapon != Weapon::None {
         let name = state.weapon.name();
@@ -896,6 +1090,8 @@ fn play_attack(
             Card::IgnitedStab => "Ignited Stab (no prep)",
             Card::HeatedVengeance if state.champion_damaged => "Heated Vengeance (+3)",
             Card::HeatedVengeance => "Heated Vengeance",
+            Card::ViciousSlice if human_bonus => "Vicious Slice (Human)",
+            Card::ViciousSlice => "Vicious Slice",
             _ => "Rending Flames",
         };
         steps.push(Step::new(*state, "Main", label));
@@ -994,7 +1190,7 @@ mod tests {
     }
 
     #[test]
-    fn drill_one_is_twenty_four() {
+    fn drill_one_is_twenty_six() {
         let hand = [
             Card::BlazingThrow,
             Card::Arthur,
@@ -1005,7 +1201,7 @@ mod tests {
             Card::KingdomInformant,
         ];
         let result = solve_cards(&hand, true, 3);
-        assert_eq!(result.max_damage, 24, "{result:#?}");
+        assert_eq!(result.max_damage, 26, "{result:#?}");
         assert_eq!(result.effective.go_first, Some(true));
     }
 
@@ -1022,9 +1218,334 @@ mod tests {
             "planted_explosive",
             "intensified_pyre",
             "hot_cake",
+            "uncanny_realization",
+            "virgil_altered_future",
+            "vicious_slice",
         ] {
             assert!(parse_card(name).is_some(), "{name}");
         }
+    }
+
+    #[test]
+    fn arthur_buff_attributed_to_arthur() {
+        let hand = [
+            Card::Arthur,
+            Card::ClumsyApprentice,
+            Card::KingdomInformant,
+            Card::Brick,
+            Card::Brick,
+            Card::Brick,
+            Card::Brick,
+        ];
+        let result = solve_cards(&hand, false, 2);
+        let arthur = result
+            .card_stats
+            .iter()
+            .find(|stat| stat.card == "arthur")
+            .expect("arthur stat row");
+        assert!(
+            arthur.attacks >= 1,
+            "Arthur should attack at least once, got {}",
+            arthur.attacks
+        );
+        assert!(
+            arthur.damage >= 3,
+            "Arthur should get own attack plus rested buff, got {}",
+            arthur.damage
+        );
+        let clumsy = result
+            .card_stats
+            .iter()
+            .find(|stat| stat.card == "clumsy_apprentice")
+            .expect("clumsy stat row");
+        if clumsy.attacks > 0 {
+            assert_eq!(
+                clumsy.damage, clumsy.attacks,
+                "buffed ally should only get base attack power per attack"
+            );
+        }
+    }
+
+    #[test]
+    fn poisoned_dagger_must_activate_before_other_main_actions() {
+        let mut state = State::with_queue(&[Card::IgnitedStab], false, 2, &[]);
+        state.dagger = true;
+        state.dagger_ready = true;
+        state.champion_level = 1;
+        state.champion_awake = true;
+
+        let legal = actions(state);
+        assert_eq!(legal.len(), 1, "{legal:?}");
+        assert!(
+            matches!(legal[0], Action::ActivateDagger),
+            "{legal:?}"
+        );
+
+        let (after, _) = apply(state, Action::ActivateDagger);
+        let legal_after = actions(after);
+        assert!(
+            !legal_after
+                .iter()
+                .any(|action| matches!(action, Action::ActivateDagger)),
+            "{legal_after:?}"
+        );
+        assert!(
+            legal_after
+                .iter()
+                .any(|action| matches!(action, Action::PlayAttack { .. } | Action::Pass)),
+            "{legal_after:?}"
+        );
+    }
+
+    #[test]
+    fn other_allies_cannot_attack_while_arthur_is_ready() {
+        let mut state = State::with_queue(&[], false, 2, &[]);
+        state.add_ally(Card::Arthur, true, true);
+        state.add_ally(Card::ClumsyApprentice, true, false);
+
+        let legal = actions(state);
+        assert!(
+            legal
+                .iter()
+                .any(|action| matches!(action, Action::AttackArthur(_))),
+            "{legal:?}"
+        );
+        assert!(
+            !legal
+                .iter()
+                .any(|action| matches!(action, Action::AttackOthers)),
+            "AttackOthers must wait until Arthur has attacked: {legal:?}"
+        );
+
+        let (after_arthur, _) = apply(state, Action::AttackArthur(0));
+        let legal_after = actions(after_arthur);
+        assert!(
+            legal_after
+                .iter()
+                .any(|action| matches!(action, Action::AttackOthers)),
+            "{legal_after:?}"
+        );
+    }
+
+    #[test]
+    fn vicious_slice_deals_three_vs_human_while_assassin() {
+        let mut state = State::with_queue(&[Card::ViciousSlice, Card::Brick], false, 1, &[]);
+        state.champion_level = 1;
+        state.champion_awake = true;
+        let legal = actions(state);
+        let attack = legal
+            .iter()
+            .copied()
+            .find(|action| {
+                matches!(
+                    action,
+                    Action::PlayAttack {
+                        card: Card::ViciousSlice,
+                        ..
+                    }
+                )
+            })
+            .expect("vicious slice play");
+        let (after, steps) = apply(state, attack);
+        assert_eq!(after.damage, 3, "{steps:?}");
+        assert!(
+            steps
+                .iter()
+                .any(|step| step.action.contains("Vicious Slice (Human)")),
+            "{steps:?}"
+        );
+    }
+
+    #[test]
+    fn champion_can_attack_with_weapon_without_attack_card() {
+        let mut state = State::with_queue(&[], false, 2, &[]);
+        state.champion_level = 1;
+        state.champion_awake = true;
+        state.prep = 1;
+        state.materials = MAT_BLADE;
+
+        assert!(
+            actions(state)
+                .iter()
+                .any(|action| matches!(action, Action::MercenaryBlade)),
+            "blade should be materializable"
+        );
+        let (equipped, _) = apply(state, Action::MercenaryBlade);
+        assert_eq!(equipped.weapon, Weapon::MercenaryBlade);
+        assert!(
+            equipped.champion_awake,
+            "materializing the blade must not rest the champion"
+        );
+        assert!(
+            actions(equipped)
+                .iter()
+                .any(|action| matches!(action, Action::AttackWithWeapon)),
+            "awake champion with weapon must be able to swing"
+        );
+
+        let (after, steps) = apply(equipped, Action::AttackWithWeapon);
+        assert_eq!(after.damage, 1, "{steps:?}");
+        assert!(!after.champion_awake);
+        assert_eq!(after.weapon, Weapon::None);
+        assert!(
+            steps.iter().any(|step| step.action == "Attack with Mercenary's Blade"),
+            "{steps:?}"
+        );
+    }
+
+    #[test]
+    fn ally_attacks_do_not_rest_champion_for_later_weapon_swing() {
+        let mut state = State::with_queue(&[], false, 2, &[]);
+        state.champion_level = 1;
+        state.champion_awake = true;
+        state.weapon = Weapon::MercenaryBlade;
+        state.weapon_durability = 1;
+        state.add_ally(Card::Arthur, true, true);
+
+        let (after_arthur, _) = apply(state, Action::AttackArthur(0));
+        assert!(
+            after_arthur.champion_awake,
+            "ally attack must leave champion awake"
+        );
+        assert!(
+            actions(after_arthur)
+                .iter()
+                .any(|action| matches!(action, Action::AttackWithWeapon)),
+            "{:?}",
+            actions(after_arthur)
+        );
+    }
+
+    #[test]
+    fn virgil_fast_activates_before_recollect_and_commands_uncanny() {
+        let mut state = State::with_queue(
+            &[
+                Card::Virgil,
+                Card::Brick,
+                Card::Brick,
+                Card::Brick,
+                Card::UncannyRealization,
+                Card::Brick,
+            ],
+            false,
+            2,
+            &[],
+        );
+        state.phase = Phase::Materialize;
+        state.turn = 1;
+
+        let legal = actions(state);
+        assert!(
+            legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAlly {
+                    card: Card::Virgil,
+                    ..
+                }
+            )),
+            "Virgil should be Fast-playable during materialize: {legal:?}"
+        );
+
+        let play = legal
+            .iter()
+            .copied()
+            .find(|action| {
+                matches!(
+                    action,
+                    Action::PlayAlly {
+                        card: Card::Virgil,
+                        ..
+                    }
+                )
+            })
+            .expect("virgil play");
+        let (after_play, steps) = apply(state, play);
+        assert_eq!(after_play.phase, Phase::Materialize);
+        assert_eq!(after_play.ally_len, 1);
+        assert_eq!(after_play.allies[0].card(), Card::Virgil);
+        assert!(
+            steps.iter().any(|step| step.action.contains("Fast Activate")),
+            "{steps:?}"
+        );
+
+        let (after_skip, _) = apply(after_play, Action::SkipMaterialize);
+        assert_eq!(after_skip.phase, Phase::Main);
+        let legal_main = actions(after_skip);
+        assert!(
+            legal_main.iter().any(|action| matches!(
+                action,
+                Action::PlayAttack {
+                    card: Card::UncannyRealization,
+                    command_ally: Some(0),
+                    ..
+                }
+            )),
+            "Virgil should enable Uncanny Realization: {legal_main:?}"
+        );
+    }
+
+    #[test]
+    fn uncanny_realization_requires_automaton_and_buffs_unique() {
+        let mut no_auto =
+            State::with_queue(&[Card::UncannyRealization, Card::Brick], false, 1, &[]);
+        no_auto.add_ally(Card::ClumsyApprentice, true, false);
+        let legal = actions(no_auto);
+        assert!(
+            !legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAttack {
+                    card: Card::UncannyRealization,
+                    ..
+                }
+            )),
+            "non-Automaton allies cannot Command Uncanny Realization: {legal:?}"
+        );
+
+        let mut with_rococo =
+            State::with_queue(&[Card::UncannyRealization, Card::Brick], false, 1, &[]);
+        with_rococo.add_ally(Card::Rococo, true, false);
+        let legal = actions(with_rococo);
+        let command = legal
+            .iter()
+            .find(|action| {
+                matches!(
+                    action,
+                    Action::PlayAttack {
+                        card: Card::UncannyRealization,
+                        command_ally: Some(0),
+                        ..
+                    }
+                )
+            })
+            .copied()
+            .expect("Rococo should enable Uncanny Realization");
+        let (after, steps) = apply(with_rococo, command);
+        assert_eq!(after.damage, 5, "3 power +2 unique: {steps:?}");
+        assert!(!after.allies[0].awake());
+        assert!(after.champion_awake, "Command Automaton should not rest champion");
+    }
+
+    #[test]
+    fn tweedledum_stealth_only_after_zander_levels() {
+        // Later turn, still unleveled: Assassin class bonus is off, so cull kills Tweedledum.
+        let mut unleveled = State::with_queue(&[], false, 3, &[]);
+        unleveled.turn = 2;
+        unleveled.champion_level = 0;
+        unleveled.add_ally(Card::Tweedledum, true, false);
+        unleveled.add_ally(Card::KingdomInformant, true, false);
+        unleveled.enemy_cull();
+        assert_eq!(unleveled.ally_len, 1);
+        assert_eq!(unleveled.allies[0].card(), Card::KingdomInformant);
+
+        // Same later turn after leveling: class stealth applies, Tweedledum survives.
+        let mut leveled = State::with_queue(&[], false, 3, &[]);
+        leveled.turn = 2;
+        leveled.champion_level = 1;
+        leveled.add_ally(Card::Tweedledum, true, false);
+        leveled.add_ally(Card::ClumsyApprentice, true, false);
+        leveled.enemy_cull();
+        assert_eq!(leveled.ally_len, 1);
+        assert_eq!(leveled.allies[0].card(), Card::Tweedledum);
     }
 
     #[test]
@@ -1045,6 +1566,177 @@ mod tests {
             result.max_damage
         );
         assert_eq!(result.effective.max_turns, Some(1));
+
+        let hot_cake = result
+            .card_stats
+            .iter()
+            .find(|stat| stat.card == "hot_cake")
+            .expect("hot_cake stat row");
+        assert!(
+            hot_cake.damage >= 3,
+            "Hot Cake buff damage should attribute to Hot Cake, got {}",
+            hot_cake.damage
+        );
+        let clumsy = result
+            .card_stats
+            .iter()
+            .find(|stat| stat.card == "clumsy_apprentice")
+            .expect("clumsy stat row");
+        assert_eq!(
+            clumsy.damage, 1,
+            "attacking ally should only get base attack power"
+        );
+    }
+
+    #[test]
+    fn solver_snapshot_equivalence() {
+        let drill_three = [
+            Card::RendingFlames,
+            Card::Arthur,
+            Card::HastyMessenger,
+            Card::KingdomInformant,
+            Card::IgnitedStab,
+            Card::SableRemnant,
+            Card::ClumsyApprentice,
+        ];
+        let drill_one = [
+            Card::BlazingThrow,
+            Card::Arthur,
+            Card::RedHare,
+            Card::Arthur,
+            Card::BlazingThrow,
+            Card::KingdomInformant,
+            Card::KingdomInformant,
+        ];
+        let ally_heavy = [
+            Card::Arthur,
+            Card::Arthur,
+            Card::ClumsyApprentice,
+            Card::KingdomInformant,
+            Card::KingdomInformant,
+            Card::RedHare,
+            Card::PepperedChef,
+        ];
+        let expected_drill_three = [
+            "Start of Game",
+            "Activate Arthur, Young Heir",
+            "Immortalize the King",
+            "Main: Pass Opportunity",
+            "End of Agility Phase",
+            "End of End Phase",
+            "Enemy Main Phase",
+            "End of Enemy End Phase",
+            "Wake Up Phase",
+            "Materialize Impact Hammer",
+            "Materialization Resolves",
+            "Recollect (draw Brick)",
+            "Attack from Arthur, Young Heir",
+            "Activate Kingdom Informant",
+            "Attack from Kingdom Informant (Arthur +1)",
+            "Activate Clumsy Apprentice",
+            "Clumsy On-Enter draw (Brick)",
+            "Attack from Clumsy Apprentice (Arthur +1)",
+            "USE IN BELOW ATTACK (Impact Hammer)",
+            "Attack with Impact Hammer",
+            "Main: Pass Opportunity",
+            "End of Agility Phase",
+            "End of End Phase",
+            "Enemy Main Phase",
+            "End of Enemy End Phase",
+            "Wake Up Phase",
+            "Mem Cost for Zander Lvl 1 (Float Kingdom Informant)",
+            "Zander Lvl 1 Glimpse/Prep",
+            "Materialization Resolves",
+            "Recollect (draw Brick)",
+            "Activate Sable Remnant",
+            "Attack from Sable Remnant",
+            "USE IN BELOW ATTACK (Impact Hammer)",
+            "Rending Flames (Doubled)",
+            "Materialize Mercenary's Blade (prep)",
+            "Main: Pass Opportunity",
+            "End of Agility Phase",
+            "End of End Phase",
+            "Enemy Main Phase",
+            "End of Enemy End Phase",
+            "Wake Up Phase",
+        ];
+        let cases: [(&[Card], bool, u8, u8, &[&str]); 3] = [
+            (&drill_three, true, 3, 20, &expected_drill_three),
+            (&drill_one, true, 3, 26, &[]),
+            (&ally_heavy, true, 3, 24, &[]),
+        ];
+        for (hand, go_first, max_turns, expected_damage, expected_actions) in cases {
+            let result = solve_cards(hand, go_first, max_turns);
+            assert_eq!(result.max_damage, expected_damage, "{hand:?}");
+            if !expected_actions.is_empty() {
+                let actions: Vec<_> = result.steps.iter().map(|step| step.action.as_str()).collect();
+                assert_eq!(actions.as_slice(), expected_actions, "{hand:?}");
+            }
+        }
+
+        let queue: Vec<Card> = (0..16)
+            .map(|index| drill_three[index % drill_three.len()])
+            .collect();
+        let (pass, _) = solve_pass(&drill_three, true, 3, &queue);
+        assert_eq!(pass.max_damage, 21);
+        assert_eq!(pass.steps.first().map(|step| step.action.as_str()), Some("Start of Game"));
+        assert!(
+            pass.steps
+                .iter()
+                .any(|step| step.action.contains("Recollect (draw Rendi)")),
+            "{:?}",
+            pass.steps
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn capture_solver_snapshots() {
+        let drill_three = [
+            Card::RendingFlames,
+            Card::Arthur,
+            Card::HastyMessenger,
+            Card::KingdomInformant,
+            Card::IgnitedStab,
+            Card::SableRemnant,
+            Card::ClumsyApprentice,
+        ];
+        let drill_one = [
+            Card::BlazingThrow,
+            Card::Arthur,
+            Card::RedHare,
+            Card::Arthur,
+            Card::BlazingThrow,
+            Card::KingdomInformant,
+            Card::KingdomInformant,
+        ];
+        let ally_heavy = [
+            Card::Arthur,
+            Card::Arthur,
+            Card::ClumsyApprentice,
+            Card::KingdomInformant,
+            Card::KingdomInformant,
+            Card::RedHare,
+            Card::PepperedChef,
+        ];
+        for (name, hand, go_first, max_turns) in [
+            ("drill_three", &drill_three[..], true, 3),
+            ("drill_one", &drill_one[..], true, 3),
+            ("ally_heavy", &ally_heavy[..], true, 3),
+        ] {
+            let result = solve_cards(hand, go_first, max_turns);
+            let actions: Vec<_> = result.steps.iter().map(|step| step.action.clone()).collect();
+            println!("case {name}: damage={} actions={actions:?}", result.max_damage);
+        }
+        let queue: Vec<Card> = (0..16)
+            .map(|index| drill_three[index % drill_three.len()])
+            .collect();
+        let (pass, _) = solve_pass(&drill_three, true, 3, &queue);
+        let actions: Vec<_> = pass.steps.iter().map(|step| step.action.clone()).collect();
+        println!(
+            "case oracle_16: damage={} actions={actions:?}",
+            pass.max_damage
+        );
     }
 
     #[test]

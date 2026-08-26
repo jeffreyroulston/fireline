@@ -9,14 +9,14 @@ import {
 import {
   CARDS,
   MAX_RATIO_DECK_ATTEMPTS,
-  PLAYABLE_CARD_IDS,
+  MIN_VALID_DECK_SIZE,
+  analyzeDecklist,
   countLegalDecklists,
   deckAttemptPercent,
   listToCounts,
   parseDecklist,
   type CardId,
   type DeckCounts,
-  type OptimizeBounds,
   type SimType,
   type SolveResult,
 } from "@/lib/engine";
@@ -26,27 +26,47 @@ import { useRun, type OptimizeProgress } from "@/lib/api/useRun";
 import {
   createDeckRemote,
   deleteDeckRemote,
+  isDeckCardlistLocked,
   loadDecksFromApi,
   nextDeckName,
   normalizeDeckName,
+  refreshDecksRemote,
   saveActiveDeckId,
   scheduleDeckSave,
   type SavedDeck,
 } from "@/lib/decks";
 import { DRILL_3_HAND } from "@/lib/fixtures/drills";
-import { DeckEditor, DeckResults } from "./deck";
-import { HandBuilder, ResultRail } from "./line";
+import { DeckEditor, DeckResults } from "./panels/deck-solver";
+import { DecksManage } from "./panels/decks-manage";
+import { HandBuilder, ResultRail } from "./panels/hand-solver";
 import {
-  BoundsTable,
+  CutBudgetPanel,
   PermutationPanel,
   RatioControls,
-  RatioImportPanel,
+  RatioDeckPicker,
   RatioResults,
-} from "./ratios";
-import { HistoryPanel } from "./history";
-import { ActionBar } from "./shared";
-import type { DeckResult, JobType, RatioResult, SampleHand, Tab } from "./types";
-import { deckCountsCoveringHand, makeBounds, makeSeed } from "./utils";
+  ReplacementPoolPanel,
+  snapshotRatioCriteria,
+} from "./panels/ratios";
+import { HistoryPanel } from "./panels/history";
+import { InfoPanel } from "./panels/info";
+import { ActionBar } from "./ui";
+import type {
+  DeckResult,
+  JobType,
+  RatioRefineCriteria,
+  RatioResult,
+  SampleHand,
+  Tab,
+} from "./types";
+import {
+  deckCountsCoveringHand,
+  drawOpeningHand,
+  makeSeed,
+  OPENING_HAND_SIZE,
+  refineBounds,
+  REFINE_COPY_CEILING,
+} from "./utils";
 
 export default function FizaWorkbench() {
   const [tab, setTab] = useState<Tab>("line");
@@ -68,18 +88,50 @@ export default function FizaWorkbench() {
   const deferredDeckText = useDeferredValue(deckText);
   const [samples, setSamples] = useState(8);
   const [deckResult, setDeckResult] = useState<DeckResult | null>(null);
-  const [bounds, setBounds] = useState<OptimizeBounds>(makeBounds);
-  const [deckSize, setDeckSize] = useState(60);
+  const [cutBudgets, setCutBudgets] = useState<
+    Partial<Record<CardId, number>>
+  >({});
+  const [replacements, setReplacements] = useState<
+    Partial<Record<CardId, number>>
+  >({});
   const [deckAttempts, setDeckAttempts] = useState(32);
   const [ratioSamples, setRatioSamples] = useState(4);
   const [metric, setMetric] = useState<"mean" | "p50">("mean");
   const [ratioResult, setRatioResult] = useState<RatioResult | null>(null);
-  const [ratioImportText, setRatioImportText] = useState("");
+  const [ratioCriteria, setRatioCriteria] =
+    useState<RatioRefineCriteria | null>(null);
   const [progress, setProgress] = useState<OptimizeProgress | null>(null);
   const [busy, setBusy] = useState<JobType | null>(null);
   const [error, setError] = useState("");
-  const [historyDeckFilter, setHistoryDeckFilter] = useState(false);
+  const [historyDeckFilter, setHistoryDeckFilter] = useState(true);
+  const [historyEpoch, setHistoryEpoch] = useState(0);
   const { startStreamingRun, cancel: cancelRun } = useRun();
+
+  const ratioBaseCards = parseDecklist(deckText);
+  const ratioRecognizedCount = ratioBaseCards.length;
+  const ratioBaseCounts = listToCounts(ratioBaseCards);
+  const deckSize = Math.min(60, Math.max(0, ratioBaseCards.length));
+  const bounds = refineBounds(ratioBaseCounts, cutBudgets, replacements);
+  const boundMinTotal = Object.values(bounds).reduce(
+    (sum, item) => sum + item.min,
+    0,
+  );
+  const boundMaxTotal = Object.values(bounds).reduce(
+    (sum, item) => sum + item.max,
+    0,
+  );
+  const freeCopies = Math.max(0, deckSize - boundMinTotal);
+  const legalDecklists = countLegalDecklists(bounds, deckSize);
+  const attemptCeiling =
+    legalDecklists === BigInt(0)
+      ? 0
+      : Number(
+          legalDecklists < BigInt(MAX_RATIO_DECK_ATTEMPTS)
+            ? legalDecklists
+            : BigInt(MAX_RATIO_DECK_ATTEMPTS),
+        );
+  const coveragePercent = deckAttemptPercent(deckAttempts, legalDecklists);
+  const replacementCount = Object.keys(replacements).length;
 
   useEffect(() => {
     let cancelled = false;
@@ -116,14 +168,52 @@ export default function FizaWorkbench() {
   }, [activeDeckId, decksHydrated]);
 
   useEffect(() => {
+    setCutBudgets({});
+    setReplacements({});
+  }, [activeDeckId]);
+
+  useEffect(() => {
+    const counts = listToCounts(parseDecklist(deckText));
+    setReplacements((current) => {
+      const nextEntries = Object.entries(current).filter(
+        ([id]) => (counts[id as CardId] ?? 0) < REFINE_COPY_CEILING,
+      );
+      if (nextEntries.length === Object.keys(current).length) {
+        return current;
+      }
+      return Object.fromEntries(nextEntries) as Partial<Record<CardId, number>>;
+    });
+  }, [deckText]);
+
+  useEffect(() => {
     if (!decksHydrated || !activeDeck) {
       return;
     }
-    return scheduleDeckSave(activeDeck);
+    return scheduleDeckSave(activeDeck, (saved) => {
+      setDecks((current) => {
+        const existing = current.find((deck) => deck.id === saved.id);
+        if (
+          !existing ||
+          (existing.deckHash === saved.deckHash &&
+            existing.runCount === saved.runCount)
+        ) {
+          return current;
+        }
+        return current.map((deck) =>
+          deck.id === saved.id
+            ? {
+                ...deck,
+                deckHash: saved.deckHash,
+                runCount: saved.runCount,
+              }
+            : deck,
+        );
+      });
+    });
   }, [activeDeck, decksHydrated]);
 
   function updateActiveDeckText(text: string) {
-    if (!activeDeck) {
+    if (!activeDeck || isDeckCardlistLocked(activeDeck)) {
       return;
     }
     setDecks((current) =>
@@ -134,9 +224,27 @@ export default function FizaWorkbench() {
     setDeckResult(null);
   }
 
+  async function syncDeckRunCounts() {
+    try {
+      const remote = await refreshDecksRemote();
+      setDecks((current) =>
+        current.map((deck) => {
+          const match = remote.find((row) => row.id === deck.id);
+          return match
+            ? { ...deck, runCount: match.runCount, deckHash: match.deckHash }
+            : deck;
+        }),
+      );
+    } catch {
+      // Keep local state if refresh fails; API still enforces the lock.
+    }
+  }
+
   function switchDeck(deckId: string) {
     setActiveDeckId(deckId);
     setDeckResult(null);
+    setRatioResult(null);
+    setRatioCriteria(null);
     setError("");
     setIsRenamingDeck(false);
   }
@@ -159,7 +267,7 @@ export default function FizaWorkbench() {
     const text = `${lines.join("\n")}\n`;
     const name = nextDeckName(
       decks,
-      `Ratio #${rank} · ${score.toFixed(2)}`,
+      `${ratioCriteria?.baseDeckName ?? activeDeck?.name ?? "Deck"} · Ratio #${rank} · ${score.toFixed(2)}`,
     );
     try {
       const deck = await createDeckRemote(name, text);
@@ -188,6 +296,29 @@ export default function FizaWorkbench() {
         createError instanceof Error
           ? createError.message
           : "Could not create a deck.",
+      );
+    }
+  }
+
+  async function duplicateActiveDeck() {
+    if (!activeDeck) {
+      return;
+    }
+    try {
+      const deck = await createDeckRemote(
+        nextDeckName(decks, `${activeDeck.name} copy`),
+        activeDeck.text,
+      );
+      setDecks((current) => [...current, deck]);
+      setActiveDeckId(deck.id);
+      setDeckResult(null);
+      setError("");
+      setIsRenamingDeck(false);
+    } catch (duplicateError) {
+      setError(
+        duplicateError instanceof Error
+          ? duplicateError.message
+          : "Could not duplicate the deck.",
       );
     }
   }
@@ -252,9 +383,9 @@ export default function FizaWorkbench() {
     }
     const needsDeck = simType !== "fire_brick";
     const deckCards = needsDeck ? parseDecklist(deckText) : [];
-    if (needsDeck && deckCards.length < 7) {
+    if (needsDeck && deckCards.length < MIN_VALID_DECK_SIZE) {
       setError(
-        "Monte Carlo and Two-pass need a maindeck (Deck damage tab) with at least seven cards.",
+        `Monte Carlo and Two-pass need a maindeck (Decks tab) with at least ${MIN_VALID_DECK_SIZE} recognized cards.`,
       );
       return;
     }
@@ -285,13 +416,26 @@ export default function FizaWorkbench() {
 
   async function evaluateCurrentDeck() {
     const cards = parseDecklist(deferredDeckText);
-    if (cards.length < 7) {
-      setError("The decklist needs at least seven recognized cards.");
+    if (cards.length < MIN_VALID_DECK_SIZE) {
+      setError(
+        `The decklist needs at least ${MIN_VALID_DECK_SIZE} recognized cards.`,
+      );
       return;
     }
+    const deckId = activeDeck?.id;
     setBusy("evaluate");
     setError("");
-    setProgress(null);
+    setProgress({
+      decksScored: 0,
+      totalDecks: 0,
+      legalDecks: 0,
+      handsSimulated: 0,
+      totalHands: samples,
+      bestScore: 0,
+      ...(simType === "monte_carlo"
+        ? { rolloutsDone: 0, totalRollouts: rollouts }
+        : {}),
+    });
     try {
       await startStreamingRun(
         "evaluate",
@@ -304,12 +448,23 @@ export default function FizaWorkbench() {
           rollouts,
           seed: makeSeed() as unknown as bigint,
         },
-        activeDeck?.id,
+        deckId,
         {
-          onProgress: () => {},
+          onProgress: (progressUpdate) => setProgress(progressUpdate),
           onComplete: (result) => {
             startTransition(() => setDeckResult(result as DeckResult));
+            setProgress((current) =>
+              current
+                ? {
+                    ...current,
+                    handsSimulated: current.totalHands,
+                    rolloutsDone: current.totalRollouts ?? current.rolloutsDone,
+                  }
+                : current,
+            );
+            void syncDeckRunCounts();
             setBusy(null);
+            setHistoryEpoch((current) => current + 1);
           },
           onError: (message) => {
             setError(message);
@@ -327,34 +482,61 @@ export default function FizaWorkbench() {
     }
   }
 
-  function applyRatioDecklist(text: string) {
-    const cards = parseDecklist(text);
-    if (cards.length < 7) {
-      setError("Import a decklist with at least seven recognized cards.");
+  function setCutBudget(id: CardId, cutUpTo: number) {
+    setCutBudgets((current) => {
+      const count = ratioBaseCounts[id] ?? 0;
+      const nextCut = Math.min(count, Math.max(0, cutUpTo));
+      if (nextCut <= 0) {
+        const { [id]: _removed, ...rest } = current;
+        return rest;
+      }
+      return { ...current, [id]: nextCut };
+    });
+  }
+
+  function toggleReplacement(id: CardId) {
+    if ((ratioBaseCounts[id] ?? 0) >= REFINE_COPY_CEILING) {
       return;
     }
-    const counts = listToCounts(cards);
-    const next = makeBounds();
-    for (const id of PLAYABLE_CARD_IDS) {
-      const count = Math.min(6, counts[id] ?? 0);
-      next[id] = { min: count, max: count };
-    }
-    setBounds(next);
-    setDeckSize(Math.min(60, Math.max(7, cards.length)));
-    setRatioImportText(text);
-    setError("");
+    setReplacements((current) => {
+      if (current[id] != null) {
+        const { [id]: _removed, ...rest } = current;
+        return rest;
+      }
+      return { ...current, [id]: REFINE_COPY_CEILING };
+    });
+  }
+
+  function setReplacementMax(id: CardId, max: number) {
+    setReplacements((current) => {
+      if (current[id] == null) {
+        return current;
+      }
+      const nextMax = Math.min(REFINE_COPY_CEILING, Math.max(1, max));
+      return { ...current, [id]: nextMax };
+    });
   }
 
   async function optimizeCurrentBounds() {
+    if (ratioRecognizedCount < MIN_VALID_DECK_SIZE) {
+      setError(
+        `Select a deck with at least ${MIN_VALID_DECK_SIZE} recognized cards.`,
+      );
+      return;
+    }
     const min = Object.values(bounds).reduce((sum, item) => sum + item.min, 0);
     const max = Object.values(bounds).reduce((sum, item) => sum + item.max, 0);
     if (deckSize < min || deckSize > max) {
       setError(`Deck size must be between the bound totals (${min}–${max}).`);
       return;
     }
+    if (freeCopies > 0 && replacementCount === 0) {
+      setError("Pick at least one replacement card to fill cut slots.");
+      return;
+    }
     const legal = countLegalDecklists(bounds, deckSize);
     if (legal === BigInt(0)) {
-      setError("No legal lists exist for these bounds and deck size.");
+      setError("No legal lists exist for these cuts and replacements.");
       return;
     }
     const deckCount = Math.min(
@@ -370,9 +552,27 @@ export default function FizaWorkbench() {
       setError("Choose at least one deck to attempt.");
       return;
     }
+    const deckId = activeDeck?.id;
     setBusy("optimize");
     setError("");
-    setProgress(null);
+    setRatioResult(null);
+    setRatioCriteria(
+      snapshotRatioCriteria(
+        activeDeck?.name ?? "Base deck",
+        ratioBaseCounts,
+        cutBudgets,
+        replacements,
+      ),
+    );
+    setProgress({
+      decksScored: 0,
+      totalDecks: deckCount,
+      legalDecks:
+        legal > BigInt(Number.MAX_SAFE_INTEGER) ? 0 : Number(legal),
+      handsSimulated: 0,
+      totalHands: deckCount * ratioSamples,
+      bestScore: 0,
+    });
     try {
       await startStreamingRun(
         "optimize",
@@ -384,7 +584,7 @@ export default function FizaWorkbench() {
           metric,
           seed: makeSeed() as unknown as bigint,
         },
-        undefined,
+        deckId,
         {
           onProgress: (progressUpdate) => setProgress(progressUpdate),
           onComplete: (result) => {
@@ -400,12 +600,13 @@ export default function FizaWorkbench() {
                   }
                 : current,
             );
+            void syncDeckRunCounts();
             setBusy(null);
+            setHistoryEpoch((current) => current + 1);
           },
           onError: (message) => {
             setError(message);
             setBusy(null);
-            setProgress(null);
           },
         },
       );
@@ -441,26 +642,30 @@ export default function FizaWorkbench() {
     setError("");
   }
 
-  const recognizedDeckCount = parseDecklist(deferredDeckText).length;
-  const legalDecklists = countLegalDecklists(bounds, deckSize);
-  const boundMinTotal = Object.values(bounds).reduce(
-    (sum, item) => sum + item.min,
-    0,
-  );
-  const boundMaxTotal = Object.values(bounds).reduce(
-    (sum, item) => sum + item.max,
-    0,
-  );
-  const freeCopies = Math.max(0, deckSize - boundMinTotal);
-  const attemptCeiling =
-    legalDecklists === BigInt(0)
-      ? 0
-      : Number(
-          legalDecklists < BigInt(MAX_RATIO_DECK_ATTEMPTS)
-            ? legalDecklists
-            : BigInt(MAX_RATIO_DECK_ATTEMPTS),
-        );
-  const coveragePercent = deckAttemptPercent(deckAttempts, legalDecklists);
+  function drawRandomHandFromDeck() {
+    const cards = parseDecklist(deckText);
+    if (cards.length < OPENING_HAND_SIZE) {
+      setError(
+        `Need at least ${OPENING_HAND_SIZE} recognized cards in the selected deck to draw a hand.`,
+      );
+      return;
+    }
+    try {
+      setHand(drawOpeningHand(cards));
+      setLineResult(null);
+      setError("");
+    } catch (drawError) {
+      setError(
+        drawError instanceof Error
+          ? drawError.message
+          : "Could not draw a hand from the deck.",
+      );
+    }
+  }
+
+  const deckAnalysis = analyzeDecklist(deferredDeckText);
+  const recognizedDeckCount = deckAnalysis.recognizedCount;
+  const unrecognizedLines = deckAnalysis.unrecognizedLines;
 
   useEffect(() => {
     if (attemptCeiling < 1) return;
@@ -485,9 +690,11 @@ export default function FizaWorkbench() {
         {(
           [
             ["line", "Hand solver"],
+            ["manage", "Decks"],
             ["deck", "Deck damage"],
             ["ratios", "Ratio lab"],
             ["history", "History"],
+            ["info", "Information"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -508,6 +715,9 @@ export default function FizaWorkbench() {
           <HandBuilder
             hand={hand}
             selectedCard={selectedCard}
+            decks={decks}
+            activeDeck={activeDeck}
+            recognizedDeckCount={recognizedDeckCount}
             goFirst={goFirst}
             turns={turns}
             simType={simType}
@@ -515,6 +725,8 @@ export default function FizaWorkbench() {
             busy={busy === "solve"}
             onHandChange={setHand}
             onSelectedCardChange={setSelectedCard}
+            onSwitchDeck={switchDeck}
+            onDrawRandomHand={drawRandomHandFromDeck}
             onGoFirstChange={setGoFirst}
             onTurnsChange={setTurns}
             onSimTypeChange={(value) => {
@@ -531,14 +743,33 @@ export default function FizaWorkbench() {
           <ResultRail result={lineResult} busy={busy === "solve"} />
         )}
 
+        {tab === "manage" && (
+          <DecksManage
+            decks={decks}
+            activeDeck={activeDeck}
+            deckText={deckText}
+            deckCards={deckAnalysis.cards}
+            recognizedDeckCount={recognizedDeckCount}
+            unrecognizedLines={unrecognizedLines}
+            isRenamingDeck={isRenamingDeck}
+            renameDraft={renameDraft}
+            onSwitchDeck={switchDeck}
+            onCreateDeck={createNewDeck}
+            onDuplicateDeck={duplicateActiveDeck}
+            onStartRename={startRenamingDeck}
+            onDeleteDeck={deleteActiveDeck}
+            onRenameDraftChange={setRenameDraft}
+            onCommitRename={commitDeckRename}
+            onCancelRename={cancelDeckRename}
+            onDeckTextChange={updateActiveDeckText}
+          />
+        )}
+
         {tab === "deck" && (
           <DeckEditor
             decks={decks}
             activeDeck={activeDeck}
-            deckText={deckText}
             recognizedDeckCount={recognizedDeckCount}
-            isRenamingDeck={isRenamingDeck}
-            renameDraft={renameDraft}
             samples={samples}
             goFirst={goFirst}
             turns={turns}
@@ -546,13 +777,6 @@ export default function FizaWorkbench() {
             rollouts={rollouts}
             busy={busy === "evaluate"}
             onSwitchDeck={switchDeck}
-            onCreateDeck={createNewDeck}
-            onStartRename={startRenamingDeck}
-            onDeleteDeck={deleteActiveDeck}
-            onRenameDraftChange={setRenameDraft}
-            onCommitRename={commitDeckRename}
-            onCancelRename={cancelDeckRename}
-            onDeckTextChange={updateActiveDeckText}
             onSamplesChange={setSamples}
             onGoFirstChange={setGoFirst}
             onTurnsChange={setTurns}
@@ -563,6 +787,7 @@ export default function FizaWorkbench() {
             onRolloutsChange={setRollouts}
             onEvaluate={evaluateCurrentDeck}
             onCancel={cancelJob}
+            progress={progress}
           />
         )}
 
@@ -577,29 +802,30 @@ export default function FizaWorkbench() {
         {tab === "ratios" && (
           <div className="ratio-mode">
             <div className="ratio-topline">
-              <p className="kicker">EXTENDED CARD POOL</p>
+              <p className="kicker">DECK REFINEMENT</p>
               <p>
-                Sample unique legal lists inside your min/max rails, score each
-                with opening-hand damage, and keep the top results.
+                Start from a saved list, open cut budgets on cards you may trim,
+                pick a global replacement pool for the freed slots, then sample
+                unique legal lists by opening-hand damage.
               </p>
             </div>
-            <RatioImportPanel
-              ratioImportText={ratioImportText}
+            <RatioDeckPicker
+              decks={decks}
               activeDeck={activeDeck}
-              onImportTextChange={setRatioImportText}
-              onApply={() => applyRatioDecklist(ratioImportText)}
-              onApplyActiveDeck={() => {
-                if (activeDeck) {
-                  applyRatioDecklist(activeDeck.text);
-                }
-              }}
-              onResetBounds={() => {
-                setBounds(makeBounds());
-                setDeckSize(60);
-                setError("");
-              }}
+              recognizedCount={ratioRecognizedCount}
+              onSwitchDeck={switchDeck}
             />
-            <BoundsTable bounds={bounds} onBoundsChange={setBounds} />
+            <CutBudgetPanel
+              baseCounts={ratioBaseCounts}
+              cutBudgets={cutBudgets}
+              onCutBudgetChange={setCutBudget}
+            />
+            <ReplacementPoolPanel
+              baseCounts={ratioBaseCounts}
+              replacements={replacements}
+              onToggle={toggleReplacement}
+              onMaxChange={setReplacementMax}
+            />
             <PermutationPanel
               legalDecklists={legalDecklists}
               boundMinTotal={boundMinTotal}
@@ -609,13 +835,14 @@ export default function FizaWorkbench() {
               deckAttempts={deckAttempts}
               attemptCeiling={attemptCeiling}
               coveragePercent={coveragePercent}
+              busy={busy === "optimize"}
+              progress={progress}
               onDeckAttemptsChange={setDeckAttempts}
             />
             <RatioControls
               deckSize={deckSize}
               ratioSamples={ratioSamples}
               metric={metric}
-              onDeckSizeChange={setDeckSize}
               onRatioSamplesChange={setRatioSamples}
               onMetricChange={setMetric}
             />
@@ -628,20 +855,25 @@ export default function FizaWorkbench() {
             />
             <RatioResults
               result={ratioResult}
+              criteria={ratioCriteria}
               onSaveDecklist={saveRatioDecklist}
-            />
-          </div>
+            />          </div>
         )}
 
         {tab === "history" && (
           <HistoryPanel
+            decks={decks}
             activeDeck={activeDeck}
             filterToActiveDeck={historyDeckFilter}
+            refreshToken={historyEpoch}
             onFilterToActiveDeckChange={setHistoryDeckFilter}
+            onSwitchDeck={switchDeck}
           />
         )}
 
-        {error && tab !== "history" && (
+        {tab === "info" && <InfoPanel />}
+
+        {error && tab !== "history" && tab !== "info" && (
           <p className="error-banner" role="alert">
             {error}
           </p>

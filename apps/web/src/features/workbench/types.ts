@@ -8,7 +8,7 @@ import type {
   TwoPassResult,
 } from "@/lib/engine";
 
-export type Tab = "line" | "deck" | "ratios" | "history";
+export type Tab = "line" | "manage" | "deck" | "ratios" | "history" | "info";
 export type JobType = "solve" | "evaluate" | "optimize";
 
 export interface SampleHand {
@@ -16,6 +16,8 @@ export interface SampleHand {
   damage: number;
   steps: LineStep[];
   nodes: number;
+  /** `run_samples.id` when loaded from the database. */
+  sampleId?: string | null;
   distribution?: DamageDistribution;
   twoPass?: TwoPassResult;
 }
@@ -48,6 +50,13 @@ export interface RatioResult {
     counts: DeckCounts;
   }[];
   history: { iteration: number; score: number }[];
+}
+
+export interface RatioRefineCriteria {
+  baseDeckName: string;
+  baseCounts: DeckCounts;
+  cutBudgets: Partial<Record<CardId, number>>;
+  replacements: Partial<Record<CardId, number>>;
 }
 
 export type StepDiffMark = "same" | "added" | "removed";

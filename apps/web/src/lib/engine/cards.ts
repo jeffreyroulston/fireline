@@ -240,6 +240,7 @@ export const CARDS: Record<CardId, CardDef> = {
     power: 1,
     life: 1,
     unique: true,
+    automaton: true,
   },
   tweedledum: {
     id: "tweedledum",
@@ -251,7 +252,7 @@ export const CARDS: Record<CardId, CardDef> = {
     power: 3,
     life: 2,
     unique: true,
-    stealth: true,
+    assassinStealth: true,
   },
   vermilion_decree: {
     id: "vermilion_decree",
@@ -282,6 +283,37 @@ export const CARDS: Record<CardId, CardDef> = {
     element: "fire",
     floatingMemory: true,
   },
+  uncanny_realization: {
+    id: "uncanny_realization",
+    name: "Uncanny Realization",
+    short: "UReal",
+    kind: "attack",
+    cost: 1,
+    element: "norm",
+    power: 3,
+  },
+  virgil: {
+    id: "virgil",
+    name: "Virgil, Altered Future",
+    short: "Virgi",
+    kind: "ally",
+    cost: 3,
+    element: "norm",
+    power: 2,
+    life: 2,
+    unique: true,
+    automaton: true,
+    fast: true,
+  },
+  vicious_slice: {
+    id: "vicious_slice",
+    name: "Vicious Slice",
+    short: "VSlic",
+    kind: "attack",
+    cost: 1,
+    element: "norm",
+    power: 2,
+  },
 };
 
 export const CARD_LIST = Object.values(CARDS);
@@ -311,8 +343,9 @@ export function shortName(id: CardId): string {
 }
 
 export function parseCardToken(token: string): CardId | null {
-  const t = token.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
-  if (!t) return null;
+  const raw = token.trim().toLowerCase();
+  if (!raw) return null;
+  const t = raw.replace(/[^a-z0-9]+/g, "_");
   if (t in CARDS) return t as CardId;
   if (t === "kurhazi_courier") return "corhazi_courier";
   if (t === "sadi_blood_harvester") return "sadi";
@@ -322,19 +355,12 @@ export function parseCardToken(token: string): CardId | null {
   if (t === "xiao_qiao_cinderkeeper") return "xiao_qiao";
   if (t === "arthur_young_heir") return "arthur";
   if (t === "red_hare_unrivaled_stallion") return "red_hare";
+  if (t === "virgil_altered_future") return "virgil";
   for (const c of CARD_LIST) {
     if (
-      c.short.toLowerCase() === token.trim().toLowerCase() ||
-      c.name.toLowerCase() === token.trim().toLowerCase() ||
-      c.id.replace(/_/g, " ") === token.trim().toLowerCase()
-    ) {
-      return c.id;
-    }
-  }
-  for (const c of CARD_LIST) {
-    if (
-      c.short.toLowerCase().startsWith(token.trim().toLowerCase().slice(0, 5)) ||
-      c.name.toLowerCase().startsWith(token.trim().toLowerCase())
+      c.short.toLowerCase() === raw ||
+      c.name.toLowerCase() === raw ||
+      c.id.replace(/_/g, " ") === raw
     ) {
       return c.id;
     }
@@ -342,17 +368,22 @@ export function parseCardToken(token: string): CardId | null {
   return null;
 }
 
+/** Minimum recognized maindeck size for a valid saved deck. */
+export const MIN_VALID_DECK_SIZE = 60;
+
+function isIgnorableDeckLine(trimmed: string): boolean {
+  if (!trimmed || trimmed.startsWith("#")) {
+    return true;
+  }
+  return /^(materials?|main\s*deck|maindeck|sideboard|side\s*board)\b/i.test(
+    trimmed,
+  );
+}
+
 /** Parse a decklist / hand line like "3 Arthur, Young Heir" or "arthur arthur". */
 export function parseCardLine(line: string): CardId[] {
   const trimmed = line.trim();
-  if (!trimmed || trimmed.startsWith("#")) {
-    return [];
-  }
-  if (
-    /^(materials?|main\s*deck|maindeck|sideboard|side\s*board)\b/i.test(
-      trimmed,
-    )
-  ) {
+  if (isIgnorableDeckLine(trimmed)) {
     return [];
   }
 
@@ -373,10 +404,35 @@ export function parseCardLine(line: string): CardId[] {
   return id ? [id] : [];
 }
 
-export function parseDecklist(text: string): CardId[] {
-  const out: CardId[] = [];
+export interface DecklistAnalysis {
+  cards: CardId[];
+  unrecognizedLines: string[];
+  recognizedCount: number;
+}
+
+/** Parse a decklist and surface lines that do not map to known cards. */
+export function analyzeDecklist(text: string): DecklistAnalysis {
+  const cards: CardId[] = [];
+  const unrecognizedLines: string[] = [];
   for (const line of text.split(/\r?\n/)) {
-    out.push(...parseCardLine(line));
+    const trimmed = line.trim();
+    if (isIgnorableDeckLine(trimmed)) {
+      continue;
+    }
+    const parsed = parseCardLine(line);
+    if (parsed.length === 0) {
+      unrecognizedLines.push(trimmed);
+    } else {
+      cards.push(...parsed);
+    }
   }
-  return out;
+  return {
+    cards,
+    unrecognizedLines,
+    recognizedCount: cards.length,
+  };
+}
+
+export function parseDecklist(text: string): CardId[] {
+  return analyzeDecklist(text).cards;
 }

@@ -51,6 +51,10 @@ impl LineCardStats {
                 self.attribute_attack_bundle(card, steps, before_damage);
             }
             Action::AttackOthers => self.attribute_multi_attacks(steps, before_damage),
+            Action::AttackWithWeapon => {
+                // Weapon-only champion swing; materials are not card-stat rows.
+                self.record_draws_in_steps(steps);
+            }
             _ => self.record_draws_in_steps(steps),
         }
     }
@@ -76,7 +80,9 @@ impl LineCardStats {
         for step in steps {
             let delta = u32::from(step.damage.saturating_sub(prev));
             prev = step.damage;
-            if step.action.starts_with("Corhazi") {
+            if let Some(attacker) = parse_attack_from(&step.action) {
+                attribute_attack_damage(&step.action, delta, attacker, &mut self.damage);
+            } else if step.action.starts_with("Corhazi") {
                 self.damage[Card::CorhaziCourier.index()] += delta;
             } else if delta > 0 {
                 self.damage[card.index()] += delta;
@@ -94,7 +100,7 @@ impl LineCardStats {
             if let Some(card) = parse_attack_from(&step.action) {
                 current = Some(card);
                 self.attacks[card.index()] += 1;
-                self.damage[card.index()] += delta;
+                attribute_attack_damage(&step.action, delta, card, &mut self.damage);
             } else if step.action.starts_with("Corhazi") {
                 self.damage[Card::CorhaziCourier.index()] += delta;
                 self.record_draw_label(&step.action);
@@ -160,8 +166,8 @@ pub struct CardStat {
     pub see_rate: f64,
     /// Plays per sample.
     pub play_rate: f64,
-    /// Plays / seen samples.
-    pub play_when_seen: f64,
+    /// Plays / in-hand copies (opened + drawn).
+    pub play_when_in_hand: f64,
     /// Mean damage on samples where seen.
     pub damage_when_seen: f64,
     pub damage_per_play: f64,
@@ -237,6 +243,7 @@ impl DeckStatAccumulator {
                 let index = card.index();
                 let plays = self.line.plays[index];
                 let seen = self.seen[index];
+                let in_hand = self.opened_copies[index] + self.line.drawn[index];
                 let damage = self.line.damage[index];
                 CardStat {
                     card: card.id(),
@@ -253,8 +260,8 @@ impl DeckStatAccumulator {
                     open_rate: f64::from(self.opened[index]) / samples,
                     see_rate: f64::from(seen) / samples,
                     play_rate: f64::from(plays) / samples,
-                    play_when_seen: if seen > 0 {
-                        f64::from(plays) / f64::from(seen)
+                    play_when_in_hand: if in_hand > 0 {
+                        f64::from(plays) / f64::from(in_hand)
                     } else {
                         0.0
                     },
@@ -285,9 +292,48 @@ impl DeckStatAccumulator {
 
 fn parse_attack_from(label: &str) -> Option<Card> {
     let rest = label.strip_prefix("Attack from ")?;
+    let name = rest.split(" (").next()?;
     ALL_CARDS
         .into_iter()
-        .find(|card| card.name() == rest)
+        .find(|card| card.name() == name)
+}
+
+fn parse_attack_bonuses(label: &str) -> (u32, u32) {
+    let Some(start) = label.find(" (") else {
+        return (0, 0);
+    };
+    let Some(end) = label.rfind(')') else {
+        return (0, 0);
+    };
+    if end <= start + 2 {
+        return (0, 0);
+    }
+    let inner = &label[start + 2..end];
+    let mut arthur = 0_u32;
+    let mut hot_cake = 0_u32;
+    for part in inner.split(", ") {
+        if let Some(value) = part.strip_prefix("Arthur +") {
+            arthur = value.parse().unwrap_or(0);
+        } else if let Some(value) = part.strip_prefix("Hot Cake +") {
+            hot_cake = value.parse().unwrap_or(0);
+        }
+    }
+    (arthur, hot_cake)
+}
+
+fn attribute_attack_damage(label: &str, delta: u32, attacker: Card, damage: &mut [u32; CARD_COUNT]) {
+    let (arthur_bonus, hot_cake_bonus) = parse_attack_bonuses(label);
+    let buff_total = arthur_bonus + hot_cake_bonus;
+    let base = delta.saturating_sub(buff_total);
+    if base > 0 {
+        damage[attacker.index()] += base;
+    }
+    if arthur_bonus > 0 {
+        damage[Card::Arthur.index()] += arthur_bonus;
+    }
+    if hot_cake_bonus > 0 {
+        damage[Card::HotCake.index()] += hot_cake_bonus;
+    }
 }
 
 fn parse_drawn_cards(label: &str) -> Vec<Card> {
@@ -340,5 +386,20 @@ mod tests {
     fn parses_recollect_draw() {
         let cards = parse_drawn_cards("Recollect (draw Arthu)");
         assert_eq!(cards, vec![Card::Arthur]);
+    }
+
+    #[test]
+    fn parses_attack_bonuses() {
+        assert_eq!(
+            parse_attack_bonuses("Attack from Clumsy Apprentice (Hot Cake +3)"),
+            (0, 3)
+        );
+        assert_eq!(
+            parse_attack_bonuses(
+                "Attack from Kingdom Informant (Arthur +1, Hot Cake +3)"
+            ),
+            (1, 3)
+        );
+        assert_eq!(parse_attack_bonuses("Attack from Arthur, Young Heir"), (0, 0));
     }
 }

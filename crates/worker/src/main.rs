@@ -6,8 +6,8 @@ use axum::{
     routing::{get, post},
 };
 use ga_fire_engine::{
-    Budget, DeckEvalRequest, DeckEvalResult, ENGINE_VERSION, OptimizeProgress, OptimizeRequest,
-    OptimizeResult, SolveRequest, SolveResult, card_catalog,
+    Budget, DeckEvalRequest, DeckEvalResult, ENGINE_VERSION, EvalProgress, OptimizeProgress,
+    OptimizeRequest, OptimizeResult, SolveRequest, SolveResult, card_catalog,
 };
 use serde::Serialize;
 use std::{net::SocketAddr, ops::ControlFlow, sync::Arc};
@@ -24,7 +24,12 @@ struct AppState {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 enum EvaluateStreamEvent {
-    Progress { sample: u16, total: u16 },
+    Progress {
+        sample: u16,
+        total: u16,
+        rollout: u16,
+        total_rollouts: u16,
+    },
     Result(DeckEvalResult),
     Error { message: String },
 }
@@ -115,8 +120,13 @@ async fn evaluate_handler(
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     request.budget = merge_budget(request.budget, state.budget);
     stream_ndjson(move |tx| {
-        let result = ga_fire_engine::evaluate_with_progress(&request, |sample, total| {
-            let event = EvaluateStreamEvent::Progress { sample, total };
+        let result = ga_fire_engine::evaluate_with_serial_progress(&request, |progress: EvalProgress| {
+            let event = EvaluateStreamEvent::Progress {
+                sample: progress.sample,
+                total: progress.total,
+                rollout: progress.rollout,
+                total_rollouts: progress.total_rollouts,
+            };
             if tx.blocking_send(serde_json::to_string(&event).expect("serialize progress") + "\n")
                 .is_err()
             {
@@ -190,7 +200,8 @@ async fn stream_ndjson(
     );
     Ok(Response::builder()
         .header("Content-Type", "application/x-ndjson")
-        .header("Cache-Control", "no-cache")
+        .header("Cache-Control", "no-cache, no-transform")
+        .header("X-Accel-Buffering", "no")
         .body(body)
         .expect("response body"))
 }

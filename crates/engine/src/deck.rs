@@ -3,7 +3,7 @@ use crate::{
     model::{
         DamageDistribution, EffectiveRequest, SimType, SolveRequest, Step, TwoPassResult,
     },
-    solver::solve,
+    solver::solve_with_progress,
     version::ENGINE_VERSION,
 };
 use rustc_hash::FxHashMap;
@@ -14,6 +14,8 @@ use ts_rs::TS;
 
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::time::Instant;
 
 use rayon::prelude::*;
@@ -150,6 +152,15 @@ pub struct RankedDeck {
     pub counts: BTreeMap<String, u8>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalProgress {
+    pub sample: u16,
+    pub total: u16,
+    pub rollout: u16,
+    pub total_rollouts: u16,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(TS))]
@@ -239,19 +250,34 @@ fn solve_sample_hand(
     max_turns: u8,
     rollouts: u16,
     sample_index: u16,
-) -> SampleHand {
+    hands_done: u16,
+    hands_total: u16,
+    on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
+) -> Result<SampleHand, String> {
     let hand_ids = drawn.iter().map(|card| card.id().to_string()).collect();
-    let result = solve(&SolveRequest {
-        hand: hand_ids,
-        go_first: request.go_first,
-        max_turns,
-        sim_type: request.sim_type,
-        deck: request.deck.clone(),
-        rollouts,
-        seed: request.seed.wrapping_add(u64::from(sample_index) * 17),
-        budget: *budget,
-    })
-    .expect("deck cards already validated");
+    let result = solve_with_progress(
+        &SolveRequest {
+            hand: hand_ids,
+            go_first: request.go_first,
+            max_turns,
+            sim_type: request.sim_type,
+            deck: request.deck.clone(),
+            rollouts,
+            seed: request.seed.wrapping_add(u64::from(sample_index) * 17),
+            budget: *budget,
+        },
+        |rollout, total_rollouts| {
+            report_eval_progress(
+                on_progress,
+                EvalProgress {
+                    sample: hands_done,
+                    total: hands_total,
+                    rollout,
+                    total_rollouts,
+                },
+            )
+        },
+    )?;
     let damage = match request.sim_type {
         SimType::MonteCarlo => result
             .distribution
@@ -260,7 +286,7 @@ fn solve_sample_hand(
             .unwrap_or(result.max_damage),
         _ => result.max_damage,
     };
-    SampleHand {
+    Ok(SampleHand {
         hand: drawn.iter().map(|card| card.id()).collect(),
         damage,
         steps: result.steps,
@@ -268,7 +294,42 @@ fn solve_sample_hand(
         distribution: result.distribution,
         two_pass: result.two_pass,
         line_stats: result.line_stats,
-    }
+    })
+}
+
+fn solve_one_unique_hand(
+    sim_type: SimType,
+    key: [u8; CARD_COUNT],
+    sample_index: u16,
+    request: &DeckEvalRequest,
+    budget: &crate::budget::Budget,
+    max_turns: u8,
+    rollouts: u16,
+    hands_done: u16,
+    hands_total: u16,
+    on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
+) -> Result<((SimType, [u8; CARD_COUNT]), SampleHand), String> {
+    let drawn = drawn_from_key(key);
+    let mut sample = solve_sample_hand(
+        &drawn,
+        request,
+        budget,
+        max_turns,
+        rollouts,
+        sample_index,
+        hands_done,
+        hands_total,
+        on_progress,
+    )?;
+    sample.hand = drawn.iter().map(|card| card.id()).collect();
+    Ok(((sim_type, key), sample))
+}
+
+fn report_eval_progress(
+    on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
+    progress: EvalProgress,
+) -> ControlFlow<()> {
+    on_progress.lock().unwrap_or_else(|err| err.into_inner())(progress)
 }
 
 fn solve_unique_hands(
@@ -277,23 +338,100 @@ fn solve_unique_hands(
     budget: &crate::budget::Budget,
     max_turns: u8,
     rollouts: u16,
-) -> FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand> {
-    unique
-        .par_iter()
-        .map(|&(sim_type, key, sample_index)| {
-            let drawn = drawn_from_key(key);
-            let mut sample = solve_sample_hand(
-                &drawn,
+    on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
+    parallel: bool,
+) -> Result<FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand>, String> {
+    let total = request.samples.max(1);
+    let total_rollouts = if request.sim_type == SimType::MonteCarlo {
+        rollouts
+    } else {
+        1
+    };
+    if !parallel {
+        let mut cache = FxHashMap::default();
+        for (index, &(sim_type, key, sample_index)) in unique.iter().enumerate() {
+            let hands_done = u16::try_from(index).unwrap_or(u16::MAX);
+            let (cache_key, sample) = solve_one_unique_hand(
+                sim_type,
+                key,
+                sample_index,
                 request,
                 budget,
                 max_turns,
                 rollouts,
+                hands_done,
+                total,
+                on_progress,
+            )?;
+            cache.insert(cache_key, sample);
+            let n = u16::try_from(index + 1).unwrap_or(u16::MAX);
+            if report_eval_progress(
+                on_progress,
+                EvalProgress {
+                    sample: n,
+                    total,
+                    rollout: 0,
+                    total_rollouts,
+                },
+            )
+            .is_break()
+            {
+                return Err("cancelled".into());
+            }
+        }
+        return Ok(cache);
+    }
+
+    let completed = AtomicU16::new(0);
+    let cancelled = AtomicBool::new(false);
+    let cache: FxHashMap<_, _> = unique
+        .par_iter()
+        .filter_map(|&(sim_type, key, sample_index)| {
+            if cancelled.load(Ordering::Relaxed) {
+                return None;
+            }
+            let hands_done = completed.load(Ordering::Relaxed);
+            let solved = solve_one_unique_hand(
+                sim_type,
+                key,
                 sample_index,
+                request,
+                budget,
+                max_turns,
+                rollouts,
+                hands_done,
+                total,
+                on_progress,
             );
-            sample.hand = drawn.iter().map(|card| card.id()).collect();
-            ((sim_type, key), sample)
+            let (cache_key, sample) = match solved {
+                Ok(value) => value,
+                Err(_) => {
+                    cancelled.store(true, Ordering::Relaxed);
+                    return None;
+                }
+            };
+            let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
+            if report_eval_progress(
+                on_progress,
+                EvalProgress {
+                    sample: n,
+                    total,
+                    rollout: 0,
+                    total_rollouts,
+                },
+            )
+            .is_break()
+            {
+                cancelled.store(true, Ordering::Relaxed);
+                return None;
+            }
+            Some((cache_key, sample))
         })
-        .collect()
+        .collect();
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
+    Ok(cache)
 }
 
 #[derive(Clone, Copy)]
@@ -314,12 +452,30 @@ impl Rng {
 }
 
 pub fn evaluate(request: &DeckEvalRequest) -> Result<DeckEvalResult, String> {
-    evaluate_with_progress(request, |_, _| ControlFlow::Continue(()))
+    evaluate_with_progress(request, |_| ControlFlow::Continue(()))
+}
+
+/// Live deck-eval progress: unique hands are solved one at a time so `on_progress`
+/// ticks after each opening hand instead of bursting at the end of a parallel batch.
+/// Monte Carlo also reports per-rollout progress within each hand.
+pub fn evaluate_with_serial_progress(
+    request: &DeckEvalRequest,
+    on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
+) -> Result<DeckEvalResult, String> {
+    evaluate_hands(request, on_progress, false)
 }
 
 pub fn evaluate_with_progress(
     request: &DeckEvalRequest,
-    mut on_hand: impl FnMut(u16, u16) -> ControlFlow<()>,
+    on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
+) -> Result<DeckEvalResult, String> {
+    evaluate_hands(request, on_progress, true)
+}
+
+fn evaluate_hands(
+    request: &DeckEvalRequest,
+    on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
+    parallel: bool,
 ) -> Result<DeckEvalResult, String> {
     let started = Instant::now();
     let budget = request.budget;
@@ -331,6 +487,11 @@ pub fn evaluate_with_progress(
         .max_turns
         .clamp(budget.max_turns_min, budget.max_turns_max);
     let rollouts = request.rollouts.clamp(1, budget.max_eval_rollouts);
+    let total_rollouts = if request.sim_type == SimType::MonteCarlo {
+        rollouts
+    } else {
+        1
+    };
     let mut rng = Rng(request.seed);
 
     let mut draws = Vec::with_capacity(request.samples as usize);
@@ -354,14 +515,38 @@ pub fn evaluate_with_progress(
         }
     }
 
-    let cache = solve_unique_hands(&unique, request, &budget, max_turns, rollouts);
+    let hands_total = request.samples.max(1);
+    let on_progress = Mutex::new(on_progress);
+    if report_eval_progress(
+        &on_progress,
+        EvalProgress {
+            sample: 0,
+            total: hands_total,
+            rollout: 0,
+            total_rollouts,
+        },
+    )
+    .is_break()
+    {
+        return Err("cancelled".into());
+    }
+
+    let cache = solve_unique_hands(
+        &unique,
+        request,
+        &budget,
+        max_turns,
+        rollouts,
+        &on_progress,
+        parallel,
+    )?;
 
     let mut hands = Vec::with_capacity(draws.len());
     let mut damages = Vec::with_capacity(draws.len());
     let mut total_nodes = 0;
     let mut stats_acc = crate::stats::DeckStatAccumulator::with_deck(&deck);
 
-    for (index, draw) in draws.iter().enumerate() {
+    for draw in &draws {
         let cache_key = (request.sim_type, draw.key);
         let mut sample = cache
             .get(&cache_key)
@@ -372,9 +557,20 @@ pub fn evaluate_with_progress(
         damages.push(sample.damage);
         stats_acc.add_sample(&draw.drawn, &sample.line_stats);
         hands.push(sample);
-        if on_hand(index as u16 + 1, request.samples).is_break() {
-            break;
-        }
+    }
+
+    if report_eval_progress(
+        &on_progress,
+        EvalProgress {
+            sample: request.samples,
+            total: hands_total,
+            rollout: 0,
+            total_rollouts,
+        },
+    )
+    .is_break()
+    {
+        return Err("cancelled".into());
     }
 
     let mut sorted = damages.clone();
@@ -432,7 +628,7 @@ pub fn count_legal_decks(
 
 pub fn optimize_with_progress(
     request: &OptimizeRequest,
-    mut on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()>,
+    mut on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
 ) -> Result<OptimizeResult, String> {
     let started = Instant::now();
     let budget = request.budget;
@@ -641,7 +837,7 @@ fn score_optimize_deck(
     legal_decks: u64,
     total_hands: u64,
     best_score: f64,
-    on_progress: &mut impl FnMut(OptimizeProgress) -> ControlFlow<()>,
+    on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
 ) -> Result<f64, String> {
     *decks_scored += 1;
     let deck_number = *decks_scored;
@@ -657,9 +853,9 @@ fn score_optimize_deck(
             rollouts: 1,
             budget: request.budget,
         },
-        |hand_done, _hand_total| {
+        |progress| {
             let hands_simulated = u64::from(deck_number.saturating_sub(1)) * u64::from(samples)
-                + u64::from(hand_done);
+                + u64::from(progress.sample);
             on_progress(OptimizeProgress {
                 decks_scored: deck_number,
                 total_decks,
@@ -809,6 +1005,53 @@ mod tests {
         .unwrap();
         assert_eq!(result.effective.max_turns, Some(2));
         assert_eq!(result.effective.rollouts, Some(1));
+    }
+
+    #[test]
+    fn monte_carlo_serial_progress_reports_rollouts() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 3),
+            ("kingdom_informant".into(), 3),
+            ("clumsy_apprentice".into(), 3),
+            ("sable_remnant".into(), 2),
+            ("blazing_throw".into(), 2),
+            ("red_hare".into(), 2),
+            ("march_hare".into(), 2),
+        ]);
+        let mut ticks = Vec::new();
+        let result = evaluate_with_serial_progress(
+            &DeckEvalRequest {
+                deck,
+                samples: 1,
+                go_first: true,
+                max_turns: 2,
+                seed: 11,
+                sim_type: SimType::MonteCarlo,
+                rollouts: 3,
+                budget: crate::budget::Budget {
+                    max_eval_rollouts: 3,
+                    ..crate::budget::Budget::default()
+                },
+            },
+            |progress| {
+                ticks.push(progress);
+                ControlFlow::Continue(())
+            },
+        )
+        .unwrap();
+        assert_eq!(result.effective.rollouts, Some(3));
+        assert!(
+            ticks.iter().any(|tick| tick.rollout == 1 && tick.total_rollouts == 3),
+            "expected a mid-hand rollout tick, got {ticks:?}"
+        );
+        assert!(
+            ticks.iter().any(|tick| tick.rollout == 3 && tick.total_rollouts == 3),
+            "expected a final-rollout tick, got {ticks:?}"
+        );
+        assert!(
+            ticks.iter().any(|tick| tick.sample == 1 && tick.total == 1),
+            "expected a completed-hand tick, got {ticks:?}"
+        );
     }
 
     #[test]

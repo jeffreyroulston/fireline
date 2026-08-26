@@ -51,6 +51,7 @@ export interface RunsTable {
   min_damage: number | null;
   best_score: number | null;
   damage_histogram: number[] | null;
+  sample_damages: number[] | null;
   optimize_history: Array<{ iteration: number; score: number }> | null;
   request_body: Record<string, unknown>;
 }

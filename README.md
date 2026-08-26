@@ -13,7 +13,8 @@ The model follows the Mathematically Correct FiZa drill assumptions:
 
 - Unknown draws are unplayable fire bricks.
 - The opponent kills non-stealth, non-immortal allies during its main phase.
-- FiZa-specific safe reductions include dagger/Arthur ordering and bulk ally attacks.
+  Assassin class stealth (e.g. Tweedledum) only counts after Zander has leveled.
+- FiZa-specific safe reductions include: Poisoned Dagger activates immediately when ready, Arthur attacks before other allies, and bulk ally attacks.
 
 ## Architecture
 

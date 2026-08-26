@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 
 pub const MAT_HAMMER: u8 = 1 << 0;
 pub const MAT_BLADE: u8 = 1 << 1;
@@ -16,19 +17,66 @@ pub const MAT_SOULKNIFE: u8 = 1 << 4;
 pub const ALL_MATERIALS: u8 = MAT_HAMMER | MAT_BLADE | MAT_DAGGER | MAT_ZANDER | MAT_SOULKNIFE;
 pub const DRAW_QUEUE_CAP: usize = 64;
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub struct Ally {
-    pub card: u8,
-    pub awake: bool,
-    pub immortal: bool,
-    /// Bonus power consumed on the ally's next attack this turn.
-    pub attack_buff: u8,
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub struct Ally(u32);
 
 impl Ally {
+    const AWAKE: u32 = 1 << 8;
+    const IMMORTAL: u32 = 1 << 9;
+    const BUFF_SHIFT: u32 = 16;
+
+    pub fn new(card: Card, awake: bool, immortal: bool, attack_buff: u8) -> Self {
+        let mut raw = card as u32;
+        if awake {
+            raw |= Self::AWAKE;
+        }
+        if immortal {
+            raw |= Self::IMMORTAL;
+        }
+        raw |= (attack_buff as u32) << Self::BUFF_SHIFT;
+        Self(raw)
+    }
+
     #[inline]
     pub fn card(self) -> Card {
-        ALL_CARDS[self.card as usize]
+        ALL_CARDS[(self.0 & 0xFF) as usize]
+    }
+
+    #[inline]
+    pub fn awake(self) -> bool {
+        self.0 & Self::AWAKE != 0
+    }
+
+    #[inline]
+    pub fn immortal(self) -> bool {
+        self.0 & Self::IMMORTAL != 0
+    }
+
+    #[inline]
+    pub fn attack_buff(self) -> u8 {
+        (self.0 >> Self::BUFF_SHIFT) as u8
+    }
+
+    pub fn set_awake(&mut self, awake: bool) {
+        if awake {
+            self.0 |= Self::AWAKE;
+        } else {
+            self.0 &= !Self::AWAKE;
+        }
+    }
+
+    pub fn set_immortal(&mut self, immortal: bool) {
+        if immortal {
+            self.0 |= Self::IMMORTAL;
+        } else {
+            self.0 &= !Self::IMMORTAL;
+        }
+    }
+
+    pub fn set_attack_buff(&mut self, attack_buff: u8) {
+        self.0 = (self.0 & !(0xFF << Self::BUFF_SHIFT))
+            | ((attack_buff as u32) << Self::BUFF_SHIFT);
     }
 }
 
@@ -77,7 +125,10 @@ impl Weapon {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+/// Search board position. Memo keys hash/compare all fields except `damage`,
+/// `queue`, and `queue_len` (the draw queue is constant within one solve).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct State {
     pub hand: [u8; CARD_COUNT],
     pub memory: [u8; CARD_COUNT],
@@ -107,10 +158,24 @@ pub struct State {
     /// Hot Cake items currently on the field.
     pub hot_cake: u8,
     pub go_first: bool,
+    pub queue_pos: u8,
     /// Fixed upcoming draws for Monte Carlo / oracle passes. Empty ⇒ fire bricks.
     pub queue: [u8; DRAW_QUEUE_CAP],
     pub queue_len: u8,
-    pub queue_pos: u8,
+}
+
+impl PartialEq for State {
+    fn eq(&self, other: &Self) -> bool {
+        self.memo_key_eq(other)
+    }
+}
+
+impl Eq for State {}
+
+impl Hash for State {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.hash_memo_key(state);
+    }
 }
 
 impl State {
@@ -156,10 +221,70 @@ impl State {
             materials: ALL_MATERIALS,
             hot_cake: 0,
             go_first,
+            queue_pos: 0,
             queue: draw_queue,
             queue_len,
-            queue_pos: 0,
         }
+    }
+
+    fn memo_key_eq(&self, other: &Self) -> bool {
+        self.hand == other.hand
+            && self.memory == other.memory
+            && self.hand_len == other.hand_len
+            && self.memory_len == other.memory_len
+            && self.allies == other.allies
+            && self.ally_len == other.ally_len
+            && self.turn == other.turn
+            && self.max_turns == other.max_turns
+            && self.phase == other.phase
+            && self.fire_gy == other.fire_gy
+            && self.float_gy == other.float_gy
+            && self.gy_total == other.gy_total
+            && self.march_hare_gy == other.march_hare_gy
+            && self.champion_level == other.champion_level
+            && self.champion_awake == other.champion_awake
+            && self.champion_damaged == other.champion_damaged
+            && self.prep == other.prep
+            && self.agility == other.agility
+            && self.weapon == other.weapon
+            && self.weapon_durability == other.weapon_durability
+            && self.dagger == other.dagger
+            && self.dagger_ready == other.dagger_ready
+            && self.amplify == other.amplify
+            && self.materials == other.materials
+            && self.hot_cake == other.hot_cake
+            && self.go_first == other.go_first
+            && self.queue_pos == other.queue_pos
+    }
+
+    fn hash_memo_key<H: Hasher>(&self, state: &mut H) {
+        self.hand.hash(state);
+        self.memory.hash(state);
+        self.hand_len.hash(state);
+        self.memory_len.hash(state);
+        self.allies.hash(state);
+        self.ally_len.hash(state);
+        self.turn.hash(state);
+        self.max_turns.hash(state);
+        self.phase.hash(state);
+        self.fire_gy.hash(state);
+        self.float_gy.hash(state);
+        self.gy_total.hash(state);
+        self.march_hare_gy.hash(state);
+        self.champion_level.hash(state);
+        self.champion_awake.hash(state);
+        self.champion_damaged.hash(state);
+        self.prep.hash(state);
+        self.agility.hash(state);
+        self.weapon.hash(state);
+        self.weapon_durability.hash(state);
+        self.dagger.hash(state);
+        self.dagger_ready.hash(state);
+        self.amplify.hash(state);
+        self.materials.hash(state);
+        self.hot_cake.hash(state);
+        self.go_first.hash(state);
+        self.queue_pos.hash(state);
     }
 
     #[inline]
@@ -317,12 +442,7 @@ impl State {
         if index >= self.allies.len() {
             return;
         }
-        self.allies[index] = Ally {
-            card: card as u8,
-            awake,
-            immortal,
-            attack_buff: 0,
-        };
+        self.allies[index] = Ally::new(card, awake, immortal, 0);
         self.ally_len += 1;
     }
 
@@ -343,13 +463,20 @@ impl State {
     pub fn arthur_rested(self) -> bool {
         self.allies[..self.ally_len as usize]
             .iter()
-            .any(|ally| ally.card() == Card::Arthur && !ally.awake)
+            .any(|ally| ally.card() == Card::Arthur && !ally.awake())
     }
 
     pub fn has_arthur(self) -> bool {
         self.allies[..self.ally_len as usize]
             .iter()
             .any(|ally| ally.card() == Card::Arthur)
+    }
+
+    /// Stealth for cull: innate stealth, or Assassin class stealth once Zander has leveled.
+    /// Not turn-gated — Tweedledum is culled on any turn while `champion_level == 0`.
+    pub fn ally_has_stealth(self, ally: Ally) -> bool {
+        let card = ally.card();
+        card.is_stealth() || (card.assassin_stealth() && self.is_assassin())
     }
 
     pub fn ally_power(self, ally: Ally) -> u8 {
@@ -372,7 +499,7 @@ impl State {
 
     pub fn can_ally_attack(self, index: usize) -> bool {
         let ally = self.allies[index];
-        ally.awake && !(self.go_first && self.turn == 0) && self.ally_power(ally) > 0
+        ally.awake() && !(self.go_first && self.turn == 0) && self.ally_power(ally) > 0
     }
 
     pub fn draw_brick(&mut self) {
@@ -428,9 +555,9 @@ impl State {
         self.champion_awake = true;
         self.champion_damaged = false;
         for ally in &mut self.allies[..self.ally_len as usize] {
-            ally.awake = true;
-            ally.immortal = false;
-            ally.attack_buff = 0;
+            ally.set_awake(true);
+            ally.set_immortal(false);
+            ally.set_attack_buff(0);
         }
         if self.dagger {
             self.dagger_ready = true;
@@ -443,7 +570,7 @@ impl State {
         let mut index = 0;
         while index < self.ally_len as usize {
             let ally = self.allies[index];
-            if ally.immortal || ally.card().is_stealth() {
+            if ally.immortal() || self.ally_has_stealth(ally) {
                 index += 1;
             } else {
                 self.remove_ally(index, true);
@@ -513,6 +640,8 @@ pub enum Action {
         weapon: bool,
         prepared: bool,
         doubled: bool,
+        /// Automaton ally index for Command Automaton attacks.
+        command_ally: Option<u8>,
     },
     PlayAction {
         card: Card,
@@ -521,6 +650,8 @@ pub enum Action {
     },
     BlazingThrow,
     MercenaryBlade,
+    /// Champion declares an attack by wielding the equipped weapon (no attack card).
+    AttackWithWeapon,
 }
 
 #[derive(Clone, Debug, Serialize)]

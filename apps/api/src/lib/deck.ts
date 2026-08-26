@@ -10,6 +10,7 @@ const CARD_ALIASES: Record<string, string> = {
   arthur_young_heir: "arthur",
   red_hare_unrivaled_stallion: "red_hare",
   fire_brick: "brick",
+  virgil_altered_future: "virgil",
 };
 
 export function normalizeCardToken(token: string): string | null {

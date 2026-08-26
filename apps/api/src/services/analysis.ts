@@ -1,13 +1,30 @@
 import { sql, type Kysely } from "kysely";
 import type { Database } from "../db/types.js";
-import { histogramStats, mergeHistograms } from "../lib/histogram.js";
+import {
+  coerceHistogram,
+  coerceSampleDamages,
+  expandHistogram,
+  histogramStats,
+  mergeHistograms,
+} from "../lib/histogram.js";
+import {
+  reconstructSampleDamages,
+  reconstructSampleHand,
+} from "../lib/sample-order.js";
+import { handHash } from "../lib/deck.js";
+import { playedOpeningCards } from "../lib/sample-card-highlights.js";
 import type { VersionTriple } from "../lib/version.js";
 
 const COMPLETE = "complete" as const;
 
 export async function listVersionGroups(
   db: Kysely<Database>,
-  options: { deckHash?: string; simType?: string; kind?: "evaluate" | "optimize" },
+  options: {
+    deckHash?: string;
+    deckId?: string;
+    simType?: string;
+    kind?: "evaluate" | "optimize";
+  },
 ) {
   let query = db
     .selectFrom("runs")
@@ -26,7 +43,9 @@ export async function listVersionGroups(
   if (options.kind) {
     query = query.where("kind", "=", options.kind);
   }
-  if (options.deckHash) {
+  if (options.deckId) {
+    query = query.where("deck_id", "=", options.deckId);
+  } else if (options.deckHash) {
     query = query.where("deck_hash", "=", options.deckHash);
   }
   if (options.simType) {
@@ -54,7 +73,16 @@ export async function pooledDamageDistribution(
 ) {
   const runs = await db
     .selectFrom("runs")
-    .select(["id", "damage_histogram"])
+    .select([
+      "id",
+      "damage_histogram",
+      "sample_damages",
+      "deck_counts",
+      "root_seed",
+      "mean_damage",
+      "samples",
+      "started_at",
+    ])
     .where("status", "=", COMPLETE)
     .where("kind", "=", "evaluate")
     .where("deck_hash", "=", options.deckHash)
@@ -63,32 +91,280 @@ export async function pooledDamageDistribution(
     .where("sampler_version", "=", options.version.samplerVersion)
     .where("card_digest", "=", options.version.cardDigest)
     .where("damage_histogram", "is not", null)
+    .orderBy("started_at", "asc")
     .execute();
 
   if (runs.length === 0) {
     return {
       runCount: 0,
       distribution: null,
+      runs: [],
       version: options.version,
       deckHash: options.deckHash,
       simType: options.simType,
     };
   }
 
-  const histograms = runs
-    .map((run) => run.damage_histogram)
-    .filter((value): value is number[] => Array.isArray(value));
+  const sampleRows = await db
+    .selectFrom("run_samples")
+    .select(["run_id", "hand_hash", "damage"])
+    .where(
+      "run_id",
+      "in",
+      runs.map((run) => run.id),
+    )
+    .execute();
 
-  const merged = mergeHistograms(histograms);
+  const handDamagesByRun = new Map<string, Map<string, number>>();
+  for (const row of sampleRows) {
+    let handDamages = handDamagesByRun.get(row.run_id);
+    if (!handDamages) {
+      handDamages = new Map();
+      handDamagesByRun.set(row.run_id, handDamages);
+    }
+    handDamages.set(row.hand_hash, row.damage);
+  }
+
+  const parsed = runs.flatMap((run) => {
+    const histogram = coerceHistogram(run.damage_histogram);
+    if (!histogram) {
+      return [];
+    }
+    const damages =
+      coerceSampleDamages(run.sample_damages) ??
+      reconstructSampleDamages({
+        deckCounts: run.deck_counts,
+        rootSeed: run.root_seed,
+        samples: run.samples ?? 0,
+        handDamages: handDamagesByRun.get(run.id) ?? new Map(),
+      }) ??
+      expandHistogram(histogram);
+    return [
+      {
+        histogram,
+        sampleRun: {
+          id: run.id,
+          startedAt: run.started_at,
+          samples: run.samples,
+          meanDamage: run.mean_damage,
+          damages,
+        },
+      },
+    ];
+  });
+
+  const merged = mergeHistograms(parsed.map((entry) => entry.histogram));
   const distribution = histogramStats(merged);
 
   return {
-    runCount: runs.length,
+    runCount: parsed.length,
     distribution,
+    runs: parsed.map((entry) => entry.sampleRun),
     version: options.version,
     deckHash: options.deckHash,
     simType: options.simType,
   };
+}
+
+export async function getPooledSample(
+  db: Kysely<Database>,
+  options: { runId: string; sampleIndex: number },
+) {
+  const run = await db
+    .selectFrom("runs")
+    .select([
+      "id",
+      "status",
+      "sim_type as simType",
+      "deck_counts as deckCounts",
+      "root_seed as rootSeed",
+      "samples",
+      "sample_damages as sampleDamages",
+    ])
+    .where("id", "=", options.runId)
+    .where("status", "=", COMPLETE)
+    .where("kind", "=", "evaluate")
+    .executeTakeFirst();
+
+  if (!run) {
+    return null;
+  }
+
+  const sampleRows = await db
+    .selectFrom("run_samples")
+    .select(["id", "hand_hash", "card_ids", "damage", "nodes", "steps"])
+    .where("run_id", "=", run.id)
+    .execute();
+
+  const handDamages = new Map<string, number>();
+  for (const row of sampleRows) {
+    handDamages.set(row.hand_hash, row.damage);
+  }
+
+  const damages =
+    coerceSampleDamages(run.sampleDamages) ??
+    reconstructSampleDamages({
+      deckCounts: run.deckCounts,
+      rootSeed: run.rootSeed,
+      samples: run.samples ?? 0,
+      handDamages,
+    });
+
+  if (
+    !damages ||
+    options.sampleIndex < 0 ||
+    options.sampleIndex >= damages.length
+  ) {
+    return null;
+  }
+
+  const hand = reconstructSampleHand({
+    deckCounts: run.deckCounts,
+    rootSeed: run.rootSeed,
+    sampleIndex: options.sampleIndex,
+  });
+  if (!hand) {
+    return null;
+  }
+
+  const hash = handHash(hand);
+  const sample = sampleRows.find((row) => row.hand_hash === hash);
+
+  return {
+    runId: run.id,
+    sampleId: sample?.id ?? null,
+    sampleIndex: options.sampleIndex,
+    simType: run.simType,
+    hand: sample?.card_ids ?? hand,
+    damage: damages[options.sampleIndex]!,
+    nodes: sample ? Number(sample.nodes) : 0,
+    steps: sample?.steps ?? [],
+  };
+}
+
+export async function pooledSampleHighlights(
+  db: Kysely<Database>,
+  options: {
+    deckHash: string;
+    simType: string;
+    version: VersionTriple;
+    cardNames: Record<string, string>;
+  },
+) {
+  const runs = await db
+    .selectFrom("runs")
+    .select([
+      "id",
+      "sample_damages",
+      "deck_counts",
+      "root_seed",
+      "samples",
+    ])
+    .where("status", "=", COMPLETE)
+    .where("kind", "=", "evaluate")
+    .where("deck_hash", "=", options.deckHash)
+    .where("sim_type", "=", options.simType)
+    .where("rules_version", "=", options.version.rulesVersion)
+    .where("sampler_version", "=", options.version.samplerVersion)
+    .where("card_digest", "=", options.version.cardDigest)
+    .orderBy("started_at", "asc")
+    .execute();
+
+  if (runs.length === 0) {
+    return { samples: [] as Array<{
+      runId: string;
+      sampleIndex: number;
+      inHand: string[];
+      played: string[];
+    }> };
+  }
+
+  const sampleRows = await db
+    .selectFrom("run_samples")
+    .select(["run_id", "hand_hash", "card_ids", "damage", "steps"])
+    .where(
+      "run_id",
+      "in",
+      runs.map((run) => run.id),
+    )
+    .execute();
+
+  const samplesByRun = new Map<
+    string,
+    Map<
+      string,
+      { cardIds: string[]; steps: unknown[] | null }
+    >
+  >();
+  for (const row of sampleRows) {
+    let byHand = samplesByRun.get(row.run_id);
+    if (!byHand) {
+      byHand = new Map();
+      samplesByRun.set(row.run_id, byHand);
+    }
+    byHand.set(row.hand_hash, {
+      cardIds: row.card_ids,
+      steps: row.steps,
+    });
+  }
+
+  const handDamagesByRun = new Map<string, Map<string, number>>();
+  for (const row of sampleRows) {
+    let handDamages = handDamagesByRun.get(row.run_id);
+    if (!handDamages) {
+      handDamages = new Map();
+      handDamagesByRun.set(row.run_id, handDamages);
+    }
+    handDamages.set(row.hand_hash, row.damage);
+  }
+
+  const samples: Array<{
+    runId: string;
+    sampleIndex: number;
+    inHand: string[];
+    played: string[];
+  }> = [];
+
+  for (const run of runs) {
+    const damages =
+      coerceSampleDamages(run.sample_damages) ??
+      reconstructSampleDamages({
+        deckCounts: run.deck_counts,
+        rootSeed: run.root_seed,
+        samples: run.samples ?? 0,
+        handDamages: handDamagesByRun.get(run.id) ?? new Map(),
+      });
+    if (!damages) {
+      continue;
+    }
+
+    const byHand = samplesByRun.get(run.id) ?? new Map();
+    for (let sampleIndex = 0; sampleIndex < damages.length; sampleIndex += 1) {
+      const hand = reconstructSampleHand({
+        deckCounts: run.deck_counts,
+        rootSeed: run.root_seed,
+        sampleIndex,
+      });
+      if (!hand) {
+        continue;
+      }
+      const stored = byHand.get(handHash(hand));
+      const openingHand = stored?.cardIds ?? hand;
+      const steps = (stored?.steps ?? []) as Array<{ action: string }>;
+      samples.push({
+        runId: run.id,
+        sampleIndex,
+        inHand: openingHand,
+        played: playedOpeningCards(
+          openingHand,
+          steps,
+          options.cardNames,
+        ),
+      });
+    }
+  }
+
+  return { samples };
 }
 
 export async function cardLeaderboard(
@@ -155,9 +431,10 @@ export async function cardLeaderboard(
 
   const totalSamples = sampleRow?.totalSamples ?? 0;
   const totalDamage = rows.reduce((sum, row) => sum + row.damage, 0);
+  const runCount = runCountRow?.runCount ?? 0;
 
   return {
-    runCount: runCountRow?.runCount ?? 0,
+    runCount,
     totalSamples,
     version: options.version,
     attributionVersion: options.attributionVersion,
@@ -165,8 +442,10 @@ export async function cardLeaderboard(
     simType: options.simType,
     cards: rows.map((row) => {
       const seen = row.seen;
+      const handAppearances = row.openedCopies + row.drawn;
       return {
         cardId: row.cardId,
+        deckCopies: Math.round(row.copies / Math.max(runCount, 1)),
         copies: row.copies,
         opened: row.opened,
         openedCopies: row.openedCopies,
@@ -177,7 +456,7 @@ export async function cardLeaderboard(
         damage: row.damage,
         openRate: totalSamples > 0 ? row.opened / totalSamples : 0,
         seeRate: totalSamples > 0 ? row.seen / totalSamples : 0,
-        playWhenSeen: seen > 0 ? row.plays / seen : 0,
+        playWhenInHand: handAppearances > 0 ? row.plays / handAppearances : 0,
         damageWhenSeen: seen > 0 ? row.damageWhenSeenSum / seen : 0,
         damageShare: totalDamage > 0 ? row.damage / totalDamage : 0,
       };
@@ -229,40 +508,49 @@ export async function listRunHistory(
   db: Kysely<Database>,
   options: {
     deckHash?: string;
+    deckId?: string;
     kind?: "evaluate" | "optimize";
     limit?: number;
   },
 ) {
   let query = db
     .selectFrom("runs")
+    .leftJoin("decks", "decks.id", "runs.deck_id")
     .select([
-      "id",
-      "kind",
-      "status",
-      "sim_type as simType",
-      "deck_hash as deckHash",
-      "root_seed as rootSeed",
-      "samples",
-      "mean_damage as meanDamage",
-      "p50_damage as p50Damage",
-      "best_score as bestScore",
-      "rules_version as rulesVersion",
-      "sampler_version as samplerVersion",
-      "attribution_version as attributionVersion",
-      "card_digest as cardDigest",
-      "build",
-      "started_at as startedAt",
-      "completed_at as completedAt",
-      "elapsed_ms as elapsedMs",
+      "runs.id as id",
+      "runs.kind as kind",
+      "runs.status as status",
+      "runs.sim_type as simType",
+      "runs.deck_hash as deckHash",
+      "runs.deck_id as deckId",
+      "decks.name as deckName",
+      "runs.root_seed as rootSeed",
+      "runs.samples as samples",
+      "runs.mean_damage as meanDamage",
+      "runs.p50_damage as p50Damage",
+      "runs.best_score as bestScore",
+      "runs.rules_version as rulesVersion",
+      "runs.sampler_version as samplerVersion",
+      "runs.attribution_version as attributionVersion",
+      "runs.card_digest as cardDigest",
+      "runs.build as build",
+      "runs.started_at as startedAt",
+      "runs.completed_at as completedAt",
+      "runs.elapsed_ms as elapsedMs",
     ])
-    .orderBy("started_at", "desc")
+    .orderBy("runs.started_at", "desc")
     .limit(options.limit ?? 100);
 
-  if (options.deckHash) {
-    query = query.where("deck_hash", "=", options.deckHash);
+  if (options.deckId) {
+    query = query.where("runs.deck_id", "=", options.deckId);
+  } else if (options.deckHash) {
+    query = query.where("runs.deck_hash", "=", options.deckHash);
   }
   if (options.kind) {
-    query = query.where("kind", "=", options.kind);
+    query = query.where("runs.kind", "=", options.kind);
+  } else {
+    // Hand-solver rows are stored for line IDs; keep them out of the history UI.
+    query = query.where("runs.kind", "in", ["evaluate", "optimize"]);
   }
 
   return query.execute();

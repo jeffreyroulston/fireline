@@ -28,7 +28,10 @@ export type CardId =
   | "tweedledum"
   | "vermilion_decree"
   | "xiao_qiao"
-  | "hot_cake";
+  | "hot_cake"
+  | "uncanny_realization"
+  | "virgil"
+  | "vicious_slice";
 
 export type MaterialId =
   | "impact_hammer"
@@ -62,6 +65,12 @@ export interface CardDef {
   unique?: boolean;
   /** Assassin class bonus +power while champion is Assassin. */
   assassinPowerBonus?: number;
+  /** Assassin class bonus stealth while champion is Assassin. */
+  assassinStealth?: boolean;
+  /** Automaton subtype — required for Command Automaton attacks. */
+  automaton?: boolean;
+  /** Fast activation — playable during materialize before recollect. */
+  fast?: boolean;
   floatingMemory?: boolean;
   kindle?: number;
   prepare?: number;
@@ -163,6 +172,8 @@ export interface SolveResult {
   nodes: number;
   memoEntries?: number;
   elapsedMs?: number;
+  /** `run_samples.id` when the API persisted this solve. */
+  sampleId?: string | null;
   distribution?: DamageDistribution;
   twoPass?: TwoPassResult;
   cardStats?: CardStat[];
@@ -182,7 +193,7 @@ export interface CardStat {
   openRate: number;
   seeRate: number;
   playRate: number;
-  playWhenSeen: number;
+  playWhenInHand: number;
   damageWhenSeen: number;
   damageWhenSeenSum: number;
   damagePerPlay: number;
