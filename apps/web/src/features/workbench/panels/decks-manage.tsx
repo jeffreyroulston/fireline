@@ -14,6 +14,7 @@ import {
   type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
+import { DeckPicker, SectionHeading } from "../ui";
 
 const CARD_PREVIEW_DELAY_MS = 450;
 const CARD_PREVIEW_WIDTH = 312;
@@ -254,10 +255,10 @@ function DeckCardGrid({ cards }: { cards: CardId[] }) {
 
   return (
     <div className="deck-card-panel">
-      <div className="section-heading">
-        <span>CARD LIST</span>
-        <strong>{entries.length} unique</strong>
-      </div>
+      <SectionHeading
+        title="CARD LIST"
+        meta={<strong>{entries.length} unique</strong>}
+      />
       <div className="deck-card-grid" aria-label="Deck card images">
         {entries.map(({ id, qty }) => (
           <DeckCardFace key={id} id={id} qty={qty} />
@@ -319,29 +320,25 @@ export function DecksManage({
   return (
     <div className="mode-layout line-mode">
       <div className="controls">
-        <div className="section-heading">
-          <span>DECKS</span>
-          <strong>
-            {recognizedDeckCount} recognized
-            {underSize ? ` · need ${MIN_VALID_DECK_SIZE}+` : ""}
-          </strong>
-        </div>
+        <SectionHeading
+          title="DECKS"
+          meta={
+            <strong>
+              {recognizedDeckCount} recognized
+              {underSize ? ` · need ${MIN_VALID_DECK_SIZE}+` : ""}
+            </strong>
+          }
+        />
         <div className="deck-toolbar">
-          <label className="deck-picker">
-            Saved deck
-            <select
-              value={activeDeck?.id ?? ""}
-              onChange={(event) => onSwitchDeck(event.target.value)}
-              disabled={decks.length === 0}
-            >
-              {decks.map((deck) => (
-                <option key={deck.id} value={deck.id}>
-                  {deck.name}
-                  {isDeckCardlistLocked(deck) ? " · locked" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+          <DeckPicker
+            label="Saved deck"
+            decks={decks}
+            value={activeDeck?.id ?? ""}
+            onChange={onSwitchDeck}
+            formatOption={(deck) =>
+              `${deck.name}${isDeckCardlistLocked(deck) ? " · locked" : ""}`
+            }
+          />
           <div className="deck-toolbar-actions">
             <button
               className="secondary-action"
@@ -355,6 +352,7 @@ export function DecksManage({
               type="button"
               onClick={onDuplicateDeck}
               disabled={!activeDeck}
+              autoComplete="off"
             >
               Duplicate
             </button>
@@ -363,6 +361,7 @@ export function DecksManage({
               type="button"
               onClick={onStartRename}
               disabled={!activeDeck}
+              autoComplete="off"
             >
               Rename
             </button>
@@ -371,6 +370,7 @@ export function DecksManage({
               type="button"
               onClick={onDeleteDeck}
               disabled={!activeDeck}
+              autoComplete="off"
             >
               Delete
             </button>
@@ -405,9 +405,13 @@ export function DecksManage({
           </form>
         )}
         {locked && (
-          <p className="deck-lock-note">
-            Cardlist locked after simulations — duplicate to edit.
-          </p>
+          <div className="deck-lock-note" role="status">
+            <strong>Cardlist locked</strong>
+            <p>
+              This deck has simulations, so its list cannot be edited.
+              Duplicate it to make changes.
+            </p>
+          </div>
         )}
         <label className="deck-input">
           One card per line, with quantity
@@ -420,10 +424,10 @@ export function DecksManage({
         </label>
         {issues.length > 0 && (
           <div className="deck-issues" role="alert">
-            <div className="section-heading">
-              <span>ISSUES</span>
-              <strong>{issues.length}</strong>
-            </div>
+            <SectionHeading
+              title="ISSUES"
+              meta={<strong>{issues.length}</strong>}
+            />
             <ul>
               {issues.map((issue, index) => (
                 <li key={`${issue}-${index}`}>{issue}</li>

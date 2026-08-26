@@ -50,7 +50,7 @@ import {
 } from "./panels/ratios";
 import { HistoryPanel } from "./panels/history";
 import { InfoPanel } from "./panels/info";
-import { ActionBar } from "./ui";
+import { ActionBar, PanelTopline } from "./ui";
 import type {
   DeckResult,
   JobType,
@@ -633,6 +633,10 @@ export default function FizaWorkbench() {
     setLineResult({
       simType: deckResult?.simType ?? simType,
       maxDamage: sample.damage,
+      endInfluence:
+        sample.endInfluence ??
+        sample.twoPass?.brick.endInfluence ??
+        0,
       steps: sample.steps,
       nodes: sample.nodes,
       distribution: sample.distribution,
@@ -801,14 +805,11 @@ export default function FizaWorkbench() {
 
         {tab === "ratios" && (
           <div className="ratio-mode">
-            <div className="ratio-topline">
-              <p className="kicker">DECK REFINEMENT</p>
-              <p>
-                Start from a saved list, open cut budgets on cards you may trim,
-                pick a global replacement pool for the freed slots, then sample
-                unique legal lists by opening-hand damage.
-              </p>
-            </div>
+            <PanelTopline kicker="DECK REFINEMENT">
+              Start from a saved list, open cut budgets on cards you may trim,
+              pick a global replacement pool for the freed slots, then sample
+              unique legal lists by opening-hand damage.
+            </PanelTopline>
             <RatioDeckPicker
               decks={decks}
               activeDeck={activeDeck}

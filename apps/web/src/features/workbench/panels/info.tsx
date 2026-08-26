@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { PanelTopline, SectionHeading } from "../ui";
 
 function InfoCard({
   title,
@@ -20,20 +21,18 @@ function InfoCard({
 export function InfoPanel() {
   return (
     <div className="info-mode">
-      <div className="info-topline">
-        <p className="kicker">ABOUT FIRELINE</p>
-        <h2>How the simulator works</h2>
-        <p>
-          Fireline finds maximum-damage Fire Assassin (FiZa) lines for Grand
-          Archive. It solves opening hands, samples deck damage, and explores
-          ratio space under Mathematically Correct FiZa drill assumptions.
-        </p>
-      </div>
+      <PanelTopline
+        variant="info"
+        kicker="ABOUT FIRELINE"
+        title="How the simulator works"
+      >
+        Fireline finds maximum-damage Fire Assassin (FiZa) lines for Grand
+        Archive. It solves opening hands, samples deck damage, and explores
+        ratio space under Mathematically Correct FiZa drill assumptions.
+      </PanelTopline>
 
       <section className="info-section">
-        <div className="section-heading">
-          <span>WORKBENCH</span>
-        </div>
+        <SectionHeading title="WORKBENCH" />
         <div className="info-card-grid">
           <InfoCard title="Hand solver">
             Draw a random 7-card opening hand from a saved deck, or build one
@@ -62,9 +61,7 @@ export function InfoPanel() {
       </section>
 
       <section className="info-section">
-        <div className="section-heading">
-          <span>SIMULATION TYPES</span>
-        </div>
+        <SectionHeading title="SIMULATION TYPES" />
         <div className="info-card-grid">
           <InfoCard title="Fire brick (default)">
             Deterministic max-damage search. Every unknown draw is treated as an
@@ -81,15 +78,14 @@ export function InfoPanel() {
             Runs a fire-brick pass (unknown draws stay blank) and one oracle
             pass (a single shuffled remaining deck is known). Compare both
             lines; the gap is the value of knowing upcoming draws. Headline
-            damage is the brick pass.
+            damage is the brick pass. The card leaderboard can show Fire brick,
+            Oracle, or Combined attribution.
           </InfoCard>
         </div>
       </section>
 
       <section className="info-section">
-        <div className="section-heading">
-          <span>SHARED SETTINGS</span>
-        </div>
+        <SectionHeading title="SHARED SETTINGS" />
         <div className="info-card-grid info-card-grid-3">
           <InfoCard title="Turn order">
             Going first or second. On turn one while going first, champion and
@@ -107,9 +103,7 @@ export function InfoPanel() {
       </section>
 
       <section className="info-section">
-        <div className="section-heading">
-          <span>RULES AND ASSUMPTIONS</span>
-        </div>
+        <SectionHeading title="RULES AND ASSUMPTIONS" />
         <article className="info-card info-card-wide">
           <h3>What the model assumes</h3>
           <ul className="info-list">
@@ -120,8 +114,13 @@ export function InfoPanel() {
             <li>
               The opponent kills non-stealth, non-immortal allies during its main
               phase. Assassin class stealth (e.g. Tweedledum) only counts after
-              Zander has leveled. Fast allies (e.g. Virgil) can activate during
+              Zander has leveled. Fast cards (e.g. Virgil, Demolition) can
+              activate during
               materialize before recollect.
+            </li>
+            <li>
+              Playing a Unique ally while a copy is already on the board kills
+              the existing copy (graveyard, including On Death).
             </li>
             <li>
               Poisoned Dagger activates as soon as it is ready, so amplify
@@ -151,9 +150,7 @@ export function InfoPanel() {
       </section>
 
       <section className="info-section">
-        <div className="section-heading">
-          <span>READING RESULTS</span>
-        </div>
+        <SectionHeading title="READING RESULTS" />
         <article className="info-card info-card-wide">
           <h3>How to read the output</h3>
           <ul className="info-list">

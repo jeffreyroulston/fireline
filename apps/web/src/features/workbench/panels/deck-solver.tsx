@@ -3,7 +3,11 @@
 import { useEffect, useState } from "react";
 import { type SimType } from "@/lib/engine";
 import type { SavedDeck } from "@/lib/decks";
-import { CardStatsPanel, McRangeColumn, RunSettings, ActionBar } from "../ui";
+import { DamageBars, DamageReadout, DeckPicker, McRangeColumn, RunSettings, ActionBar, SectionHeading, StatLine } from "../ui";
+import {
+  CardLeaderboardPanel,
+  leaderboardFromCardStats,
+} from "./card-leaderboard";
 import { SampleDetailPanel } from "./sample-detail";
 import { SIM_TYPE_LABELS, type DeckResult, type SampleHand } from "../types";
 import type { OptimizeProgress } from "@/lib/api/useRun";
@@ -50,25 +54,17 @@ export function DeckEditor({
   return (
     <div className="mode-layout line-mode">
       <div className="controls">
-        <div className="section-heading">
-          <span>DECK DAMAGE</span>
-          <strong>{recognizedDeckCount} recognized</strong>
-        </div>
+        <SectionHeading
+          title="DECK DAMAGE"
+          meta={<strong>{recognizedDeckCount} recognized</strong>}
+        />
         <div className="deck-toolbar">
-          <label className="deck-picker">
-            Saved deck
-            <select
-              value={activeDeck?.id ?? ""}
-              onChange={(event) => onSwitchDeck(event.target.value)}
-              disabled={decks.length === 0}
-            >
-              {decks.map((deck) => (
-                <option key={deck.id} value={deck.id}>
-                  {deck.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <DeckPicker
+            label="Saved deck"
+            decks={decks}
+            value={activeDeck?.id ?? ""}
+            onChange={onSwitchDeck}
+          />
         </div>
         <p className="deck-select-hint">
           Manage and edit lists on the Decks tab. This tab only runs damage
@@ -128,11 +124,12 @@ export function DeckResults({
   if (!result) {
     return (
       <aside className="result-rail">
-        <div className="damage-readout">
-          <span>EXPECTED DAMAGE</span>
-          <strong className={busy ? "calculating" : ""}>—</strong>
-          <small>Sample opening hands to build the distribution</small>
-        </div>
+        <DamageReadout
+          label="EXPECTED DAMAGE"
+          value="—"
+          detail="Sample opening hands to build the distribution"
+          calculating={busy}
+        />
       </aside>
     );
   }
@@ -167,10 +164,10 @@ export function DeckResults({
 
   return (
     <aside className="result-rail" aria-live="polite">
-      <div className="damage-readout">
-        <span>{isTwoPass ? "BRICK / ORACLE MEAN" : "MEAN DAMAGE"}</span>
-        <strong>
-          {isTwoPass ? (
+      <DamageReadout
+        label={isTwoPass ? "BRICK / ORACLE MEAN" : "MEAN DAMAGE"}
+        value={
+          isTwoPass ? (
             <>
               {brickMean.toFixed(1)}
               <span className="damage-split">/</span>
@@ -178,53 +175,57 @@ export function DeckResults({
             </>
           ) : (
             result.mean.toFixed(1)
-          )}
-        </strong>
-        <small>
-          {SIM_TYPE_LABELS[mode]} · {result.samples} opening hands · click a
-          bar for the line
-        </small>
-      </div>
+          )
+        }
+        detail={
+          <>
+            {SIM_TYPE_LABELS[mode]} · {result.samples} opening hands · click a
+            bar for the line
+          </>
+        }
+      />
       {isTwoPass ? (
-        <div className="stat-line">
-          <span>
-            <small>BRICK RANGE</small>
-            <b>
-              {Math.min(...twoPassPairs.map((p) => p.brick))}–
-              {Math.max(...twoPassPairs.map((p) => p.brick))}
-            </b>
-          </span>
-          <span>
-            <small>ORACLE RANGE</small>
-            <b>
-              {Math.min(...twoPassPairs.map((p) => p.oracle))}–
-              {Math.max(...twoPassPairs.map((p) => p.oracle))}
-            </b>
-          </span>
-          <span>
-            <small>GAP MEAN</small>
-            <b>
-              {(oracleMean - brickMean).toFixed(1)}
-            </b>
-          </span>
-        </div>
+        <StatLine
+          items={[
+            {
+              label: "BRICK RANGE",
+              value: (
+                <>
+                  {Math.min(...twoPassPairs.map((p) => p.brick))}–
+                  {Math.max(...twoPassPairs.map((p) => p.brick))}
+                </>
+              ),
+            },
+            {
+              label: "ORACLE RANGE",
+              value: (
+                <>
+                  {Math.min(...twoPassPairs.map((p) => p.oracle))}–
+                  {Math.max(...twoPassPairs.map((p) => p.oracle))}
+                </>
+              ),
+            },
+            {
+              label: "GAP MEAN",
+              value: (oracleMean - brickMean).toFixed(1),
+            },
+          ]}
+        />
       ) : (
-        <div className="stat-line">
-          <span>
-            <small>P50</small>
-            <b>{result.p50}</b>
-          </span>
-          <span>
-            <small>P90</small>
-            <b>{result.p90}</b>
-          </span>
-          <span>
-            <small>RANGE</small>
-            <b>
-              {result.min}–{result.max}
-            </b>
-          </span>
-        </div>
+        <StatLine
+          items={[
+            { label: "P50", value: result.p50 },
+            { label: "P90", value: result.p90 },
+            {
+              label: "RANGE",
+              value: (
+                <>
+                  {result.min}–{result.max}
+                </>
+              ),
+            },
+          ]}
+        />
       )}
       {isTwoPass && (
         <div className="bar-legend" aria-hidden>
@@ -233,83 +234,109 @@ export function DeckResults({
         </div>
       )}
       {result.cardStats && result.cardStats.length > 0 && (
-        <CardStatsPanel
-          stats={result.cardStats}
-          samples={result.samples}
-          mode={mode}
+        <CardLeaderboardPanel
+          {...(isTwoPass &&
+          result.brickCardStats &&
+          result.brickCardStats.length > 0 &&
+          result.oracleCardStats &&
+          result.oracleCardStats.length > 0
+            ? {
+                twoPassLeaderboards: {
+                  combined: leaderboardFromCardStats(
+                    result.cardStats,
+                    result.samples * 2,
+                  ),
+                  brick: leaderboardFromCardStats(
+                    result.brickCardStats,
+                    result.samples,
+                  ),
+                  oracle: leaderboardFromCardStats(
+                    result.oracleCardStats,
+                    result.samples,
+                  ),
+                },
+              }
+            : {
+                leaderboard: leaderboardFromCardStats(
+                  result.cardStats,
+                  result.samples,
+                ),
+              })}
         />
       )}
-      <div
-        className={`damage-bars ${isTwoPass ? "is-two-pass" : ""} ${isMonteCarlo ? "is-monte-carlo" : ""}`}
-        aria-label={
-          isTwoPass
-            ? "Two-pass brick and oracle damage by opening hand"
-            : isMonteCarlo
-              ? "Monte Carlo P50 damage with min–max range"
-              : "Sample damage distribution"
-        }
-      >
-        {isTwoPass
-          ? twoPassPairs.map((pair, index) => (
-              <button
-                type="button"
-                className={`bar-pair ${selected === index ? "is-selected" : ""}`}
-                key={`two-pass-${pair.brick}-${pair.oracle}-${index}`}
-                title={`Hand ${index + 1}: brick ${pair.brick} / oracle ${pair.oracle}`}
-                aria-pressed={selected === index}
-                onClick={() => {
-                  setSelected((current) => (current === index ? null : index));
-                  setMcIndex(null);
-                }}
-              >
-                <span
-                  className="bar-pair-brick"
-                  style={{
-                    height: `${Math.max(8, (pair.brick / max) * 100)}%`,
-                  }}
-                />
-                <span
-                  className="bar-pair-oracle"
-                  style={{
-                    height: `${Math.max(8, (pair.oracle / max) * 100)}%`,
-                  }}
-                />
-              </button>
-            ))
-          : isMonteCarlo
-            ? mcRanges.map((range, index) => (
-                <McRangeColumn
-                  key={`mc-range-${range.min}-${range.max}-${index}`}
-                  min={range.min}
-                  max={range.max}
-                  p50={range.p50}
-                  scaleMax={max}
-                  selected={selected === index}
-                  title={`Hand ${index + 1}: P50 ${range.p50} (${range.min}–${range.max})`}
-                  onClick={() => {
-                    setSelected((current) =>
-                      current === index ? null : index,
-                    );
-                    setMcIndex(null);
-                  }}
-                />
-              ))
-            : result.damages.map((damage, index) => (
-                <button
-                  type="button"
-                  className={selected === index ? "is-selected" : undefined}
-                  key={`${damage}-${index}`}
-                  style={{ height: `${Math.max(8, (damage / max) * 100)}%` }}
-                  title={`Hand ${index + 1}: ${damage} damage`}
-                  aria-pressed={selected === index}
-                  onClick={() => {
-                    setSelected((current) =>
-                      current === index ? null : index,
-                    );
-                    setMcIndex(null);
-                  }}
-                />
-              ))}
+      <div className="damage-bars-scroll">
+        {isTwoPass || isMonteCarlo ? (
+          <div
+            className={`damage-bars ${isTwoPass ? "is-two-pass" : ""} ${isMonteCarlo ? "is-monte-carlo" : ""}`}
+            aria-label={
+              isTwoPass
+                ? "Two-pass brick and oracle damage by opening hand"
+                : "Monte Carlo P50 damage with min–max range"
+            }
+          >
+            {isTwoPass
+              ? twoPassPairs.map((pair, index) => (
+                  <button
+                    type="button"
+                    className={`bar-pair ${selected === index ? "is-selected" : ""}`}
+                    key={`two-pass-${pair.brick}-${pair.oracle}-${index}`}
+                    title={`Hand ${index + 1}: brick ${pair.brick} / oracle ${pair.oracle}`}
+                    aria-pressed={selected === index}
+                    onClick={() => {
+                      setSelected((current) =>
+                        current === index ? null : index,
+                      );
+                      setMcIndex(null);
+                    }}
+                  >
+                    <span
+                      className="bar-pair-brick"
+                      style={{
+                        height: `${Math.max(8, (pair.brick / max) * 100)}%`,
+                      }}
+                    />
+                    <span
+                      className="bar-pair-oracle"
+                      style={{
+                        height: `${Math.max(8, (pair.oracle / max) * 100)}%`,
+                      }}
+                    />
+                  </button>
+                ))
+              : mcRanges.map((range, index) => (
+                  <McRangeColumn
+                    key={`mc-range-${range.min}-${range.max}-${index}`}
+                    min={range.min}
+                    max={range.max}
+                    p50={range.p50}
+                    scaleMax={max}
+                    selected={selected === index}
+                    title={`Hand ${index + 1}: P50 ${range.p50} (${range.min}–${range.max})`}
+                    onClick={() => {
+                      setSelected((current) =>
+                        current === index ? null : index,
+                      );
+                      setMcIndex(null);
+                    }}
+                  />
+                ))}
+          </div>
+        ) : (
+          <DamageBars
+            ariaLabel="Sample damage distribution"
+            scaleMax={max}
+            selectedKey={selected != null ? String(selected) : null}
+            onSelect={(key) => {
+              setSelected(key == null ? null : Number(key));
+              setMcIndex(null);
+            }}
+            items={result.damages.map((damage, index) => ({
+              key: String(index),
+              damage,
+              title: `Hand ${index + 1}: ${damage} damage`,
+            }))}
+          />
+        )}
       </div>
 
       {sample && (

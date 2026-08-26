@@ -11,9 +11,9 @@ import {
 } from "@/lib/engine";
 import type { SavedDeck } from "@/lib/decks";
 import type { OptimizeProgress } from "@/lib/api/useRun";
+import { DeckPicker, OptimizeProgressPanel, SectionHeading } from "../ui";
 import { progressPercent } from "../lib/progress-percent";
 import type { RatioRefineCriteria, RatioResult } from "../types";
-import { OptimizeProgressPanel } from "../ui";
 import { REFINE_COPY_CEILING } from "../utils";
 
 function copyPartialCounts(
@@ -77,28 +77,16 @@ export function RatioDeckPicker({
 }) {
   return (
     <div className="ratio-deck-picker">
-      <div className="section-heading">
-        <span>BASE DECK</span>
-        <strong>{recognizedCount} recognized</strong>
-      </div>
-      <label className="deck-picker">
-        Saved deck to refine
-        <select
-          value={activeDeck?.id ?? ""}
-          onChange={(event) => onSwitchDeck(event.target.value)}
-          disabled={decks.length === 0}
-        >
-          {decks.length === 0 ? (
-            <option value="">No saved decks</option>
-          ) : (
-            decks.map((deck) => (
-              <option key={deck.id} value={deck.id}>
-                {deck.name}
-              </option>
-            ))
-          )}
-        </select>
-      </label>
+      <SectionHeading
+        title="BASE DECK"
+        meta={<strong>{recognizedCount} recognized</strong>}
+      />
+      <DeckPicker
+        label="Saved deck to refine"
+        decks={decks}
+        value={activeDeck?.id ?? ""}
+        onChange={onSwitchDeck}
+      />
       {recognizedCount > 0 && recognizedCount < MIN_VALID_DECK_SIZE && (
         <p className="ratio-refine-hint" role="status">
           Need at least {MIN_VALID_DECK_SIZE} recognized cards to sample ratios.
@@ -124,10 +112,7 @@ export function CutBudgetPanel({
   if (rows.length === 0) {
     return (
       <div className="ratio-cut-panel">
-        <div className="section-heading">
-          <span>CUT BUDGETS</span>
-          <strong>0 cards</strong>
-        </div>
+        <SectionHeading title="CUT BUDGETS" meta={<strong>0 cards</strong>} />
         <p className="ratio-refine-hint">Select a saved deck to flag cuts.</p>
       </div>
     );
@@ -135,12 +120,14 @@ export function CutBudgetPanel({
 
   return (
     <div className="ratio-cut-panel">
-      <div className="section-heading">
-        <span>CUT BUDGETS</span>
-        <strong>
-          {rows.filter((id) => (cutBudgets[id] ?? 0) > 0).length} flexible
-        </strong>
-      </div>
+      <SectionHeading
+        title="CUT BUDGETS"
+        meta={
+          <strong>
+            {rows.filter((id) => (cutBudgets[id] ?? 0) > 0).length} flexible
+          </strong>
+        }
+      />
       <p className="ratio-refine-hint">
         Raise “cut up to” on cards you are willing to trim. Freed slots are
         filled from the replacement pool below.
@@ -199,10 +186,10 @@ export function ReplacementPoolPanel({
 
   return (
     <div className="ratio-replace-panel">
-      <div className="section-heading">
-        <span>REPLACEMENT POOL</span>
-        <strong>{allowedCount} allowed</strong>
-      </div>
+      <SectionHeading
+        title="REPLACEMENT POOL"
+        meta={<strong>{allowedCount} allowed</strong>}
+      />
       <p className="ratio-refine-hint">
         Any freed cut slots can be filled by these cards. Cards already at 4
         copies are hidden. Set a max copies per card (default 4).
@@ -424,12 +411,14 @@ export function RatioResults({
     <section className="ratio-results" aria-live="polite">
       {criteria && (
         <div className="ratio-criteria">
-          <div className="section-heading">
-            <span>TEST CRITERIA</span>
-            <strong>
-              {cutRows.length} cut · {addRows.length} add
-            </strong>
-          </div>
+          <SectionHeading
+            title="TEST CRITERIA"
+            meta={
+              <strong>
+                {cutRows.length} cut · {addRows.length} add
+              </strong>
+            }
+          />
           <div className="ratio-criteria-cols">
             <div>
               <p className="ratio-criteria-label">Could be lowered</p>

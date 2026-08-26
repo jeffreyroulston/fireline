@@ -3,4 +3,8 @@ import type { DamageDistribution } from "./DamageDistribution.js";
 import type { Step } from "./Step.js";
 import type { TwoPassResult } from "./TwoPassResult.js";
 
-export type SampleHand = { hand: Array<string>, damage: number, steps: Array<Step>, nodes: bigint, distribution: DamageDistribution | null, twoPass: TwoPassResult | null, };
+export type SampleHand = { hand: Array<string>, damage: number, 
+/**
+ * Final hand + memory on the chosen max-damage line.
+ */
+endInfluence: number, steps: Array<Step>, nodes: bigint, distribution: DamageDistribution | null, twoPass: TwoPassResult | null, };

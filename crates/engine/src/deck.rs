@@ -55,6 +55,8 @@ pub struct DeckEvalRequest {
 pub struct SampleHand {
     pub hand: Vec<&'static str>,
     pub damage: u8,
+    /// Final hand + memory on the chosen max-damage line.
+    pub end_influence: u8,
     pub steps: Vec<Step>,
     pub nodes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,6 +66,9 @@ pub struct SampleHand {
     #[serde(skip)]
     #[cfg_attr(feature = "ts", ts(skip))]
     pub line_stats: crate::stats::LineCardStats,
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub brick_line_stats: Option<crate::stats::LineCardStats>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -89,6 +94,10 @@ pub struct DeckEvalResult {
     pub effective: EffectiveRequest,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub card_stats: Vec<crate::stats::CardStat>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub brick_card_stats: Vec<crate::stats::CardStat>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub oracle_card_stats: Vec<crate::stats::CardStat>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -289,11 +298,13 @@ fn solve_sample_hand(
     Ok(SampleHand {
         hand: drawn.iter().map(|card| card.id()).collect(),
         damage,
+        end_influence: result.end_influence,
         steps: result.steps,
         nodes: result.nodes,
         distribution: result.distribution,
         two_pass: result.two_pass,
         line_stats: result.line_stats,
+        brick_line_stats: result.brick_line_stats,
     })
 }
 
@@ -545,6 +556,9 @@ fn evaluate_hands(
     let mut damages = Vec::with_capacity(draws.len());
     let mut total_nodes = 0;
     let mut stats_acc = crate::stats::DeckStatAccumulator::with_deck(&deck);
+    let mut brick_stats_acc = crate::stats::DeckStatAccumulator::with_deck(&deck);
+    let mut oracle_stats_acc = crate::stats::DeckStatAccumulator::with_deck(&deck);
+    let is_two_pass = request.sim_type == SimType::TwoPass;
 
     for draw in &draws {
         let cache_key = (request.sim_type, draw.key);
@@ -555,7 +569,16 @@ fn evaluate_hands(
         sample.hand = draw.drawn.iter().map(|card| card.id()).collect();
         total_nodes += sample.nodes;
         damages.push(sample.damage);
-        stats_acc.add_sample(&draw.drawn, &sample.line_stats);
+        if is_two_pass {
+            if let Some(brick_line) = sample.brick_line_stats.as_ref() {
+                brick_stats_acc.add_sample(&draw.drawn, brick_line);
+                stats_acc.add_sample(&draw.drawn, brick_line);
+            }
+            oracle_stats_acc.add_sample(&draw.drawn, &sample.line_stats);
+            stats_acc.add_sample(&draw.drawn, &sample.line_stats);
+        } else {
+            stats_acc.add_sample(&draw.drawn, &sample.line_stats);
+        }
         hands.push(sample);
     }
 
@@ -606,6 +629,16 @@ fn evaluate_hands(
             budget,
         },
         card_stats: stats_acc.finish(),
+        brick_card_stats: if is_two_pass {
+            brick_stats_acc.finish()
+        } else {
+            Vec::new()
+        },
+        oracle_card_stats: if is_two_pass {
+            oracle_stats_acc.finish()
+        } else {
+            Vec::new()
+        },
     })
 }
 

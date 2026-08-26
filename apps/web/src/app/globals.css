@@ -25,6 +25,18 @@
   box-sizing: border-box;
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 html {
   background: var(--paper);
 }
@@ -253,9 +265,52 @@ textarea:focus-visible {
 
 .hand-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 9px;
-  min-height: 220px;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  min-height: 0;
+}
+
+.hand-card {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+button.hand-card {
+  cursor: pointer;
+}
+
+.hand-card img,
+.hand-card-fallback {
+  display: block;
+  width: 100%;
+  aspect-ratio: 5 / 7;
+  object-fit: cover;
+  border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  transition:
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.hand-card-fallback {
+  min-height: 0;
+  pointer-events: none;
+}
+
+button.hand-card:hover img,
+button.hand-card:hover .hand-card-fallback {
+  transform: translateY(-3px);
+  border-color: var(--ink);
+}
+
+button.hand-card:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--signal) 60%, transparent);
+  outline-offset: 2px;
 }
 
 .card-tile {
@@ -554,6 +609,40 @@ input {
 
 .combat-tape .tape-heading {
   margin-bottom: 12px;
+}
+
+.tape-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+
+.tape-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.tape-search-count {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.combat-tape > ol.is-searching > li.is-search-match .tape-row {
+  background: color-mix(in srgb, var(--signal) 16%, transparent);
+  box-shadow: inset 3px 0 0 var(--signal);
+}
+
+.combat-tape > ol.is-searching > li.is-search-match.is-expanded .tape-row {
+  background: color-mix(in srgb, var(--signal) 22%, var(--paper));
 }
 
 .combat-tape .empty-note {
@@ -867,6 +956,10 @@ input {
   line-height: 1.6;
 }
 
+.hand-strip > .empty-note {
+  grid-column: 1 / -1;
+}
+
 .deck-input textarea {
   min-height: 310px;
   resize: vertical;
@@ -901,7 +994,6 @@ input {
 }
 
 .deck-select-hint,
-.deck-lock-note,
 .deck-validity-warning {
   margin: 12px 0 0;
   font-size: 13px;
@@ -914,6 +1006,26 @@ input {
 }
 
 .deck-lock-note {
+  margin: 12px 0 18px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--ember-dark) 45%, transparent);
+  border-left: 4px solid var(--ember);
+  background: color-mix(in srgb, var(--ember) 12%, white);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ember-dark);
+}
+
+.deck-lock-note strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.deck-lock-note p {
+  margin: 0;
   color: var(--ink);
 }
 
@@ -1182,6 +1294,34 @@ input {
   gap: 5px;
   margin-top: 32px;
   border-bottom: 1px solid var(--ink);
+}
+
+.damage-bars-scroll {
+  max-width: 100%;
+  margin-top: 32px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 4px 8px;
+  scrollbar-gutter: stable;
+}
+
+.damage-bars-scroll .damage-bars {
+  margin-top: 0;
+  width: max-content;
+  min-width: 100%;
+}
+
+.damage-bars-scroll .damage-bars > button:not(.mc-range-col):not(.bar-pair),
+.damage-bars-scroll .damage-bars .mc-range-col {
+  flex: 0 0 auto;
+  width: 14px;
+  max-width: none;
+}
+
+.damage-bars-scroll .damage-bars .bar-pair {
+  flex: 0 0 auto;
+  width: 28px;
+  max-width: none;
 }
 
 .damage-bars > button,
@@ -1750,12 +1890,73 @@ input {
   overflow: visible;
 }
 
-.history-leaderboard tbody tr {
+.leaderboard-pass-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 16px 12px;
+  padding: 3px;
+  width: fit-content;
+  max-width: 100%;
+  background: color-mix(in srgb, var(--ink) 6%, var(--paper));
+}
+
+.history-panel.history-leaderboard .leaderboard-pass-tabs {
+  margin: 0 0 12px;
+}
+
+.result-rail > .history-panel.history-leaderboard {
+  margin-top: 18px;
+}
+
+.leaderboard-pass-tab {
+  appearance: none;
+  border: 0;
+  margin: 0;
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.leaderboard-pass-tab:hover,
+.leaderboard-pass-tab:focus-visible {
+  color: var(--ink);
+}
+
+.leaderboard-pass-tab.is-active {
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+.leaderboard-pass-tab.is-brick.is-active {
+  color: var(--ember-dark);
+}
+
+.leaderboard-pass-tab.is-oracle.is-active {
+  color: var(--oracle-dark);
+}
+
+.history-leaderboard.is-selectable tbody tr {
   cursor: pointer;
 }
 
 .history-leaderboard tbody tr.is-selected td {
   background: color-mix(in srgb, var(--ember) 14%, var(--paper));
+}
+
+.card-stats.history-leaderboard {
+  padding-bottom: 8px;
+}
+
+.card-stats.history-leaderboard .history-table-wrap,
+.card-stats.history-leaderboard .history-card-legend,
+.card-stats.history-leaderboard .leaderboard-pass-tabs {
+  margin: 0 16px 12px;
 }
 
 .history-copy-col {
@@ -2693,10 +2894,6 @@ input {
   .mode-switcher button {
     min-width: 122px;
     padding-inline: 12px;
-  }
-
-  .hand-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .tape-expand-stats {

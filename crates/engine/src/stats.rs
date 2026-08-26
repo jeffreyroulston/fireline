@@ -7,13 +7,24 @@ use serde::Serialize;
 #[cfg(feature = "ts")]
 use ts_rs::TS;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct LineCardStats {
     pub plays: [u32; CARD_COUNT],
     pub attacks: [u32; CARD_COUNT],
     pub damage: [u32; CARD_COUNT],
     /// Mid-line draws (not opening hand). Bricks ignored.
     pub drawn: [u32; CARD_COUNT],
+}
+
+impl Default for LineCardStats {
+    fn default() -> Self {
+        Self {
+            plays: [0; CARD_COUNT],
+            attacks: [0; CARD_COUNT],
+            damage: [0; CARD_COUNT],
+            drawn: [0; CARD_COUNT],
+        }
+    }
 }
 
 impl LineCardStats {
@@ -55,6 +66,7 @@ impl LineCardStats {
                 // Weapon-only champion swing; materials are not card-stat rows.
                 self.record_draws_in_steps(steps);
             }
+            Action::Pass => self.attribute_on_death_steps(steps, before_damage),
             _ => self.record_draws_in_steps(steps),
         }
     }
@@ -64,12 +76,29 @@ impl LineCardStats {
         for step in steps {
             let delta = u32::from(step.damage.saturating_sub(prev));
             prev = step.damage;
-            if delta > 0
-                && (step.action.contains("On-Enter")
+            if delta > 0 {
+                if let Some(dead) = parse_on_death(&step.action) {
+                    self.damage[dead.index()] += delta;
+                } else if step.action.contains("On-Enter")
                     || step.action.starts_with("Racoo")
-                    || step.action.starts_with("Rococo"))
-            {
-                self.damage[card.index()] += delta;
+                    || step.action.starts_with("Rococo")
+                {
+                    self.damage[card.index()] += delta;
+                }
+            }
+            self.record_draw_label(&step.action);
+        }
+    }
+
+    fn attribute_on_death_steps(&mut self, steps: &[Step], before_damage: u8) {
+        let mut prev = before_damage;
+        for step in steps {
+            let delta = u32::from(step.damage.saturating_sub(prev));
+            prev = step.damage;
+            if delta > 0 {
+                if let Some(card) = parse_on_death(&step.action) {
+                    self.damage[card.index()] += delta;
+                }
             }
             self.record_draw_label(&step.action);
         }
@@ -175,7 +204,6 @@ pub struct CardStat {
     pub damage_share: f64,
 }
 
-#[derive(Default)]
 pub struct DeckStatAccumulator {
     samples: u32,
     copies: [u8; CARD_COUNT],
@@ -185,6 +213,20 @@ pub struct DeckStatAccumulator {
     line: LineCardStats,
     /// Per-sample damage attributed (summed) for damage_when_seen.
     damage_when_seen_sum: [u32; CARD_COUNT],
+}
+
+impl Default for DeckStatAccumulator {
+    fn default() -> Self {
+        Self {
+            samples: 0,
+            copies: [0; CARD_COUNT],
+            opened: [0; CARD_COUNT],
+            opened_copies: [0; CARD_COUNT],
+            seen: [0; CARD_COUNT],
+            line: LineCardStats::default(),
+            damage_when_seen_sum: [0; CARD_COUNT],
+        }
+    }
 }
 
 impl DeckStatAccumulator {
@@ -290,6 +332,13 @@ impl DeckStatAccumulator {
     }
 }
 
+fn parse_on_death(label: &str) -> Option<Card> {
+    let name = label.strip_suffix(" On Death")?;
+    ALL_CARDS
+        .into_iter()
+        .find(|card| card.name() == name)
+}
+
 fn parse_attack_from(label: &str) -> Option<Card> {
     let rest = label.strip_prefix("Attack from ")?;
     let name = rest.split(" (").next()?;
@@ -371,6 +420,14 @@ fn parse_drawn_cards(label: &str) -> Vec<Card> {
             }
         }
     }
+    // "Vermilion Decree (Imbue, draw Short)" / with optional Kindle suffix
+    if let Some(idx) = label.find("Vermilion Decree (Imbue, draw ") {
+        let rest = &label[idx + "Vermilion Decree (Imbue, draw ".len()..];
+        let short = rest.split([' ', ')']).next().unwrap_or("");
+        if let Some(card) = card_from_short(short) {
+            found.push(card);
+        }
+    }
     found
 }
 
@@ -386,6 +443,12 @@ mod tests {
     fn parses_recollect_draw() {
         let cards = parse_drawn_cards("Recollect (draw Arthu)");
         assert_eq!(cards, vec![Card::Arthur]);
+    }
+
+    #[test]
+    fn parses_vermilion_decree_imbue_draw() {
+        let cards = parse_drawn_cards("Vermilion Decree (Imbue, draw HCake)");
+        assert_eq!(cards, vec![Card::HotCake]);
     }
 
     #[test]

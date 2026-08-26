@@ -33,6 +33,9 @@ const CARD_IMAGE_PATHS: Partial<Record<CardId, string>> = {
   uncanny_realization: "/cards/images/zUDtPfAGKw.jpg",
   virgil: "/cards/images/yX6Ri6mnDg.jpg",
   vicious_slice: "/cards/images/5m6sqe6kd7.jpg",
+  manic_zealot: "/cards/images/rcdzdhnf18.jpg",
+  demolition: "/cards/images/o56arxxu83.jpg",
+  surging_bolt: "/cards/images/h5lahljr2d.jpg",
 };
 
 export function cardImageUrl(id: CardId): string | null {

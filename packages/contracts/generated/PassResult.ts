@@ -2,4 +2,8 @@
 import type { CardStat } from "./CardStat.js";
 import type { Step } from "./Step.js";
 
-export type PassResult = { maxDamage: number, steps: Array<Step>, nodes: bigint, memoEntries: number, cardStats: Array<CardStat>, };
+export type PassResult = { maxDamage: number, 
+/**
+ * Final hand + memory size on the chosen max-damage line.
+ */
+endInfluence: number, steps: Array<Step>, nodes: bigint, memoEntries: number, cardStats: Array<CardStat>, };

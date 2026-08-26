@@ -5,11 +5,11 @@ use serde::Serialize;
 use ts_rs::TS;
 
 /// Manual bump when solver / model semantics change.
-pub const RULES_VERSION: u32 = 8;
+pub const RULES_VERSION: u32 = 18;
 /// Manual bump when RNG, shuffle, or seed derivation changes.
 pub const SAMPLER_VERSION: u32 = 1;
 /// Manual bump when stats attribution labels or parsing changes.
-pub const ATTRIBUTION_VERSION: u32 = 3;
+pub const ATTRIBUTION_VERSION: u32 = 6;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,6 +85,8 @@ pub const fn compute_card_digest() -> u64 {
         hash = fnv1a_bool(hash, card.floating_memory());
         hash = fnv1a_byte(hash, card.kindle());
         hash = fnv1a_byte(hash, card.prepare());
+        hash = fnv1a_byte(hash, card.imbue());
+        hash = fnv1a_byte(hash, card.on_death_damage());
         index += 1;
     }
     hash
@@ -96,7 +98,7 @@ mod tests {
 
     #[test]
     fn card_digest_is_stable() {
-        assert_eq!(compute_card_digest(), 567_310_198_894_808_703);
+        assert_eq!(compute_card_digest(), 4_306_072_725_806_065_367);
     }
 
     #[test]

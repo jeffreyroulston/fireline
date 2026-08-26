@@ -314,6 +314,34 @@ export const CARDS: Record<CardId, CardDef> = {
     element: "norm",
     power: 2,
   },
+  manic_zealot: {
+    id: "manic_zealot",
+    name: "Manic Zealot",
+    short: "Manic",
+    kind: "ally",
+    cost: 2,
+    element: "fire",
+    power: 1,
+    life: 1,
+    automaton: true,
+  },
+  demolition: {
+    id: "demolition",
+    name: "Demolition",
+    short: "Demol",
+    kind: "action",
+    cost: 3,
+    element: "fire",
+    fast: true,
+  },
+  surging_bolt: {
+    id: "surging_bolt",
+    name: "Surging Bolt",
+    short: "SBolt",
+    kind: "action",
+    cost: 3,
+    element: "fire",
+  },
 };
 
 export const CARD_LIST = Object.values(CARDS);

@@ -123,6 +123,20 @@ function formatTick(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
+function buildXTicks(domain: [number, number]): number[] {
+  const [lo, hi] = domain;
+  const start = Math.ceil(lo);
+  const end = Math.floor(hi);
+  if (end < start) {
+    return [Math.round(lo)];
+  }
+  const ticks: number[] = [];
+  for (let value = start; value <= end; value += 1) {
+    ticks.push(value);
+  }
+  return ticks;
+}
+
 function MarkerLabelBackground({
   viewBox,
   dy = 0,
@@ -248,6 +262,8 @@ export function DamageBellCurve({
     return [Math.floor(lo - 1), Math.ceil(hi + 1)] as [number, number];
   }, [seriesList]);
 
+  const xTicks = useMemo(() => buildXTicks(domain), [domain]);
+
   if (data.length === 0 || seriesList.length === 0) {
     return null;
   }
@@ -342,6 +358,7 @@ export function DamageBellCurve({
             dataKey="damage"
             type="number"
             domain={domain}
+            ticks={xTicks}
             axisLine={{ stroke: INK, strokeWidth: 1 }}
             tickLine={false}
             tick={{
@@ -351,7 +368,7 @@ export function DamageBellCurve({
               dy: 4,
             }}
             tickFormatter={formatTick}
-            tickCount={5}
+            interval={0}
             height={X_AXIS_HEIGHT}
             padding={{ left: 4, right: 12 }}
           />

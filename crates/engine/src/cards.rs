@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "ts")]
 use ts_rs::TS;
 
-pub const CARD_COUNT: usize = 31;
+pub const CARD_COUNT: usize = 34;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -40,6 +40,9 @@ pub enum Card {
     UncannyRealization = 28,
     Virgil = 29,
     ViciousSlice = 30,
+    ManicZealot = 31,
+    Demolition = 32,
+    SurgingBolt = 33,
 }
 
 impl Card {
@@ -81,6 +84,9 @@ impl Card {
             Self::UncannyRealization => "uncanny_realization",
             Self::Virgil => "virgil",
             Self::ViciousSlice => "vicious_slice",
+            Self::ManicZealot => "manic_zealot",
+            Self::Demolition => "demolition",
+            Self::SurgingBolt => "surging_bolt",
         }
     }
 
@@ -117,6 +123,9 @@ impl Card {
             Self::UncannyRealization => "Uncanny Realization",
             Self::Virgil => "Virgil, Altered Future",
             Self::ViciousSlice => "Vicious Slice",
+            Self::ManicZealot => "Manic Zealot",
+            Self::Demolition => "Demolition",
+            Self::SurgingBolt => "Surging Bolt",
         }
     }
 
@@ -153,6 +162,9 @@ impl Card {
             Self::UncannyRealization => "UReal",
             Self::Virgil => "Virgi",
             Self::ViciousSlice => "VSlic",
+            Self::ManicZealot => "Manic",
+            Self::Demolition => "Demol",
+            Self::SurgingBolt => "SBolt",
         }
     }
 
@@ -170,7 +182,9 @@ impl Card {
             | Self::RendingFlames
             | Self::VeteranBlazebearer
             | Self::HotCake
-            | Self::Virgil => 3,
+            | Self::Virgil
+            | Self::Demolition
+            | Self::SurgingBolt => 3,
             Self::KingdomInformant
             | Self::ClumsyApprentice
             | Self::SableRemnant
@@ -181,7 +195,8 @@ impl Card {
             | Self::FieryInterference
             | Self::PepperedChef
             | Self::PlantedExplosive
-            | Self::XiaoQiao => 2,
+            | Self::XiaoQiao
+            | Self::ManicZealot => 2,
             Self::IgnitedStab
             | Self::BlazingThrow
             | Self::MarchHare
@@ -216,7 +231,8 @@ impl Card {
             | Self::CorhaziCourier
             | Self::MarchHare
             | Self::Rococo
-            | Self::XiaoQiao => 1,
+            | Self::XiaoQiao
+            | Self::ManicZealot => 1,
             _ => 0,
         }
     }
@@ -242,6 +258,7 @@ impl Card {
                 | Self::Tweedledum
                 | Self::XiaoQiao
                 | Self::Virgil
+                | Self::ManicZealot
         )
     }
 
@@ -265,6 +282,8 @@ impl Card {
                 | Self::MarkTheTarget
                 | Self::PlantedExplosive
                 | Self::VermilionDecree
+                | Self::Demolition
+                | Self::SurgingBolt
         )
     }
 
@@ -285,7 +304,7 @@ impl Card {
     }
 
     pub const fn is_automaton(self) -> bool {
-        matches!(self, Self::Rococo | Self::Virgil)
+        matches!(self, Self::Rococo | Self::Virgil | Self::ManicZealot)
     }
 
     /// Command Automaton attacks must be performed by an Automaton ally.
@@ -294,7 +313,7 @@ impl Card {
     }
 
     pub const fn is_fast(self) -> bool {
-        matches!(self, Self::Virgil)
+        matches!(self, Self::Virgil | Self::Demolition)
     }
 
     pub const fn is_stealth(self) -> bool {
@@ -343,6 +362,22 @@ impl Card {
         }
     }
 
+    /// Imbue N: card is imbued when at least N Fire cards are reserved for its cost.
+    pub const fn imbue(self) -> u8 {
+        match self {
+            Self::VermilionDecree | Self::SurgingBolt => 3,
+            _ => 0,
+        }
+    }
+
+    /// Damage dealt to each champion when this ally dies to the graveyard.
+    pub const fn on_death_damage(self) -> u8 {
+        match self {
+            Self::ManicZealot => 2,
+            _ => 0,
+        }
+    }
+
     pub const fn life(self) -> Option<u8> {
         Some(match self {
             Self::Brick => return None,
@@ -364,6 +399,7 @@ impl Card {
             Self::Tweedledum => 2,
             Self::XiaoQiao => 2,
             Self::Virgil => 2,
+            Self::ManicZealot => 1,
             _ => return None,
         })
     }
@@ -434,9 +470,12 @@ pub const ALL_CARDS: [Card; CARD_COUNT] = [
     Card::UncannyRealization,
     Card::Virgil,
     Card::ViciousSlice,
+    Card::ManicZealot,
+    Card::Demolition,
+    Card::SurgingBolt,
 ];
 
-pub const PLAYABLE_CARDS: [Card; 30] = [
+pub const PLAYABLE_CARDS: [Card; 33] = [
     Card::Arthur,
     Card::KingdomInformant,
     Card::ClumsyApprentice,
@@ -467,6 +506,9 @@ pub const PLAYABLE_CARDS: [Card; 30] = [
     Card::UncannyRealization,
     Card::Virgil,
     Card::ViciousSlice,
+    Card::ManicZealot,
+    Card::Demolition,
+    Card::SurgingBolt,
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -586,6 +628,9 @@ pub fn parse_card(value: &str) -> Option<Card> {
         "uncanny_realization" => Card::UncannyRealization,
         "virgil" | "virgil_altered_future" => Card::Virgil,
         "vicious_slice" => Card::ViciousSlice,
+        "manic_zealot" => Card::ManicZealot,
+        "demolition" => Card::Demolition,
+        "surging_bolt" => Card::SurgingBolt,
         _ => return None,
     })
 }

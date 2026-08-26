@@ -4,4 +4,4 @@ import type { EffectiveRequest } from "./EffectiveRequest.js";
 import type { SampleHand } from "./SampleHand.js";
 import type { SimType } from "./SimType.js";
 
-export type DeckEvalResult = { simType: SimType, samples: number, damages: Array<number>, hands: Array<SampleHand>, mean: number, p50: number, p90: number, max: number, min: number, uniqueHands: number, statesSearched: bigint, elapsedMs: number, effective: EffectiveRequest, cardStats: Array<CardStat>, };
+export type DeckEvalResult = { simType: SimType, samples: number, damages: Array<number>, hands: Array<SampleHand>, mean: number, p50: number, p90: number, max: number, min: number, uniqueHands: number, statesSearched: bigint, elapsedMs: number, effective: EffectiveRequest, cardStats: Array<CardStat>, brickCardStats: Array<CardStat>, oracleCardStats: Array<CardStat>, };

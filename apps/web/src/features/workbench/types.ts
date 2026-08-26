@@ -14,6 +14,7 @@ export type JobType = "solve" | "evaluate" | "optimize";
 export interface SampleHand {
   hand: CardId[];
   damage: number;
+  endInfluence?: number;
   steps: LineStep[];
   nodes: number;
   /** `run_samples.id` when loaded from the database. */
@@ -33,6 +34,8 @@ export interface DeckResult {
   max: number;
   min: number;
   cardStats?: CardStat[];
+  brickCardStats?: CardStat[];
+  oracleCardStats?: CardStat[];
 }
 
 export const SIM_TYPE_LABELS: Record<SimType, string> = {

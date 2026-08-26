@@ -31,7 +31,10 @@ export type CardId =
   | "hot_cake"
   | "uncanny_realization"
   | "virgil"
-  | "vicious_slice";
+  | "vicious_slice"
+  | "manic_zealot"
+  | "demolition"
+  | "surging_bolt";
 
 export type MaterialId =
   | "impact_hammer"
@@ -139,9 +142,11 @@ export interface LineStep {
 
 export interface PassResult {
   maxDamage: number;
+  endInfluence: number;
   steps: LineStep[];
   nodes: number;
   memoEntries?: number;
+  cardStats?: CardStat[];
 }
 
 export interface McRollout {
@@ -168,6 +173,7 @@ export interface TwoPassResult {
 export interface SolveResult {
   simType: SimType;
   maxDamage: number;
+  endInfluence: number;
   steps: LineStep[];
   nodes: number;
   memoEntries?: number;

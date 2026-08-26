@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { LineStep } from "@/lib/engine";
+import { stepMatchesQuery } from "../lib/step-matches-query";
 import { PHASE_LABELS, type StepDiffInfo } from "../types";
 import { parseZoneCards } from "../lib/parse-zone-cards";
 
@@ -10,20 +11,23 @@ export function CombatTape({
   resetKey,
   stepDiff,
   diffPerspective,
+  query = "",
 }: {
   steps: LineStep[];
   resetKey: unknown;
   stepDiff?: StepDiffInfo[];
   diffPerspective?: "oracle" | "brick";
+  query?: string;
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
+  const searching = query.trim().length > 0;
 
   useEffect(() => {
     setExpanded(null);
   }, [resetKey]);
 
   return (
-    <ol>
+    <ol className={searching ? "is-searching" : undefined}>
       {steps.map((step, index) => {
         const open = expanded === index;
         const memoryCards = parseZoneCards(step.memory, "MEM");
@@ -33,15 +37,18 @@ export function CombatTape({
         const diff = stepDiff?.[index];
         const isOracleDiff =
           diffPerspective === "oracle" && diff?.mark === "added";
-        const diffClass = isOracleDiff ? "is-diff-added" : undefined;
+        const matches = searching && stepMatchesQuery(step, query);
+        const className =
+          [
+            open ? "is-expanded" : undefined,
+            isOracleDiff ? "is-diff-added" : undefined,
+            matches ? "is-search-match" : undefined,
+          ]
+            .filter(Boolean)
+            .join(" ") || undefined;
 
         return (
-          <li
-            key={`${step.display}-${index}`}
-            className={[open ? "is-expanded" : undefined, diffClass]
-              .filter(Boolean)
-              .join(" ") || undefined}
-          >
+          <li key={`${step.display}-${index}`} className={className}>
             <button
               type="button"
               className="tape-row"

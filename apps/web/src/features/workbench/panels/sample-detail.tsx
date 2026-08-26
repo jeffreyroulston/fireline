@@ -1,8 +1,8 @@
 "use client";
 
-import { CARDS, type DamageDistribution, type SimType } from "@/lib/engine";
+import type { DamageDistribution, SimType } from "@/lib/engine";
 import type { SampleHand } from "../types";
-import { OptimalLine, TwoPassCompare } from "../ui";
+import { DamageBars, HandCard, OptimalLine, SectionHeading, TwoPassCompare } from "../ui";
 
 export function MonteCarloSampleDetail({
   distribution,
@@ -19,19 +19,18 @@ export function MonteCarloSampleDetail({
 
   return (
     <div className="mc-sample-block">
-      <div className="damage-bars short" aria-label="Hand rollouts">
-        {distribution.damages.map((damage, index) => (
-          <button
-            type="button"
-            className={selected === index ? "is-selected" : undefined}
-            key={`sample-mc-${damage}-${index}`}
-            style={{ height: `${Math.max(8, (damage / scaleMax) * 100)}%` }}
-            title={`Rollout ${index + 1}: ${damage}`}
-            aria-pressed={selected === index}
-            onClick={() => onSelect(selected === index ? null : index)}
-          />
-        ))}
-      </div>
+      <DamageBars
+        className="short"
+        ariaLabel="Hand rollouts"
+        scaleMax={scaleMax}
+        selectedKey={selected != null ? String(selected) : null}
+        onSelect={(key) => onSelect(key == null ? null : Number(key))}
+        items={distribution.damages.map((damage, index) => ({
+          key: String(index),
+          damage,
+          title: `Rollout ${index + 1}: ${damage}`,
+        }))}
+      />
       {rollout && (
         <OptimalLine
           label={`ROLLOUT ${selected! + 1} · ${rollout.damage} DAMAGE`}
@@ -64,29 +63,22 @@ export function SampleDetailPanel({
 }) {
   return (
     <div className="sample-detail">
-      <div className="section-heading">
-        <span>
-          HAND {handNumber} ·{" "}
-          {sample.twoPass
-            ? `${sample.twoPass.brick.maxDamage} / ${sample.twoPass.oracle.maxDamage} DAMAGE`
-            : sample.distribution
-              ? `${sample.distribution.min}–${sample.distribution.max} (P50 ${sample.distribution.p50})`
-              : `${sample.damage} DAMAGE`}
-        </span>
-        <strong>{sample.nodes.toLocaleString()} states</strong>
-      </div>
+      <SectionHeading
+        title={
+          <>
+            HAND {handNumber} ·{" "}
+            {sample.twoPass
+              ? `${sample.twoPass.brick.maxDamage} / ${sample.twoPass.oracle.maxDamage} DAMAGE`
+              : sample.distribution
+                ? `${sample.distribution.min}–${sample.distribution.max} (P50 ${sample.distribution.p50})`
+                : `${sample.damage} DAMAGE`}
+          </>
+        }
+        meta={<strong>{sample.nodes.toLocaleString()} states</strong>}
+      />
       <div className="hand-strip sample-hand" aria-label="Sampled opening hand">
         {sample.hand.map((id, index) => (
-          <div
-            className={`card-tile is-${CARDS[id]?.element ?? "norm"}`}
-            key={`${id}-${index}`}
-          >
-            <span>{CARDS[id]?.element === "fire" ? "FIRE" : "NORM"}</span>
-            <b>{CARDS[id]?.name ?? id}</b>
-            <small>
-              {CARDS[id]?.cost ?? "?"}R · {CARDS[id]?.kind ?? "card"}
-            </small>
-          </div>
+          <HandCard key={`${id}-${index}`} id={id} />
         ))}
       </div>
       {showSendToSolver && onSendToHandSolver && (

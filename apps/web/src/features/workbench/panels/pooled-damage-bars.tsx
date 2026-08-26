@@ -6,6 +6,7 @@ import { fetchPooledSample } from "@/lib/api/client";
 import type { SampleHand } from "../types";
 import type { BarCardHighlight } from "./card-leaderboard";
 import { SampleDetailPanel } from "./sample-detail";
+import { DamageBars } from "../ui";
 
 export interface PooledSampleBar {
   key: string;
@@ -89,33 +90,27 @@ export function PooledDamageBarChart({
   return (
     <div className="history-bars-panel">
       <div className="history-bars-scroll" aria-label="Pooled sample damage">
-        <div className="damage-bars short history-bars">
-          {bars.map((bar) => {
+        <DamageBars
+          className="short history-bars"
+          scaleMax={sampleMax}
+          selectedKey={selectedKey}
+          onSelect={onSelectedKeyChange}
+          items={bars.map((bar) => {
             const cardHighlight = cardHighlights[bar.key];
-            return (
-              <button
-                type="button"
-                key={bar.key}
-                className={[
-                  selectedKey === bar.key ? "is-selected" : "",
-                  cardHighlight === "in_hand" ? "is-card-in-hand" : "",
-                  cardHighlight === "played" ? "is-card-played" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ") || undefined}
-                style={{
-                  height: `${Math.max(8, (bar.damage / sampleMax) * 100)}%`,
-                }}
-                title={bar.label}
-                aria-pressed={selectedKey === bar.key}
-                disabled={!bar.runId}
-                onClick={() => {
-                  onSelectedKeyChange(selectedKey === bar.key ? null : bar.key);
-                }}
-              />
-            );
+            return {
+              key: bar.key,
+              damage: bar.damage,
+              title: bar.label,
+              disabled: !bar.runId,
+              className: [
+                cardHighlight === "in_hand" ? "is-card-in-hand" : "",
+                cardHighlight === "played" ? "is-card-played" : "",
+              ]
+                .filter(Boolean)
+                .join(" ") || undefined,
+            };
           })}
-        </div>
+        />
       </div>
       <p className="sim-hint history-bars-hint">
         Click a bar to inspect the optimal line for that opening hand.

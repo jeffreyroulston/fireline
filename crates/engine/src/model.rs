@@ -17,6 +17,12 @@ pub const MAT_SOULKNIFE: u8 = 1 << 4;
 pub const ALL_MATERIALS: u8 = MAT_HAMMER | MAT_BLADE | MAT_DAGGER | MAT_ZANDER | MAT_SOULKNIFE;
 pub const DRAW_QUEUE_CAP: usize = 64;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PaymentMode {
+    Default,
+    FireOnly,
+}
+
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub struct Ally(u32);
@@ -292,6 +298,12 @@ impl State {
         self.turn >= self.max_turns
     }
 
+    /// Cards left in hand plus memory (Rococo-style influence).
+    #[inline]
+    pub const fn influence(self) -> u8 {
+        self.hand_len.saturating_add(self.memory_len)
+    }
+
     #[inline]
     pub const fn is_assassin(self) -> bool {
         self.champion_level >= 1
@@ -371,37 +383,100 @@ impl State {
         marched
     }
 
+    pub fn fire_hand_count(self) -> u8 {
+        let mut total = 0_u8;
+        for card in ALL_CARDS {
+            if card.is_fire() {
+                total = total.saturating_add(self.hand[card.index()]);
+            }
+        }
+        total
+    }
+
+    pub fn non_fire_hand_count(self) -> u8 {
+        self.hand_len.saturating_sub(self.fire_hand_count())
+    }
+
     pub fn pay_reserve(&mut self, cost: u8) -> bool {
+        self.pay_reserve_with(cost, PaymentMode::Default).is_some()
+    }
+
+    /// Reserve cost using only Fire cards (for Imbue).
+    pub fn pay_reserve_fire_only(&mut self, cost: u8) -> bool {
+        self.pay_reserve_with(cost, PaymentMode::FireOnly).is_some()
+    }
+
+    /// Pays reserve. Returns `Some(all_fire)` when successful (`all_fire` = every reserved card is Fire).
+    fn pay_reserve_with(&mut self, cost: u8, mode: PaymentMode) -> Option<bool> {
         if self.hand_len < cost {
-            return false;
+            return None;
+        }
+        if mode == PaymentMode::FireOnly && self.fire_hand_count() < cost {
+            return None;
         }
         let snapshot = *self;
         let mut selected = [0_u8; CARD_COUNT];
         for _ in 0..cost {
-            let Some(card) = snapshot.best_payment_with_selected(&selected) else {
-                return false;
-            };
+            let card = snapshot.best_payment_with_selected(&selected, mode)?;
             selected[card.index()] += 1;
         }
+        let mut all_fire = true;
         for card in ALL_CARDS {
             let count = selected[card.index()];
             if count == 0 {
                 continue;
+            }
+            if !card.is_fire() {
+                all_fire = false;
             }
             self.hand[card.index()] -= count;
             self.memory[card.index()] += count;
             self.hand_len -= count;
             self.memory_len += count;
         }
-        true
+        Some(all_fire || cost == 0)
     }
 
     pub fn pay_with_kindle(&mut self, cost: u8, kindle: u8) -> bool {
-        let kindle = kindle.min(cost).min(self.fire_gy);
-        let reserve = cost.saturating_sub(kindle);
-        if !self.pay_reserve(reserve) {
+        self.pay_with_kindle_with(cost, kindle, PaymentMode::Default)
+            .is_some()
+    }
+
+    pub fn pay_with_kindle_fire_only(&mut self, cost: u8, kindle: u8) -> bool {
+        self.pay_with_kindle_with(cost, kindle, PaymentMode::FireOnly)
+            .is_some()
+    }
+
+    /// Pays reserve/kindle for an Imbue N action.
+    /// `force_fire` uses Fire-only payment (the explicit imbue line).
+    /// Returns whether the card is imbued after payment.
+    pub fn pay_imbue_cost(&mut self, cost: u8, imbue_n: u8, kindle: u8, force_fire: bool) -> bool {
+        let kindle_capped = kindle.min(cost).min(self.fire_gy);
+        let reserve = cost.saturating_sub(kindle_capped);
+        if imbue_n == 0 {
+            let _ = self.pay_with_kindle(cost, kindle);
             return false;
         }
+        if force_fire {
+            let _ = self.pay_with_kindle_fire_only(cost, kindle);
+            return reserve >= imbue_n;
+        }
+        let all_fire = self
+            .pay_with_kindle_with(cost, kindle, PaymentMode::Default)
+            .unwrap_or(false);
+        reserve >= imbue_n && all_fire
+    }
+
+    /// Pays with kindle. Returns `Some(reserve_all_fire)` on success.
+    fn pay_with_kindle_with(
+        &mut self,
+        cost: u8,
+        kindle: u8,
+        mode: PaymentMode,
+    ) -> Option<bool> {
+        let kindle = kindle.min(cost).min(self.fire_gy);
+        let reserve = cost.saturating_sub(kindle);
+        let all_fire = self.pay_reserve_with(reserve, mode)?;
         let marched = self.banish_fire_from_gy(kindle, true);
         for _ in 0..marched {
             let already = self.allies[..self.ally_len as usize]
@@ -411,14 +486,19 @@ impl State {
                 self.add_ally(Card::MarchHare, true, false);
             }
         }
-        true
+        Some(all_fire)
     }
 
-    fn best_payment_with_selected(self, selected: &[u8; CARD_COUNT]) -> Option<Card> {
+    fn best_payment_with_selected(
+        self,
+        selected: &[u8; CARD_COUNT],
+        mode: PaymentMode,
+    ) -> Option<Card> {
         ALL_CARDS
             .iter()
             .copied()
             .filter(|card| self.hand[card.index()] > selected[card.index()])
+            .filter(|card| mode != PaymentMode::FireOnly || card.is_fire())
             .max_by_key(|&card| self.payment_score(card))
     }
 
@@ -446,18 +526,26 @@ impl State {
         self.ally_len += 1;
     }
 
-    pub fn remove_ally(&mut self, index: usize, to_gy: bool) {
+    pub fn remove_ally(&mut self, index: usize, to_gy: bool) -> Option<Card> {
         if index >= self.ally_len as usize {
-            return;
+            return None;
         }
         let removed = self.allies[index];
+        let card = removed.card();
         if to_gy {
-            self.send_to_gy(removed.card());
+            self.send_to_gy(card);
+            let death = card.on_death_damage();
+            if death > 0 {
+                self.add_damage(death);
+                // On Death hits each champion (self + opponent).
+                self.champion_damaged = true;
+            }
         }
         let len = self.ally_len as usize;
         self.allies.copy_within(index + 1..len, index);
         self.allies[len - 1] = Ally::default();
         self.ally_len -= 1;
+        Some(card)
     }
 
     pub fn arthur_rested(self) -> bool {
@@ -534,7 +622,7 @@ impl State {
         }
         let snapshot = *self;
         let selected = [0_u8; CARD_COUNT];
-        let card = snapshot.best_payment_with_selected(&selected)?;
+        let card = snapshot.best_payment_with_selected(&selected, PaymentMode::Default)?;
         self.remove_hand(card);
         self.send_to_gy(card);
         Some(card)
@@ -566,14 +654,22 @@ impl State {
         self.agility = 0;
     }
 
-    pub fn enemy_cull(&mut self) {
+    pub fn enemy_cull(&mut self, mut steps: Option<&mut Vec<Step>>) {
         let mut index = 0;
         while index < self.ally_len as usize {
             let ally = self.allies[index];
             if ally.immortal() || self.ally_has_stealth(ally) {
                 index += 1;
-            } else {
-                self.remove_ally(index, true);
+            } else if let Some(card) = self.remove_ally(index, true) {
+                if let Some(steps) = steps.as_deref_mut() {
+                    if card.on_death_damage() > 0 {
+                        steps.push(Step::new(
+                            *self,
+                            "EMai",
+                            format!("{} On Death", card.name()),
+                        ));
+                    }
+                }
             }
         }
     }
@@ -647,6 +743,9 @@ pub enum Action {
         card: Card,
         kindle: u8,
         prepared: bool,
+    /// For Imbue cards: pay Fire-only (guarantees imbue when legal).
+    /// When false, use normal reserve payment and imbue only if that payment is all Fire.
+    imbue: bool,
     },
     BlazingThrow,
     MercenaryBlade,
@@ -797,6 +896,8 @@ pub enum SimType {
 )]
 pub struct PassResult {
     pub max_damage: u8,
+    /// Final hand + memory size on the chosen max-damage line.
+    pub end_influence: u8,
     pub steps: Vec<Step>,
     pub nodes: u64,
     pub memo_entries: usize,
@@ -856,6 +957,8 @@ pub struct TwoPassResult {
 pub struct SolveResult {
     pub sim_type: SimType,
     pub max_damage: u8,
+    /// Final hand + memory size on the chosen max-damage line.
+    pub end_influence: u8,
     pub steps: Vec<Step>,
     pub nodes: u64,
     pub memo_entries: usize,
@@ -867,10 +970,14 @@ pub struct SolveResult {
     pub two_pass: Option<TwoPassResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub card_stats: Vec<crate::stats::CardStat>,
-    /// Raw line counters for the headline path (skipped in JSON).
+    /// Raw line counters for the headline / oracle path (skipped in JSON).
     #[serde(skip)]
     #[cfg_attr(feature = "ts", ts(skip))]
     pub line_stats: crate::stats::LineCardStats,
+    /// Brick-pass line counters for two-pass (skipped in JSON).
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub brick_line_stats: Option<crate::stats::LineCardStats>,
 }
 
 const fn default_true() -> bool {

@@ -6,4 +6,8 @@ import type { SimType } from "./SimType.js";
 import type { Step } from "./Step.js";
 import type { TwoPassResult } from "./TwoPassResult.js";
 
-export type SolveResult = { simType: SimType, maxDamage: number, steps: Array<Step>, nodes: bigint, memoEntries: number, elapsedMs: number, effective: EffectiveRequest, distribution: DamageDistribution | null, twoPass: TwoPassResult | null, cardStats: Array<CardStat>, };
+export type SolveResult = { simType: SimType, maxDamage: number, 
+/**
+ * Final hand + memory size on the chosen max-damage line.
+ */
+endInfluence: number, steps: Array<Step>, nodes: bigint, memoEntries: number, elapsedMs: number, effective: EffectiveRequest, distribution: DamageDistribution | null, twoPass: TwoPassResult | null, cardStats: Array<CardStat>, };

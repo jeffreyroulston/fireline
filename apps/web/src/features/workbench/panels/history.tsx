@@ -27,6 +27,7 @@ import {
   type PooledSampleBar,
 } from "./pooled-damage-bars";
 import { SIM_TYPE_LABELS } from "../types";
+import { PanelTopline, SectionHeading, StatLine } from "../ui";
 
 function groupKey(group: VersionGroup): string {
   return `${group.rulesVersion}:${group.samplerVersion}:${group.cardDigest}:${group.attributionVersion}`;
@@ -577,13 +578,10 @@ export function HistoryPanel({
 
   return (
     <div className="history-mode">
-      <div className="ratio-topline">
-        <p className="kicker">CROSS-RUN ANALYSIS</p>
-        <p>
-          Review completed sims, then pool damage and card rates only within one
-          engine version. Simulation types stay on separate charts.
-        </p>
-      </div>
+      <PanelTopline kicker="CROSS-RUN ANALYSIS">
+        Review completed sims, then pool damage and card rates only within one
+        engine version. Simulation types stay on separate charts.
+      </PanelTopline>
 
       <div className="history-controls">
         <label>
@@ -652,10 +650,10 @@ export function HistoryPanel({
       )}
 
       <section className="history-panel">
-        <div className="section-heading">
-          <span>RUN HISTORY</span>
-          <strong>{runs.length} runs</strong>
-        </div>
+        <SectionHeading
+          title="RUN HISTORY"
+          meta={<strong>{runs.length} runs</strong>}
+        />
         {runs.length === 0 ? (
           <p className="history-empty">
             No completed runs yet
@@ -716,33 +714,36 @@ export function HistoryPanel({
       {pooled?.distribution && baselineDist && (
         <div className="history-analysis">
           <section className="history-panel history-pooled">
-            <div className="section-heading history-pooled-heading">
-              <span>POOLED DAMAGE</span>
-              <div className="history-pooled-heading-meta">
-                <strong>
-                  {comparing && compareDist
-                    ? `${pooled.runCount} vs ${comparePooled?.runCount ?? 0} runs · ${baselineDist.totalSamples} vs ${compareDist.totalSamples} samples`
-                    : `${pooled.runCount} runs · ${baselineDist.totalSamples} samples`}
-                </strong>
-                {compareOpen ? (
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={clearCompare}
-                  >
-                    Clear compare
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={openCompare}
-                  >
-                    Compare
-                  </button>
-                )}
-              </div>
-            </div>
+            <SectionHeading
+              className="history-pooled-heading"
+              title="POOLED DAMAGE"
+              meta={
+                <div className="history-pooled-heading-meta">
+                  <strong>
+                    {comparing && compareDist
+                      ? `${pooled.runCount} vs ${comparePooled?.runCount ?? 0} runs · ${baselineDist.totalSamples} vs ${compareDist.totalSamples} samples`
+                      : `${pooled.runCount} runs · ${baselineDist.totalSamples} samples`}
+                  </strong>
+                  {compareOpen ? (
+                    <button
+                      type="button"
+                      className="secondary-action"
+                      onClick={clearCompare}
+                    >
+                      Clear compare
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="secondary-action"
+                      onClick={openCompare}
+                    >
+                      Compare
+                    </button>
+                  )}
+                </div>
+              }
+            />
 
             {compareOpen && (
               <div className="history-compare-panel">
@@ -886,26 +887,21 @@ export function HistoryPanel({
                 </div>
               </>
             ) : (
-              <div className="stat-line">
-                <span>
-                  <small>MEAN</small>
-                  <b>{baselineDist.mean.toFixed(1)}</b>
-                </span>
-                <span>
-                  <small>P50</small>
-                  <b>{baselineDist.p50}</b>
-                </span>
-                <span>
-                  <small>P90</small>
-                  <b>{baselineDist.p90}</b>
-                </span>
-                <span>
-                  <small>RANGE</small>
-                  <b>
-                    {baselineDist.min}–{baselineDist.max}
-                  </b>
-                </span>
-              </div>
+              <StatLine
+                items={[
+                  { label: "MEAN", value: baselineDist.mean.toFixed(1) },
+                  { label: "P50", value: baselineDist.p50 },
+                  { label: "P90", value: baselineDist.p90 },
+                  {
+                    label: "RANGE",
+                    value: (
+                      <>
+                        {baselineDist.min}–{baselineDist.max}
+                      </>
+                    ),
+                  },
+                ]}
+              />
             )}
 
             <div
