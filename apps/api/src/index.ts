@@ -20,7 +20,7 @@ async function main() {
 
   const gate = new ConcurrencyGate(concurrency);
   const dispatcher = new RunDispatcher(db, workerBase, gate);
-  const app = createApp({ db, workerBase, dispatcher });
+  const app = createApp({ db, workerBase, dispatcher, maxConcurrency: concurrency });
 
   console.log(`data API listening on http://${host}:${port}`);
   serve({ fetch: app.fetch, port, hostname: host });

@@ -331,6 +331,16 @@ export const CARDS: Record<string, CardDef> = {
     cost: 3,
     element: "fire",
   },
+  woodland_squirrels: {
+    id: "woodland_squirrels",
+    name: "Woodland Squirrels",
+    short: "Sqrls",
+    kind: "ally",
+    cost: 0,
+    element: "norm",
+    power: 1,
+    life: 1,
+  },
 };
 
 export let CARD_LIST: CardDef[] = Object.values(CARDS);

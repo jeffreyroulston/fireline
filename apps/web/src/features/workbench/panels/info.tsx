@@ -161,6 +161,52 @@ export function InfoPanel() {
       </section>
 
       <section className="info-section">
+        <SectionHeading title="ENGINE VERSION" />
+        <article className="info-card info-card-wide">
+          <h3>What the footer string means</h3>
+          <p>
+            Every simulation is stamped with an engine version. The workbench
+            footer shows it as{" "}
+            <code>r18 · s1 · a8 · digest 78328050 · dev</code> (numbers match
+            the running build). History and the card database only pool runs that
+            share the same version so cross-run stats stay comparable after code
+            or card data changes.
+          </p>
+          <ul className="info-list">
+            <li>
+              <strong>r (rules).</strong> Bumped manually when solver or model
+              semantics change: combat rules, damage calculation, line search.
+            </li>
+            <li>
+              <strong>s (sampler).</strong> Bumped manually when RNG, shuffle, or
+              seed derivation changes.
+            </li>
+            <li>
+              <strong>a (attribution).</strong> Bumped manually when stat
+              attribution labels or parsing change. Card leaderboard aggregation
+              requires a match; damage pooling uses r, s, and digest only.
+            </li>
+            <li>
+              <strong>digest.</strong> First eight digits of a hash over every
+              card attribute that affects simulation (cost, power, tags, kindle,
+              prepare, imbue, on-death damage, and similar). Updates
+              automatically when card data changes; no manual bump.
+            </li>
+            <li>
+              <strong>build.</strong> Git commit SHA at compile time, or{" "}
+              <code>dev</code> locally. Identifies the deployed binary only; not
+              used for pooling.
+            </li>
+          </ul>
+          <p>
+            Two runs with different version strings are different epochs. Compare
+            them side by side if you are measuring a change, but do not expect
+            pooled History or leaderboard rows to mix across versions.
+          </p>
+        </article>
+      </section>
+
+      <section className="info-section">
         <SectionHeading title="READING RESULTS" />
         <article className="info-card info-card-wide">
           <h3>How to read the output</h3>

@@ -10,7 +10,7 @@ import { getCard, getCards, listDecksForCard, replaceDeckCards } from "./service
 import type { RunDispatcher } from "./services/dispatch.js";
 import { persistSolveResult } from "./services/persist.js";
 import { runHub, sseJson } from "./services/run-hub.js";
-import { fetchWorkerJson, WorkerError } from "./services/worker.js";
+import { fetchWorkerJson, WorkerError, checkWorkerReachable } from "./services/worker.js";
 import {
   cardLeaderboard,
   getPooledSample,
@@ -32,6 +32,7 @@ export function createApp(options: {
   db: Kysely<Database>;
   workerBase: string;
   dispatcher: RunDispatcher;
+  maxConcurrency: number;
 }) {
   const app = new Hono();
 
@@ -194,6 +195,78 @@ export function createApp(options: {
       .limit(100)
       .execute();
     return c.json(rows);
+  });
+
+  app.get("/runs/queue", async (c) => {
+    const workerReachable = await checkWorkerReachable(options.workerBase);
+    const liveRows = await options.db
+      .selectFrom("runs")
+      .selectAll()
+      .where("status", "in", ["queued", "running"])
+      .where("kind", "in", ["evaluate", "optimize"])
+      .orderBy("started_at", "asc")
+      .execute();
+
+    const finishedRows = await options.db
+      .selectFrom("runs")
+      .selectAll()
+      .where("status", "=", "complete")
+      .where("kind", "in", ["evaluate", "optimize"])
+      .orderBy("completed_at", "desc")
+      .limit(8)
+      .execute();
+
+    const deckIds = [
+      ...new Set(
+        [...liveRows, ...finishedRows]
+          .map((row) => row.deck_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    const deckRows =
+      deckIds.length > 0
+        ? await options.db
+            .selectFrom("decks")
+            .select(["id", "name"])
+            .where("id", "in", deckIds)
+            .execute()
+        : [];
+    const deckNames = new Map(deckRows.map((deck) => [deck.id, deck.name]));
+
+    const toItem = (run: (typeof liveRows)[number]) => ({
+      run,
+      deckName: (run.deck_id && deckNames.get(run.deck_id)) || "Deck",
+    });
+
+    return c.json({
+      workerReachable,
+      maxConcurrency: options.maxConcurrency,
+      running: liveRows.filter((row) => row.status === "running").map(toItem),
+      queued: liveRows.filter((row) => row.status === "queued").map(toItem),
+      finished: finishedRows.map(toItem),
+    });
+  });
+
+  // Backward-compatible alias for older clients.
+  app.get("/runs/active", async (c) => {
+    const workerReachable = await checkWorkerReachable(options.workerBase);
+    const active = await options.db
+      .selectFrom("runs")
+      .selectAll()
+      .where("status", "in", ["queued", "running"])
+      .orderBy("started_at", "desc")
+      .executeTakeFirst();
+    if (active) {
+      const deck = active.deck_id
+        ? await options.db
+            .selectFrom("decks")
+            .select(["name"])
+            .where("id", "=", active.deck_id)
+            .executeTakeFirst()
+        : null;
+      return c.json({ run: active, deckName: deck?.name ?? null, workerReachable });
+    }
+    return c.json({ run: null, deckName: null, workerReachable });
   });
 
   app.get("/analysis/groups", async (c) => {

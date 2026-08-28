@@ -6,6 +6,7 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -30,7 +31,9 @@ import {
   solve as apiSolve,
   type WorkerVersion,
 } from "@/lib/api/client";
-import { mergeOptimizeProgress, useRun, type OptimizeProgress } from "@/lib/api/useRun";
+import type { OptimizeProgress } from "@/lib/api/useRun";
+import { useRunTracker } from "@/lib/runs/run-tracker";
+import { WorkerStatusNav } from "@/components/worker-status-nav";
 import {
   createDeckRemote,
   deleteDeckRemote,
@@ -62,10 +65,8 @@ import { HistoryPanel } from "./panels/history";
 import { InfoPanel } from "./panels/info";
 import { ActionBar, PanelTopline } from "./ui";
 import type {
-  DeckResult,
   JobType,
   RatioRefineCriteria,
-  RatioResult,
   SampleHand,
   SolverMode,
   Tab,
@@ -113,7 +114,6 @@ export default function FizaWorkbench({
   const [isRenamingDeck, setIsRenamingDeck] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
   const [samples, setSamples] = useState(8);
-  const [deckResult, setDeckResult] = useState<DeckResult | null>(null);
   const [cutBudgets, setCutBudgets] = useState<
     Partial<Record<CardId, number>>
   >({});
@@ -123,14 +123,19 @@ export default function FizaWorkbench({
   const [deckAttempts, setDeckAttempts] = useState(32);
   const [ratioSamples, setRatioSamples] = useState(4);
   const [metric, setMetric] = useState<"mean" | "p50">("mean");
-  const [ratioResult, setRatioResult] = useState<RatioResult | null>(null);
   const [ratioCriteria, setRatioCriteria] =
     useState<RatioRefineCriteria | null>(null);
-  const [progress, setProgress] = useState<OptimizeProgress | null>(null);
   const [busy, setBusy] = useState<JobType | null>(null);
   const [error, setError] = useState("");
   const [historyEpoch, setHistoryEpoch] = useState(0);
-  const { startStreamingRun, cancel: cancelRun } = useRun();
+  const {
+    workerReachable,
+    getRunForDeck,
+    startEvaluate,
+    startOptimize,
+    cancelRun: cancelWorkerRun,
+  } = useRunTracker();
+  const completedRunIdsRef = useRef<Set<string>>(new Set());
 
   const activeDeckId = useMemo(() => {
     if (!decksHydrated || decks.length === 0) {
@@ -147,6 +152,18 @@ export default function FizaWorkbench({
     decks.find((deck) => deck.id === activeDeckId) ?? decks[0] ?? null;
   const deckText = activeDeck?.text ?? "";
   const deferredDeckText = useDeferredValue(deckText);
+  const runParam = searchParams.get("run");
+
+  const evaluateRun = activeDeckId
+    ? getRunForDeck(activeDeckId, "evaluate", runParam)
+    : null;
+  const optimizeRun = activeDeckId
+    ? getRunForDeck(activeDeckId, "optimize", runParam)
+    : null;
+  const evaluateBusy =
+    evaluateRun?.status === "queued" || evaluateRun?.status === "running";
+  const optimizeBusy =
+    optimizeRun?.status === "queued" || optimizeRun?.status === "running";
 
   const ratioBaseCards = parseDecklist(deckText);
   const ratioRecognizedCount = ratioBaseCards.length;
@@ -249,14 +266,31 @@ export default function FizaWorkbench({
     }
     setDrawn([]);
     setOrderedDeck([]);
-    setDeckResult(null);
-    setRatioResult(null);
     setRatioCriteria(null);
     setError("");
     setIsRenamingDeck(false);
     setCutBudgets({});
     setReplacements({});
   }, [activeDeckId, decksHydrated]);
+
+  useEffect(() => {
+    if (evaluateRun?.status !== "complete" || !evaluateRun.id) {
+      return;
+    }
+    if (completedRunIdsRef.current.has(evaluateRun.id)) {
+      return;
+    }
+    completedRunIdsRef.current.add(evaluateRun.id);
+    void syncDeckRunCounts();
+    setHistoryEpoch((current) => current + 1);
+  }, [evaluateRun?.id, evaluateRun?.status]);
+
+  useEffect(() => {
+    const runError = evaluateRun?.error ?? optimizeRun?.error;
+    if (runError) {
+      setError(runError);
+    }
+  }, [evaluateRun?.error, optimizeRun?.error]);
 
   useEffect(() => {
     const counts = listToCounts(parseDecklist(deckText));
@@ -307,7 +341,6 @@ export default function FizaWorkbench({
         deck.id === activeDeck.id ? { ...deck, text } : deck,
       ),
     );
-    setDeckResult(null);
   }
 
   async function syncDeckRunCounts() {
@@ -374,7 +407,6 @@ export default function FizaWorkbench({
       const deck = await createDeckRemote(nextDeckName(decks), "");
       setDecks((current) => [...current, deck]);
       navigateToDeck(deck.id);
-      setDeckResult(null);
       setError("");
       setIsRenamingDeck(false);
     } catch (createError) {
@@ -397,7 +429,6 @@ export default function FizaWorkbench({
       );
       setDecks((current) => [...current, deck]);
       navigateToDeck(deck.id);
-      setDeckResult(null);
       setError("");
       setIsRenamingDeck(false);
     } catch (duplicateError) {
@@ -450,7 +481,6 @@ export default function FizaWorkbench({
         setDecks(remaining);
         navigateToDeck(remaining[0]?.id ?? "");
       }
-      setDeckResult(null);
       setError("");
       setIsRenamingDeck(false);
     } catch (deleteError) {
@@ -511,6 +541,13 @@ export default function FizaWorkbench({
   }
 
   async function evaluateCurrentDeck() {
+    if (evaluateBusy) {
+      return;
+    }
+    if (!workerReachable) {
+      setError("The simulation worker is offline. Try again when it is back.");
+      return;
+    }
     const cards = parseDecklist(deferredDeckText);
     if (cards.length < MIN_VALID_DECK_SIZE) {
       setError(
@@ -523,9 +560,8 @@ export default function FizaWorkbench({
       setError("Save or select a deck before running deck damage.");
       return;
     }
-    setBusy("evaluate");
     setError("");
-    setProgress({
+    const initialProgress: OptimizeProgress = {
       decksScored: 0,
       totalDecks: 0,
       legalDecks: 0,
@@ -535,10 +571,11 @@ export default function FizaWorkbench({
       ...(simType === "monte_carlo"
         ? { rolloutsDone: 0, totalRollouts: rollouts }
         : {}),
-    });
+    };
     try {
-      await startStreamingRun(
-        "evaluate",
+      await startEvaluate(
+        deckId,
+        activeDeck.name,
         {
           deck: listToCounts(cards),
           samples,
@@ -548,30 +585,7 @@ export default function FizaWorkbench({
           rollouts,
           seed: makeSeed() as unknown as bigint,
         },
-        deckId,
-        {
-          onProgress: (progressUpdate) =>
-            setProgress((current) => mergeOptimizeProgress(current, progressUpdate)),
-          onComplete: (result) => {
-            startTransition(() => setDeckResult(result as DeckResult));
-            setProgress((current) =>
-              current
-                ? {
-                    ...current,
-                    handsSimulated: current.totalHands,
-                    rolloutsDone: current.totalRollouts ?? current.rolloutsDone,
-                  }
-                : current,
-            );
-            void syncDeckRunCounts();
-            setBusy(null);
-            setHistoryEpoch((current) => current + 1);
-          },
-          onError: (message) => {
-            setError(message);
-            setBusy(null);
-          },
-        },
+        initialProgress,
       );
     } catch (evaluateError) {
       setError(
@@ -579,7 +593,6 @@ export default function FizaWorkbench({
           ? evaluateError.message
           : "Deck evaluation failed.",
       );
-      setBusy(null);
     }
   }
 
@@ -621,6 +634,13 @@ export default function FizaWorkbench({
   }
 
   async function optimizeCurrentBounds() {
+    if (optimizeBusy) {
+      return;
+    }
+    if (!workerReachable) {
+      setError("The simulation worker is offline. Try again when it is back.");
+      return;
+    }
     if (ratioRecognizedCount < MIN_VALID_DECK_SIZE) {
       setError(
         `Select a deck with at least ${MIN_VALID_DECK_SIZE} recognized cards.`,
@@ -660,9 +680,7 @@ export default function FizaWorkbench({
       setError("Save or select a deck before running the ratio lab.");
       return;
     }
-    setBusy("optimize");
     setError("");
-    setRatioResult(null);
     setRatioCriteria(
       snapshotRatioCriteria(
         activeDeck?.name ?? "Base deck",
@@ -671,7 +689,7 @@ export default function FizaWorkbench({
         replacements,
       ),
     );
-    setProgress({
+    const initialProgress: OptimizeProgress = {
       decksScored: 0,
       totalDecks: deckCount,
       legalDecks:
@@ -679,10 +697,11 @@ export default function FizaWorkbench({
       handsSimulated: 0,
       totalHands: deckCount * ratioSamples,
       bestScore: 0,
-    });
+    };
     try {
-      await startStreamingRun(
-        "optimize",
+      await startOptimize(
+        deckId,
+        activeDeck.name,
         {
           bounds,
           deckSize,
@@ -691,32 +710,7 @@ export default function FizaWorkbench({
           metric,
           seed: makeSeed() as unknown as bigint,
         },
-        deckId,
-        {
-          onProgress: (progressUpdate) =>
-            setProgress((current) => mergeOptimizeProgress(current, progressUpdate)),
-          onComplete: (result) => {
-            const ratio = result as RatioResult;
-            startTransition(() => setRatioResult(ratio));
-            setProgress((current) =>
-              current
-                ? {
-                    ...current,
-                    decksScored: current.totalDecks,
-                    handsSimulated: current.totalHands,
-                    bestScore: ratio.bestScore,
-                  }
-                : current,
-            );
-            void syncDeckRunCounts();
-            setBusy(null);
-            setHistoryEpoch((current) => current + 1);
-          },
-          onError: (message) => {
-            setError(message);
-            setBusy(null);
-          },
-        },
+        initialProgress,
       );
     } catch (optimizeError) {
       setError(
@@ -724,25 +718,39 @@ export default function FizaWorkbench({
           ? optimizeError.message
           : "Deck optimization failed.",
       );
-      setBusy(null);
     }
   }
 
-  function cancelJob() {
-    void cancelRun();
+  function cancelHandSolve() {
     setBusy(null);
-    setProgress(null);
+    setError("Calculation cancelled.");
+  }
+
+  function cancelEvaluateJob() {
+    if (!evaluateRun || (evaluateRun.status !== "queued" && evaluateRun.status !== "running")) {
+      return;
+    }
+    void cancelWorkerRun(evaluateRun.id);
+    setError("Calculation cancelled.");
+  }
+
+  function cancelOptimizeJob() {
+    if (!optimizeRun || (optimizeRun.status !== "queued" && optimizeRun.status !== "running")) {
+      return;
+    }
+    void cancelWorkerRun(optimizeRun.id);
     setError("Calculation cancelled.");
   }
 
   function sendSampleToHandSolver(sample: SampleHand) {
+    const deckEval = evaluateRun?.deckResult;
     setHand([...sample.hand]);
     setDrawn([]);
     setOrderedDeck([]);
     setSolverMode("hand");
-    setSimType(deckResult?.simType ?? simType);
+    setSimType(deckEval?.simType ?? simType);
     setLineResult({
-      simType: deckResult?.simType ?? simType,
+      simType: deckEval?.simType ?? simType,
       maxDamage: sample.damage,
       endInfluence:
         sample.endInfluence ??
@@ -831,6 +839,9 @@ export default function FizaWorkbench({
             <h1>FIRELINE</h1>
           </div>
         </div>
+        <div className="masthead-note">
+          <WorkerStatusNav activeDeckId={activeDeckId || undefined} />
+        </div>
       </header>
 
       <nav className="mode-switcher" aria-label="Calculator modes">
@@ -907,7 +918,7 @@ export default function FizaWorkbench({
             }}
             onRolloutsChange={setRollouts}
             onSolve={solveHand}
-            onCancel={cancelJob}
+            onCancel={cancelHandSolve}
             decksLoading={!decksHydrated}
           />
         )}
@@ -949,27 +960,24 @@ export default function FizaWorkbench({
             turns={turns}
             simType={simType}
             rollouts={rollouts}
-            busy={busy === "evaluate"}
+            busy={evaluateBusy}
             onSwitchDeck={switchDeck}
             onSamplesChange={setSamples}
             onGoFirstChange={setGoFirst}
             onTurnsChange={setTurns}
-            onSimTypeChange={(value) => {
-              setSimType(value);
-              setDeckResult(null);
-            }}
+            onSimTypeChange={setSimType}
             onRolloutsChange={setRollouts}
             onEvaluate={evaluateCurrentDeck}
-            onCancel={cancelJob}
-            progress={progress}
+            onCancel={cancelEvaluateJob}
+            progress={evaluateRun?.progress ?? null}
             decksLoading={!decksHydrated}
           />
         )}
 
         {tab === "deck" && (
           <DeckResults
-            result={deckResult}
-            busy={busy === "evaluate"}
+            result={evaluateRun?.deckResult ?? null}
+            busy={evaluateBusy}
             onSendToHandSolver={sendSampleToHandSolver}
           />
         )}
@@ -1008,8 +1016,8 @@ export default function FizaWorkbench({
               deckAttempts={deckAttempts}
               attemptCeiling={attemptCeiling}
               coveragePercent={coveragePercent}
-              busy={busy === "optimize"}
-              progress={progress}
+              busy={optimizeBusy}
+              progress={optimizeRun?.progress ?? null}
               onDeckAttemptsChange={setDeckAttempts}
             />
             <RatioControls
@@ -1021,13 +1029,13 @@ export default function FizaWorkbench({
             />
             <ActionBar
               label="Sample ratio space"
-              busy={busy === "optimize"}
+              busy={optimizeBusy}
               onRun={optimizeCurrentBounds}
-              onCancel={cancelJob}
-              progress={progress}
+              onCancel={cancelOptimizeJob}
+              progress={optimizeRun?.progress ?? null}
             />
             <RatioResults
-              result={ratioResult}
+              result={optimizeRun?.ratioResult ?? null}
               criteria={ratioCriteria}
               onSaveDecklist={saveRatioDecklist}
             />          </div>

@@ -36,7 +36,8 @@ export type CardId =
   | "vicious_slice"
   | "manic_zealot"
   | "demolition"
-  | "surging_bolt";
+  | "surging_bolt"
+  | "woodland_squirrels";
 
 export type MaterialId =
   | "impact_hammer"

@@ -36,6 +36,7 @@ const CARD_IMAGE_PATHS: Partial<Record<CardId | MaterialId, string>> = {
   manic_zealot: "/cards/images/rcdzdhnf18.jpg",
   demolition: "/cards/images/o56arxxu83.jpg",
   surging_bolt: "/cards/images/h5lahljr2d.jpg",
+  woodland_squirrels: "/cards/images/UyNpsv41nN.jpg",
   impact_hammer: "/cards/images/nkcqjdmuih.jpg",
   mercenary_blade: "/cards/images/evrbdzdhmf.jpg",
   poisoned_dagger: "/cards/images/ua6rsfsw2v.jpg",

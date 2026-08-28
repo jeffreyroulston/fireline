@@ -27,6 +27,17 @@ export async function loadCardCatalog(workerBase: string): Promise<CardDef[]> {
   return fetchWorkerJson<CardDef[]>(workerBase, "/cards");
 }
 
+export async function checkWorkerReachable(workerBase: string): Promise<boolean> {
+  try {
+    const response = await fetch(workerUrl(workerBase, "/health"), {
+      signal: AbortSignal.timeout(3000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function* readNdjson<T>(body: ReadableStream<Uint8Array>): AsyncGenerator<T> {
   const reader = body.getReader();
   const decoder = new TextDecoder();

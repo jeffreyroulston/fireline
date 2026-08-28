@@ -48,7 +48,7 @@ Open [http://localhost](http://localhost). Browser requests to `/api/*` go to th
 Useful overrides:
 
 - `FIRELINE_PORT=8080` — bind the proxy to a different host port
-- `WORKER_CONCURRENCY` / `API_CONCURRENCY` — cap how many simulations run at once (Docker Compose defaults to `1`; local dev defaults to `2`)
+- `WORKER_CONCURRENCY` / `API_CONCURRENCY` — cap how many simulations run at once (both default to `1` in Docker Compose; local dev defaults to `API_CONCURRENCY=1`, `WORKER_CONCURRENCY=2`)
 - `RAYON_NUM_THREADS` — cap Rayon hand parallelism inside the compute worker (defaults to all logical CPUs)
 
 ### Threading model
@@ -58,7 +58,7 @@ Two knobs control throughput:
 1. **Run concurrency** (`WORKER_CONCURRENCY`, `API_CONCURRENCY`): how many solve/evaluate/optimize requests run at the same time. Extra runs wait in the API queue.
 2. **Hand parallelism** (Rayon inside the engine): within one deck evaluation, unique opening hands are solved across available CPU threads.
 
-Docker Compose sets run concurrency to `1` so a single evaluation can use all cores. Local `cargo run -p ga-fire-worker` keeps the default of `2` concurrent runs unless you override the env var.
+Docker Compose sets both run concurrency values to `1` so a single evaluation can use all cores. Local `cargo run -p ga-fire-worker` defaults to `2` concurrent worker requests; the data API defaults to dispatching `1` run at a time unless you set `API_CONCURRENCY`.
 
 Monte Carlo deck evaluations report hand-level progress only (`12/64 hands`) when hands run in parallel. Per-rollout ticks are reserved for the serial progress path.
 

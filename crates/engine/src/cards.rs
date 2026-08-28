@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "ts")]
 use ts_rs::TS;
 
-pub const CARD_COUNT: usize = 33;
+pub const CARD_COUNT: usize = 34;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,6 +42,7 @@ pub enum Card {
     ManicZealot = 30,
     Demolition = 31,
     SurgingBolt = 32,
+    WoodlandSquirrels = 33,
 }
 
 impl Card {
@@ -85,6 +86,7 @@ impl Card {
             Self::ManicZealot => "manic_zealot",
             Self::Demolition => "demolition",
             Self::SurgingBolt => "surging_bolt",
+            Self::WoodlandSquirrels => "woodland_squirrels",
         }
     }
 
@@ -123,6 +125,7 @@ impl Card {
             Self::ManicZealot => "Manic Zealot",
             Self::Demolition => "Demolition",
             Self::SurgingBolt => "Surging Bolt",
+            Self::WoodlandSquirrels => "Woodland Squirrels",
         }
     }
 
@@ -161,11 +164,13 @@ impl Card {
             Self::ManicZealot => "Manic",
             Self::Demolition => "Demol",
             Self::SurgingBolt => "SBolt",
+            Self::WoodlandSquirrels => "Sqrls",
         }
     }
 
     pub const fn cost(self) -> u8 {
         match self {
+            Self::WoodlandSquirrels => 0,
             Self::Brick => 9,
             Self::Arthur => 4,
             Self::CorhaziCourier
@@ -223,7 +228,8 @@ impl Card {
             | Self::MarchHare
             | Self::Rococo
             | Self::XiaoQiao
-            | Self::ManicZealot => 1,
+            | Self::ManicZealot
+            | Self::WoodlandSquirrels => 1,
             _ => 0,
         }
     }
@@ -249,6 +255,7 @@ impl Card {
                 | Self::XiaoQiao
                 | Self::Virgil
                 | Self::ManicZealot
+                | Self::WoodlandSquirrels
         )
     }
 
@@ -290,6 +297,7 @@ impl Card {
                 | Self::UncannyRealization
                 | Self::Virgil
                 | Self::ViciousSlice
+                | Self::WoodlandSquirrels
         )
     }
 
@@ -389,6 +397,7 @@ impl Card {
             Self::XiaoQiao => 2,
             Self::Virgil => 2,
             Self::ManicZealot => 1,
+            Self::WoodlandSquirrels => 1,
             _ => return None,
         })
     }
@@ -457,9 +466,10 @@ pub const ALL_CARDS: [Card; CARD_COUNT] = [
     Card::ManicZealot,
     Card::Demolition,
     Card::SurgingBolt,
+    Card::WoodlandSquirrels,
 ];
 
-pub const PLAYABLE_CARDS: [Card; 32] = [
+pub const PLAYABLE_CARDS: [Card; 33] = [
     Card::Arthur,
     Card::KingdomInformant,
     Card::ClumsyApprentice,
@@ -492,6 +502,7 @@ pub const PLAYABLE_CARDS: [Card; 32] = [
     Card::ManicZealot,
     Card::Demolition,
     Card::SurgingBolt,
+    Card::WoodlandSquirrels,
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -609,6 +620,7 @@ pub fn parse_card(value: &str) -> Option<Card> {
         "manic_zealot" => Card::ManicZealot,
         "demolition" => Card::Demolition,
         "surging_bolt" => Card::SurgingBolt,
+        "woodland_squirrels" => Card::WoodlandSquirrels,
         _ => return None,
     })
 }

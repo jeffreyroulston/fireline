@@ -1,26 +1,8 @@
-"use client";
+import type { OptimizeProgress } from "@/lib/api/useRun";
 
-import { useCallback, useEffect, useRef } from "react";
-import { createRun, deleteRun, runEventsUrl } from "./client";
+export type { OptimizeProgress };
 
-export interface OptimizeProgress {
-  decksScored: number;
-  totalDecks: number;
-  legalDecks: number;
-  handsSimulated: number;
-  totalHands: number;
-  bestScore: number;
-  /** Monte Carlo: rollouts finished on the current hand. */
-  rolloutsDone?: number;
-  /** Monte Carlo: rollouts per opening hand. */
-  totalRollouts?: number;
-  /** Set once the worker has begun processing (not just queued locally). */
-  started?: boolean;
-}
-
-type RunKind = "evaluate" | "optimize";
-
-interface StreamHandlers {
+export interface StreamHandlers {
   onProgress: (progress: OptimizeProgress) => void;
   onComplete: (result: unknown) => void;
   onError: (message: string) => void;
@@ -84,7 +66,7 @@ export function mergeOptimizeProgress(
   };
 }
 
-async function* readSse(
+export async function* readSse(
   body: ReadableStream<Uint8Array>,
 ): AsyncGenerator<Record<string, unknown>> {
   const reader = body.getReader();
@@ -112,7 +94,7 @@ async function* readSse(
   }
 }
 
-function dispatchSseEvent(
+export function dispatchSseEvent(
   data: Record<string, unknown>,
   handlers: StreamHandlers,
 ): boolean {
@@ -138,88 +120,4 @@ function dispatchSseEvent(
     return true;
   }
   return false;
-}
-
-export function useRun() {
-  const abortRef = useRef<AbortController | null>(null);
-  const runIdRef = useRef<string | null>(null);
-  const settledRef = useRef(false);
-
-  const cleanup = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    runIdRef.current = null;
-  }, []);
-
-  useEffect(() => () => cleanup(), [cleanup]);
-
-  const cancel = useCallback(async () => {
-    settledRef.current = true;
-    const runId = runIdRef.current;
-    cleanup();
-    if (runId) {
-      try {
-        await deleteRun(runId);
-      } catch {
-        // Stream close or server cancel is enough for UI teardown.
-      }
-    }
-  }, [cleanup]);
-
-  const startStreamingRun = useCallback(
-    async (
-      kind: RunKind,
-      payload: Record<string, unknown>,
-      deckId: string,
-      handlers: StreamHandlers,
-    ) => {
-      cleanup();
-      settledRef.current = false;
-      const { id } = await createRun(kind, payload, deckId);
-      runIdRef.current = id;
-
-      const abort = new AbortController();
-      abortRef.current = abort;
-
-      try {
-        const response = await fetch(runEventsUrl(id), {
-          signal: abort.signal,
-          headers: { Accept: "text/event-stream" },
-          cache: "no-store",
-        });
-        if (!response.ok || !response.body) {
-          throw new Error(
-            `Run stream failed (${response.status || "no body"}).`,
-          );
-        }
-        for await (const data of readSse(response.body)) {
-          if (abort.signal.aborted) {
-            return;
-          }
-          if (dispatchSseEvent(data, handlers)) {
-            settledRef.current = true;
-            cleanup();
-            return;
-          }
-        }
-        if (!settledRef.current && !abort.signal.aborted) {
-          handlers.onError("Lost connection to the run stream.");
-          cleanup();
-        }
-      } catch (error) {
-        if (settledRef.current || abort.signal.aborted) {
-          return;
-        }
-        handlers.onError(
-          error instanceof Error
-            ? error.message
-            : "Lost connection to the run stream.",
-        );
-        cleanup();
-      }
-    },
-    [cleanup],
-  );
-
-  return { startStreamingRun, cancel, cleanup };
 }

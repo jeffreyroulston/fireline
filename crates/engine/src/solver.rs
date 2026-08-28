@@ -1566,6 +1566,7 @@ mod tests {
             "manic_zealot",
             "demolition",
             "surging_bolt",
+            "woodland_squirrels",
         ] {
             assert!(parse_card(name).is_some(), "{name}");
         }

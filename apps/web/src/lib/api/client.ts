@@ -128,6 +128,49 @@ export async function createRun(
   return response.json();
 }
 
+export interface ActiveRunApiRow {
+  id: string;
+  kind: string;
+  status: string;
+  deck_id: string | null;
+  sim_type: string | null;
+  samples: number | null;
+  rollouts: number | null;
+  decks_requested: number | null;
+  error_message: string | null;
+  mean_damage: number | null;
+  p50_damage: number | null;
+  p90_damage: number | null;
+  best_score: number | null;
+  completed_at: string | null;
+}
+
+export async function fetchRunQueue(): Promise<{
+  workerReachable: boolean;
+  maxConcurrency: number;
+  running: Array<{ run: ActiveRunApiRow; deckName: string }>;
+  queued: Array<{ run: ActiveRunApiRow; deckName: string }>;
+  finished: Array<{ run: ActiveRunApiRow; deckName: string }>;
+}> {
+  const response = await apiFetch("/runs/queue");
+  return response.json();
+}
+
+/** @deprecated Use fetchRunQueue */
+export async function fetchActiveRun(): Promise<{
+  run: ActiveRunApiRow | null;
+  deckName: string | null;
+  workerReachable: boolean;
+}> {
+  const response = await apiFetch("/runs/active");
+  return response.json();
+}
+
+export async function fetchRun(id: string): Promise<unknown> {
+  const response = await apiFetch(`/runs/${id}`);
+  return response.json();
+}
+
 export async function deleteRun(id: string): Promise<void> {
   await apiFetch(`/runs/${id}`, { method: "DELETE" });
 }

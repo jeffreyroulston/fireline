@@ -18,8 +18,8 @@ export const TAB_BY_PATH: Record<string, Tab> = Object.fromEntries(
 export const QUERY_KEYS_BY_TAB: Record<Tab, readonly string[]> = {
   line: [],
   manage: [],
-  deck: [],
-  ratios: [],
+  deck: ["run"],
+  ratios: ["run"],
   cards: ["sim", "kind", "card", "deck"],
   history: ["sim", "vg", "card"],
   info: [],

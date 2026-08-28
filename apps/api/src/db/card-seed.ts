@@ -384,6 +384,17 @@ export const CARD_SEED: CardSeed[] = [
     element: "fire",
     aliases: [],
   },
+  {
+    id: "woodland_squirrels",
+    name: "Woodland Squirrels",
+    short: "Sqrls",
+    kind: "ally",
+    cost: 0,
+    element: "norm",
+    power: 1,
+    life: 1,
+    aliases: [],
+  },
 ];
 
 /** Material-deck cards. Not in the engine Card enum; persist under these ids. */

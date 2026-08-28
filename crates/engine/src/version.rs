@@ -5,7 +5,7 @@ use serde::{Serialize, Serializer};
 use ts_rs::TS;
 
 /// Manual bump when solver / model semantics change.
-pub const RULES_VERSION: u32 = 18;
+pub const RULES_VERSION: u32 = 19;
 /// Manual bump when RNG, shuffle, or seed derivation changes.
 pub const SAMPLER_VERSION: u32 = 1;
 /// Manual bump when stats attribution labels or parsing changes.
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn card_digest_is_stable() {
-        assert_eq!(compute_card_digest(), 7_832_805_023_969_861_953);
+        assert_eq!(compute_card_digest(), 11_186_701_748_678_958_540);
     }
 
     #[test]
