@@ -1,13 +1,13 @@
 "use client";
 
-import type { LineStep } from "@/lib/engine";
+import type { LineEvent } from "@/lib/engine";
 import type { StepDiffInfo } from "../types";
 import { OptimalLine } from "./optimal-line";
 
 export function PassLinePanel({
   label,
   damage,
-  steps,
+  events,
   resetKey,
   stepDiff,
   note,
@@ -15,7 +15,7 @@ export function PassLinePanel({
 }: {
   label: string;
   damage: number;
-  steps: LineStep[];
+  events: LineEvent[];
   resetKey: string;
   stepDiff?: StepDiffInfo[];
   note?: string;
@@ -33,7 +33,7 @@ export function PassLinePanel({
       {note && <p className="pass-note">{note}</p>}
       <OptimalLine
         label={`${label.toUpperCase()} LINE`}
-        steps={steps}
+        events={events}
         resetKey={resetKey}
         stepDiff={oracle ? stepDiff : undefined}
         diffPerspective={oracle ? "oracle" : undefined}

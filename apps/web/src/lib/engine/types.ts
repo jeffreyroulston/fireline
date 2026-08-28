@@ -1,5 +1,8 @@
 /** Core types for the FiZa max-damage engine. */
 
+import type { LineEvent } from "@ga-fire/contracts";
+export type { LineEvent };
+
 export type CardId =
   | "brick"
   | "arthur"
@@ -11,7 +14,6 @@ export type CardId =
   | "ignited_stab"
   | "rending_flames"
   | "blazing_throw"
-  | "racoo"
   | "corhazi_courier"
   | "veteran_blazebearer"
   | "sadi"
@@ -52,7 +54,13 @@ export type Phase =
   | "materialize"
   | "recollect";
 
-export type CardKind = "ally" | "attack" | "action" | "item" | "brick";
+export type CardKind =
+  | "ally"
+  | "attack"
+  | "action"
+  | "item"
+  | "brick"
+  | "material";
 
 export interface CardDef {
   id: CardId;
@@ -78,6 +86,8 @@ export interface CardDef {
   kindle?: number;
   prepare?: number;
   tags?: string[];
+  /** Extra tokens that parse to this id (full name slugs, misspellings). */
+  aliases?: string[];
 }
 
 export interface AllyState {
@@ -124,26 +134,12 @@ export interface SolveOptions {
   maxTurns?: number;
 }
 
-export type SimType = "fire_brick" | "monte_carlo" | "two_pass";
-
-/** One reconstructed action on the optimal line (from the WASM solver). */
-export interface LineStep {
-  turn: number;
-  phase: string;
-  damage: number;
-  allies: number;
-  allyNames: string[];
-  fireGy: number;
-  action: string;
-  memory: string;
-  hand: string;
-  display: string;
-}
+export type SimType = "fire_brick" | "monte_carlo" | "two_pass" | "oracle_only";
 
 export interface PassResult {
   maxDamage: number;
   endInfluence: number;
-  steps: LineStep[];
+  events: LineEvent[];
   nodes: number;
   memoEntries?: number;
   cardStats?: CardStat[];
@@ -151,13 +147,14 @@ export interface PassResult {
 
 export interface McRollout {
   damage: number;
-  steps: LineStep[];
+  events: LineEvent[];
   nodes: number;
 }
 
 export interface DamageDistribution {
   damages: number[];
   mean: number;
+  p10?: number;
   p50: number;
   p90: number;
   min: number;
@@ -174,7 +171,7 @@ export interface SolveResult {
   simType: SimType;
   maxDamage: number;
   endInfluence: number;
-  steps: LineStep[];
+  events: LineEvent[];
   nodes: number;
   memoEntries?: number;
   elapsedMs?: number;

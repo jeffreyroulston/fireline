@@ -1,9 +1,9 @@
-import type { CardId } from "@/lib/engine/types";
+import type { CardId, MaterialId } from "@/lib/engine/types";
 
 const GATCG_ORIGIN = "https://api.gatcg.com";
 
 /** GATCG edition image paths for catalog cards with official art. */
-const CARD_IMAGE_PATHS: Partial<Record<CardId, string>> = {
+const CARD_IMAGE_PATHS: Partial<Record<CardId | MaterialId, string>> = {
   arthur: "/cards/images/vn9fgfiy38.jpg",
   kingdom_informant: "/cards/images/wdxi74wb4y.jpg",
   clumsy_apprentice: "/cards/images/Gsl57juAHW.jpg",
@@ -36,9 +36,14 @@ const CARD_IMAGE_PATHS: Partial<Record<CardId, string>> = {
   manic_zealot: "/cards/images/rcdzdhnf18.jpg",
   demolition: "/cards/images/o56arxxu83.jpg",
   surging_bolt: "/cards/images/h5lahljr2d.jpg",
+  impact_hammer: "/cards/images/nkcqjdmuih.jpg",
+  mercenary_blade: "/cards/images/evrbdzdhmf.jpg",
+  poisoned_dagger: "/cards/images/ua6rsfsw2v.jpg",
+  zander_1: "/cards/images/07vvmdvbku.jpg",
+  varuckan_soulknife: "/cards/images/jxhktrfo66.jpg",
 };
 
-export function cardImageUrl(id: CardId): string | null {
-  const path = CARD_IMAGE_PATHS[id];
+export function cardImageUrl(id: CardId | MaterialId | string): string | null {
+  const path = CARD_IMAGE_PATHS[id as CardId | MaterialId];
   return path ? `${GATCG_ORIGIN}${path}` : null;
 }

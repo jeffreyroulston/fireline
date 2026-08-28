@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { CardId, LineStep, SimType } from "@/lib/engine";
+import type { CardId, SimType } from "@/lib/engine";
 import { fetchPooledSample } from "@/lib/api/client";
 import type { SampleHand } from "../types";
 import type { BarCardHighlight } from "./card-leaderboard";
-import { SampleDetailPanel } from "./sample-detail";
+import { LineInspector } from "./sample-detail";
 import { DamageBars } from "../ui";
 
 export interface PooledSampleBar {
@@ -14,6 +14,8 @@ export interface PooledSampleBar {
   sampleIndex: number;
   damage: number;
   label: string;
+  /** When set, overrides `Boolean(runId)` for whether the bar can be inspected. */
+  inspectable?: boolean;
 }
 
 export function usePooledSampleSelection(
@@ -46,7 +48,7 @@ export function usePooledSampleSelection(
         setSample({
           hand: result.hand as CardId[],
           damage: result.damage,
-          steps: result.steps as LineStep[],
+          events: result.events,
           nodes: result.nodes,
           sampleId: result.sampleId,
         });
@@ -80,12 +82,14 @@ export function PooledDamageBarChart({
   selectedKey,
   onSelectedKeyChange,
   cardHighlights = {},
+  dimmedKeys,
 }: {
   bars: PooledSampleBar[];
   sampleMax: number;
   selectedKey: string | null;
   onSelectedKeyChange: (key: string | null) => void;
   cardHighlights?: Record<string, BarCardHighlight>;
+  dimmedKeys?: ReadonlySet<string>;
 }) {
   return (
     <div className="history-bars-panel">
@@ -97,12 +101,14 @@ export function PooledDamageBarChart({
           onSelect={onSelectedKeyChange}
           items={bars.map((bar) => {
             const cardHighlight = cardHighlights[bar.key];
+            const dimmed = dimmedKeys?.has(bar.key) ?? false;
             return {
               key: bar.key,
               damage: bar.damage,
               title: bar.label,
-              disabled: !bar.runId,
+              disabled: !(bar.inspectable ?? Boolean(bar.runId)),
               className: [
+                dimmed ? "is-out-of-range" : "",
                 cardHighlight === "in_hand" ? "is-card-in-hand" : "",
                 cardHighlight === "played" ? "is-card-played" : "",
               ]
@@ -127,6 +133,9 @@ export function PooledSampleDetail({
   loadError,
   mcIndex,
   onMcIndexChange,
+  showSendToSolver = false,
+  onSendToHandSolver,
+  resetKeyPrefix,
 }: {
   selectedBar: PooledSampleBar | null;
   simType: SimType;
@@ -135,6 +144,9 @@ export function PooledSampleDetail({
   loadError: string;
   mcIndex: number | null;
   onMcIndexChange: (index: number | null) => void;
+  showSendToSolver?: boolean;
+  onSendToHandSolver?: (sample: SampleHand) => void;
+  resetKeyPrefix?: string;
 }) {
   const detailRef = useRef<HTMLDivElement>(null);
 
@@ -148,9 +160,6 @@ export function PooledSampleDetail({
     return null;
   }
 
-  const sampleMode =
-    sample && sample.steps.length > 0 ? ("fire_brick" as SimType) : simType;
-
   return (
     <div className="history-pooled-sample" ref={detailRef}>
       {loading && <p className="sim-hint">Loading sample…</p>}
@@ -163,61 +172,20 @@ export function PooledSampleDetail({
         <p className="sim-hint">No stored line for this sample.</p>
       )}
       {sample && (
-        <SampleDetailPanel
+        <LineInspector
           sample={sample}
           handNumber={selectedBar.sampleIndex + 1}
-          mode={sampleMode}
+          mode={simType}
           mcIndex={mcIndex}
           onMcIndexChange={onMcIndexChange}
-          showSendToSolver={false}
-          resetKeyPrefix={`history-${selectedBar.runId}-${selectedBar.sampleIndex}`}
+          showSendToSolver={showSendToSolver}
+          onSendToHandSolver={onSendToHandSolver}
+          resetKeyPrefix={
+            resetKeyPrefix ??
+            `line-${selectedBar.runId}-${selectedBar.sampleIndex}`
+          }
         />
       )}
     </div>
-  );
-}
-
-export function PooledDamageBars({
-  bars,
-  sampleMax,
-  simType,
-}: {
-  bars: PooledSampleBar[];
-  sampleMax: number;
-  simType: SimType;
-}) {
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const selectedBar =
-    selectedKey != null
-      ? (bars.find((bar) => bar.key === selectedKey) ?? null)
-      : null;
-  const { sample, loading, loadError, mcIndex, setMcIndex } =
-    usePooledSampleSelection(
-      selectedBar?.runId ?? null,
-      selectedBar?.sampleIndex ?? null,
-    );
-
-  useEffect(() => {
-    setSelectedKey(null);
-  }, [bars.length, bars[0]?.key, bars.at(-1)?.key]);
-
-  return (
-    <>
-      <PooledDamageBarChart
-        bars={bars}
-        sampleMax={sampleMax}
-        selectedKey={selectedKey}
-        onSelectedKeyChange={setSelectedKey}
-      />
-      <PooledSampleDetail
-        selectedBar={selectedBar}
-        simType={simType}
-        sample={sample}
-        loading={loading}
-        loadError={loadError}
-        mcIndex={mcIndex}
-        onMcIndexChange={setMcIndex}
-      />
-    </>
   );
 }

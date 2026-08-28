@@ -1,4 +1,6 @@
 export type {
+  ActionOp,
+  AttackBonuses,
   Budget,
   Bounds,
   CardDef,
@@ -7,9 +9,13 @@ export type {
   DeckEvalResult,
   EffectiveRequest,
   EngineVersion,
+  EventKind,
+  LineEvent,
   OptimizeProgress,
   OptimizeRequest,
   OptimizeResult,
   SolveRequest,
   SolveResult,
+  SparseLineStats,
+  TapePhase,
 } from "../generated/index.js";

@@ -10,10 +10,13 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: path.join(rootDir, "../.."),
   async rewrites() {
     return {
-      fallback: [
+      afterFiles: [
+        // Proxy API before workbench dynamic routes, but leave run SSE on the
+        // local route handler — afterFiles rewrites buffer streams and would
+        // stall progress until the run finishes.
         {
-          source: "/api/:path*",
-          destination: `${apiOrigin}/:path*`,
+          source: "/api/:path((?!runs/[^/]+/events$).*)",
+          destination: `${apiOrigin}/:path`,
         },
       ],
     };

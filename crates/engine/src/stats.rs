@@ -1,11 +1,34 @@
 //! Per-card line statistics collected from the reconstructed optimal path.
 
 use crate::cards::{ALL_CARDS, CARD_COUNT, Card, PLAYABLE_CARDS};
-use crate::model::{Action, State, Step};
+use crate::line_event::{EventKind, LineEvent};
+use crate::model::{Action, State, Weapon};
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 #[cfg(feature = "ts")]
 use ts_rs::TS;
+
+pub const MATERIAL_COUNT: usize = 5;
+pub const MATERIAL_IDS: [&str; MATERIAL_COUNT] = [
+    "impact_hammer",
+    "mercenary_blade",
+    "poisoned_dagger",
+    "zander_1",
+    "varuckan_soulknife",
+];
+pub const MATERIAL_NAMES: [&str; MATERIAL_COUNT] = [
+    "Impact Hammer",
+    "Mercenary's Blade",
+    "Poisoned Dagger",
+    "Zander, Prepared Scout",
+    "Varuckan Soulknife",
+];
+const MAT_HAMMER: usize = 0;
+const MAT_BLADE: usize = 1;
+const MAT_DAGGER: usize = 2;
+const MAT_ZANDER: usize = 3;
+const MAT_SOULKNIFE: usize = 4;
 
 #[derive(Clone, Debug)]
 pub struct LineCardStats {
@@ -14,6 +37,9 @@ pub struct LineCardStats {
     pub damage: [u32; CARD_COUNT],
     /// Mid-line draws (not opening hand). Bricks ignored.
     pub drawn: [u32; CARD_COUNT],
+    pub material_plays: [u32; MATERIAL_COUNT],
+    pub material_attacks: [u32; MATERIAL_COUNT],
+    pub material_damage: [u32; MATERIAL_COUNT],
 }
 
 impl Default for LineCardStats {
@@ -23,6 +49,9 @@ impl Default for LineCardStats {
             attacks: [0; CARD_COUNT],
             damage: [0; CARD_COUNT],
             drawn: [0; CARD_COUNT],
+            material_plays: [0; MATERIAL_COUNT],
+            material_attacks: [0; MATERIAL_COUNT],
+            material_damage: [0; MATERIAL_COUNT],
         }
     }
 }
@@ -33,23 +62,23 @@ impl LineCardStats {
         action: Action,
         before: State,
         after: State,
-        steps: &[Step],
+        events: &[LineEvent],
     ) {
         let before_damage = before.damage;
         match action {
             Action::PlayAlly { card, .. } => {
                 self.plays[card.index()] += 1;
-                self.attribute_play_bundle(card, steps, before_damage);
+                self.attribute_play_bundle(card, events, before_damage);
             }
             Action::PlayItem { card } => {
                 self.plays[card.index()] += 1;
-                self.record_draws_in_steps(steps);
+                self.record_draws_in_events(events);
             }
             Action::PlayAttack { card, .. } | Action::PlayAction { card, .. } => {
                 self.plays[card.index()] += 1;
                 let delta = u32::from(after.damage.saturating_sub(before_damage));
                 self.damage[card.index()] += delta;
-                self.record_draws_in_steps(steps);
+                self.record_draws_in_events(events);
             }
             Action::BlazingThrow => {
                 self.plays[Card::BlazingThrow.index()] += 1;
@@ -59,99 +88,146 @@ impl LineCardStats {
             Action::AttackArthur(index) => {
                 let card = before.allies[index as usize].card();
                 self.attacks[card.index()] += 1;
-                self.attribute_attack_bundle(card, steps, before_damage);
+                self.attribute_attack_bundle(card, events, before_damage);
             }
-            Action::AttackOthers => self.attribute_multi_attacks(steps, before_damage),
+            Action::AttackOthers => self.attribute_multi_attacks(events, before_damage),
+            Action::MaterializeHammer => {
+                self.material_plays[MAT_HAMMER] += 1;
+                self.record_draws_in_events(events);
+            }
+            Action::MaterializeDagger => {
+                self.material_plays[MAT_DAGGER] += 1;
+                self.record_draws_in_events(events);
+            }
+            Action::MaterializeZanderMemory | Action::MaterializeZanderFloat(_) => {
+                self.material_plays[MAT_ZANDER] += 1;
+                self.record_draws_in_events(events);
+            }
+            Action::MaterializeSoulknife => {
+                self.material_plays[MAT_SOULKNIFE] += 1;
+                self.record_draws_in_events(events);
+            }
+            Action::MercenaryBlade => {
+                self.material_plays[MAT_BLADE] += 1;
+                self.record_draws_in_events(events);
+            }
+            Action::ActivateDagger => {
+                self.material_attacks[MAT_DAGGER] += 1;
+                self.material_damage[MAT_DAGGER] +=
+                    u32::from(after.damage.saturating_sub(before_damage));
+                self.record_draws_in_events(events);
+            }
             Action::AttackWithWeapon => {
-                // Weapon-only champion swing; materials are not card-stat rows.
-                self.record_draws_in_steps(steps);
+                if let Some(index) = material_index_from_weapon(before.weapon) {
+                    self.material_attacks[index] += 1;
+                    self.material_damage[index] +=
+                        u32::from(after.damage.saturating_sub(before_damage));
+                }
+                self.record_draws_in_events(events);
             }
-            Action::Pass => self.attribute_on_death_steps(steps, before_damage),
-            _ => self.record_draws_in_steps(steps),
+            Action::Pass => self.attribute_on_death_events(events, before_damage),
+            _ => self.record_draws_in_events(events),
         }
     }
 
-    fn attribute_play_bundle(&mut self, card: Card, steps: &[Step], before_damage: u8) {
+    fn attribute_play_bundle(&mut self, card: Card, events: &[LineEvent], before_damage: u8) {
         let mut prev = before_damage;
-        for step in steps {
-            let delta = u32::from(step.damage.saturating_sub(prev));
-            prev = step.damage;
+        for event in events {
+            let delta = u32::from(event.damage.saturating_sub(prev));
+            prev = event.damage;
             if delta > 0 {
-                if let Some(dead) = parse_on_death(&step.action) {
-                    self.damage[dead.index()] += delta;
-                } else if step.action.contains("On-Enter")
-                    || step.action.starts_with("Racoo")
-                    || step.action.starts_with("Rococo")
-                {
-                    self.damage[card.index()] += delta;
+                match event.kind {
+                    EventKind::OnDeath => {
+                        if let Some(dead) = event.card.and_then(card_from_id) {
+                            self.damage[dead.index()] += delta;
+                        }
+                    }
+                    EventKind::OnEnterDamage => {
+                        self.damage[card.index()] += delta;
+                    }
+                    _ => {}
                 }
             }
-            self.record_draw_label(&step.action);
+            self.record_draw_event(event);
         }
     }
 
-    fn attribute_on_death_steps(&mut self, steps: &[Step], before_damage: u8) {
+    fn attribute_on_death_events(&mut self, events: &[LineEvent], before_damage: u8) {
         let mut prev = before_damage;
-        for step in steps {
-            let delta = u32::from(step.damage.saturating_sub(prev));
-            prev = step.damage;
+        for event in events {
+            let delta = u32::from(event.damage.saturating_sub(prev));
+            prev = event.damage;
             if delta > 0 {
-                if let Some(card) = parse_on_death(&step.action) {
-                    self.damage[card.index()] += delta;
-                }
-            }
-            self.record_draw_label(&step.action);
-        }
-    }
-
-    fn attribute_attack_bundle(&mut self, card: Card, steps: &[Step], before_damage: u8) {
-        let mut prev = before_damage;
-        for step in steps {
-            let delta = u32::from(step.damage.saturating_sub(prev));
-            prev = step.damage;
-            if let Some(attacker) = parse_attack_from(&step.action) {
-                attribute_attack_damage(&step.action, delta, attacker, &mut self.damage);
-            } else if step.action.starts_with("Corhazi") {
-                self.damage[Card::CorhaziCourier.index()] += delta;
-            } else if delta > 0 {
-                self.damage[card.index()] += delta;
-            }
-            self.record_draw_label(&step.action);
-        }
-    }
-
-    fn attribute_multi_attacks(&mut self, steps: &[Step], before_damage: u8) {
-        let mut prev = before_damage;
-        let mut current: Option<Card> = None;
-        for step in steps {
-            let delta = u32::from(step.damage.saturating_sub(prev));
-            prev = step.damage;
-            if let Some(card) = parse_attack_from(&step.action) {
-                current = Some(card);
-                self.attacks[card.index()] += 1;
-                attribute_attack_damage(&step.action, delta, card, &mut self.damage);
-            } else if step.action.starts_with("Corhazi") {
-                self.damage[Card::CorhaziCourier.index()] += delta;
-                self.record_draw_label(&step.action);
-            } else {
-                if delta > 0 {
-                    if let Some(card) = current {
+                if event.kind == EventKind::OnDeath {
+                    if let Some(card) = event.card.and_then(card_from_id) {
                         self.damage[card.index()] += delta;
                     }
                 }
-                self.record_draw_label(&step.action);
+            }
+            self.record_draw_event(event);
+        }
+    }
+
+    fn attribute_attack_bundle(&mut self, card: Card, events: &[LineEvent], before_damage: u8) {
+        let mut prev = before_damage;
+        for event in events {
+            let delta = u32::from(event.damage.saturating_sub(prev));
+            prev = event.damage;
+            match event.kind {
+                EventKind::AllyAttack => {
+                    let attacker = event.card.and_then(card_from_id).unwrap_or(card);
+                    attribute_attack_damage(event, delta, attacker, &mut self.damage);
+                }
+                EventKind::CorhaziOnHit => {
+                    self.damage[Card::CorhaziCourier.index()] += delta;
+                }
+                _ if delta > 0 => {
+                    self.damage[card.index()] += delta;
+                }
+                _ => {}
+            }
+            self.record_draw_event(event);
+        }
+    }
+
+    fn attribute_multi_attacks(&mut self, events: &[LineEvent], before_damage: u8) {
+        let mut prev = before_damage;
+        let mut current: Option<Card> = None;
+        for event in events {
+            let delta = u32::from(event.damage.saturating_sub(prev));
+            prev = event.damage;
+            match event.kind {
+                EventKind::AllyAttack => {
+                    if let Some(card) = event.card.and_then(card_from_id) {
+                        current = Some(card);
+                        self.attacks[card.index()] += 1;
+                        attribute_attack_damage(event, delta, card, &mut self.damage);
+                    }
+                }
+                EventKind::CorhaziOnHit => {
+                    self.damage[Card::CorhaziCourier.index()] += delta;
+                    self.record_draw_event(event);
+                }
+                _ => {
+                    if delta > 0 {
+                        if let Some(card) = current {
+                            self.damage[card.index()] += delta;
+                        }
+                    }
+                    self.record_draw_event(event);
+                }
             }
         }
     }
 
-    fn record_draws_in_steps(&mut self, steps: &[Step]) {
-        for step in steps {
-            self.record_draw_label(&step.action);
+    fn record_draws_in_events(&mut self, events: &[LineEvent]) {
+        for event in events {
+            self.record_draw_event(event);
         }
     }
 
-    fn record_draw_label(&mut self, label: &str) {
-        for card in parse_drawn_cards(label) {
+    fn record_draw_event(&mut self, event: &LineEvent) {
+        if let Some(card) = event.drawn.and_then(card_from_id) {
             if card != Card::Brick {
                 self.drawn[card.index()] += 1;
             }
@@ -165,6 +241,89 @@ impl LineCardStats {
             target.damage[index] += self.damage[index];
             target.drawn[index] += self.drawn[index];
         }
+        for index in 0..MATERIAL_COUNT {
+            target.material_plays[index] += self.material_plays[index];
+            target.material_attacks[index] += self.material_attacks[index];
+            target.material_damage[index] += self.material_damage[index];
+        }
+    }
+
+    /// Nonzero counters keyed by card id, for persistence.
+    pub fn to_sparse(&self) -> SparseLineStats {
+        let mut plays = BTreeMap::new();
+        let mut attacks = BTreeMap::new();
+        let mut damage = BTreeMap::new();
+        let mut drawn = BTreeMap::new();
+        for card in PLAYABLE_CARDS {
+            let index = card.index();
+            if self.plays[index] > 0 {
+                plays.insert(card.id(), self.plays[index]);
+            }
+            if self.attacks[index] > 0 {
+                attacks.insert(card.id(), self.attacks[index]);
+            }
+            if self.damage[index] > 0 {
+                damage.insert(card.id(), self.damage[index]);
+            }
+            if self.drawn[index] > 0 {
+                drawn.insert(card.id(), self.drawn[index]);
+            }
+        }
+        for index in 0..MATERIAL_COUNT {
+            let id = MATERIAL_IDS[index];
+            if self.material_plays[index] > 0 {
+                plays.insert(id, self.material_plays[index]);
+            }
+            if self.material_attacks[index] > 0 {
+                attacks.insert(id, self.material_attacks[index]);
+            }
+            if self.material_damage[index] > 0 {
+                damage.insert(id, self.material_damage[index]);
+            }
+        }
+        SparseLineStats {
+            plays,
+            attacks,
+            damage,
+            drawn,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.plays.iter().all(|&v| v == 0)
+            && self.attacks.iter().all(|&v| v == 0)
+            && self.damage.iter().all(|&v| v == 0)
+            && self.drawn.iter().all(|&v| v == 0)
+            && self.material_plays.iter().all(|&v| v == 0)
+            && self.material_attacks.iter().all(|&v| v == 0)
+            && self.material_damage.iter().all(|&v| v == 0)
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
+pub struct SparseLineStats {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plays: BTreeMap<&'static str, u32>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attacks: BTreeMap<&'static str, u32>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub damage: BTreeMap<&'static str, u32>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub drawn: BTreeMap<&'static str, u32>,
+}
+
+impl SparseLineStats {
+    pub fn is_empty_stats(stats: &Self) -> bool {
+        stats.plays.is_empty()
+            && stats.attacks.is_empty()
+            && stats.damage.is_empty()
+            && stats.drawn.is_empty()
     }
 }
 
@@ -275,7 +434,8 @@ impl DeckStatAccumulator {
         let total_damage: u32 = PLAYABLE_CARDS
             .iter()
             .map(|card| self.line.damage[card.index()])
-            .sum();
+            .sum::<u32>()
+            + self.line.material_damage.iter().sum::<u32>();
         let total_damage_f = f64::from(total_damage.max(1));
 
         let mut rows = PLAYABLE_CARDS
@@ -322,6 +482,35 @@ impl DeckStatAccumulator {
             })
             .collect::<Vec<_>>();
 
+        for index in 0..MATERIAL_COUNT {
+            let plays = self.line.material_plays[index];
+            let damage = self.line.material_damage[index];
+            rows.push(CardStat {
+                card: MATERIAL_IDS[index],
+                name: MATERIAL_NAMES[index],
+                copies: 1,
+                opened: self.samples,
+                opened_copies: self.samples,
+                drawn: 0,
+                seen: self.samples,
+                plays,
+                attacks: self.line.material_attacks[index],
+                damage,
+                damage_when_seen_sum: damage,
+                open_rate: 1.0,
+                see_rate: 1.0,
+                play_rate: f64::from(plays) / samples,
+                play_when_in_hand: f64::from(plays) / samples,
+                damage_when_seen: f64::from(damage) / samples,
+                damage_per_play: if plays > 0 {
+                    f64::from(damage) / f64::from(plays)
+                } else {
+                    0.0
+                },
+                damage_share: f64::from(damage) / total_damage_f,
+            });
+        }
+
         rows.sort_by(|a, b| {
             b.damage
                 .cmp(&a.damage)
@@ -332,46 +521,30 @@ impl DeckStatAccumulator {
     }
 }
 
-fn parse_on_death(label: &str) -> Option<Card> {
-    let name = label.strip_suffix(" On Death")?;
-    ALL_CARDS
-        .into_iter()
-        .find(|card| card.name() == name)
-}
-
-fn parse_attack_from(label: &str) -> Option<Card> {
-    let rest = label.strip_prefix("Attack from ")?;
-    let name = rest.split(" (").next()?;
-    ALL_CARDS
-        .into_iter()
-        .find(|card| card.name() == name)
-}
-
-fn parse_attack_bonuses(label: &str) -> (u32, u32) {
-    let Some(start) = label.find(" (") else {
-        return (0, 0);
-    };
-    let Some(end) = label.rfind(')') else {
-        return (0, 0);
-    };
-    if end <= start + 2 {
-        return (0, 0);
+fn material_index_from_weapon(weapon: Weapon) -> Option<usize> {
+    match weapon {
+        Weapon::ImpactHammer => Some(MAT_HAMMER),
+        Weapon::MercenaryBlade => Some(MAT_BLADE),
+        Weapon::VaruckanSoulknife => Some(MAT_SOULKNIFE),
+        Weapon::None => None,
     }
-    let inner = &label[start + 2..end];
-    let mut arthur = 0_u32;
-    let mut hot_cake = 0_u32;
-    for part in inner.split(", ") {
-        if let Some(value) = part.strip_prefix("Arthur +") {
-            arthur = value.parse().unwrap_or(0);
-        } else if let Some(value) = part.strip_prefix("Hot Cake +") {
-            hot_cake = value.parse().unwrap_or(0);
-        }
-    }
-    (arthur, hot_cake)
 }
 
-fn attribute_attack_damage(label: &str, delta: u32, attacker: Card, damage: &mut [u32; CARD_COUNT]) {
-    let (arthur_bonus, hot_cake_bonus) = parse_attack_bonuses(label);
+fn card_from_id(id: &str) -> Option<Card> {
+    ALL_CARDS.into_iter().find(|card| card.id() == id)
+}
+
+fn attribute_attack_damage(
+    event: &LineEvent,
+    delta: u32,
+    attacker: Card,
+    damage: &mut [u32; CARD_COUNT],
+) {
+    let (arthur_bonus, hot_cake_bonus) = event
+        .bonuses
+        .as_ref()
+        .map(|b| (u32::from(b.arthur), u32::from(b.hot_cake)))
+        .unwrap_or((0, 0));
     let buff_total = arthur_bonus + hot_cake_bonus;
     let base = delta.saturating_sub(buff_total);
     if base > 0 {
@@ -385,84 +558,122 @@ fn attribute_attack_damage(label: &str, delta: u32, attacker: Card, damage: &mut
     }
 }
 
-fn parse_drawn_cards(label: &str) -> Vec<Card> {
-    let mut found = Vec::new();
-    // "Clumsy On-Enter draw (Clums)"
-    if let Some(inner) = label.strip_prefix("Clumsy On-Enter draw (") {
-        if let Some(short) = inner.strip_suffix(')') {
-            if let Some(card) = card_from_short(short) {
-                found.push(card);
-            }
-        }
-    }
-    // "On-Attack discard X / draw Y"
-    if let Some(idx) = label.find(" / draw ") {
-        let short = label[idx + " / draw ".len()..]
-            .split_whitespace()
-            .next()
-            .unwrap_or("");
-        if let Some(card) = card_from_short(short) {
-            found.push(card);
-        }
-    }
-    // "Corhazi On-Hit draw X / discard ..."
-    if let Some(rest) = label.strip_prefix("Corhazi On-Hit draw ") {
-        let short = rest.split_whitespace().next().unwrap_or("");
-        if let Some(card) = card_from_short(short) {
-            found.push(card);
-        }
-    }
-    // "Recollect (draw Short)"
-    if let Some(inner) = label.strip_prefix("Recollect (draw ") {
-        if let Some(short) = inner.strip_suffix(')') {
-            if let Some(card) = card_from_short(short) {
-                found.push(card);
-            }
-        }
-    }
-    // "Vermilion Decree (Imbue, draw Short)" / with optional Kindle suffix
-    if let Some(idx) = label.find("Vermilion Decree (Imbue, draw ") {
-        let rest = &label[idx + "Vermilion Decree (Imbue, draw ".len()..];
-        let short = rest.split([' ', ')']).next().unwrap_or("");
-        if let Some(card) = card_from_short(short) {
-            found.push(card);
-        }
-    }
-    found
-}
-
-fn card_from_short(short: &str) -> Option<Card> {
-    ALL_CARDS.into_iter().find(|card| card.short() == short)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::line_event::{AttackBonuses, EventFields, EventTape, TapePhase};
 
     #[test]
-    fn parses_recollect_draw() {
-        let cards = parse_drawn_cards("Recollect (draw Arthu)");
-        assert_eq!(cards, vec![Card::Arthur]);
+    fn records_recollect_draw() {
+        let mut tape = EventTape::new();
+        let state = State::new(&[Card::Arthur], true, 1);
+        tape.begin_action(crate::line_event::ActionOp::SkipMaterialize);
+        tape.push(
+            state,
+            TapePhase::Main,
+            EventKind::Recollect,
+            EventFields::default().with_drawn(Card::Arthur),
+        );
+        let mut stats = LineCardStats::default();
+        stats.record_draws_in_events(&tape.events);
+        assert_eq!(stats.drawn[Card::Arthur.index()], 1);
     }
 
     #[test]
-    fn parses_vermilion_decree_imbue_draw() {
-        let cards = parse_drawn_cards("Vermilion Decree (Imbue, draw HCake)");
-        assert_eq!(cards, vec![Card::HotCake]);
+    fn records_vermilion_imbue_draw() {
+        let mut tape = EventTape::new();
+        let state = State::new(&[Card::VermilionDecree], true, 1);
+        tape.begin_action(crate::line_event::ActionOp::PlayAction);
+        tape.push(
+            state,
+            TapePhase::Main,
+            EventKind::Play,
+            EventFields::card(Card::VermilionDecree)
+                .with_imbue(true)
+                .with_drawn(Card::HotCake),
+        );
+        let mut stats = LineCardStats::default();
+        stats.record_draws_in_events(&tape.events);
+        assert_eq!(stats.drawn[Card::HotCake.index()], 1);
     }
 
     #[test]
-    fn parses_attack_bonuses() {
-        assert_eq!(
-            parse_attack_bonuses("Attack from Clumsy Apprentice (Hot Cake +3)"),
-            (0, 3)
-        );
-        assert_eq!(
-            parse_attack_bonuses(
-                "Attack from Kingdom Informant (Arthur +1, Hot Cake +3)"
-            ),
-            (1, 3)
-        );
-        assert_eq!(parse_attack_bonuses("Attack from Arthur, Young Heir"), (0, 0));
+    fn attributes_attack_bonuses() {
+        let mut damage = [0_u32; CARD_COUNT];
+        let event = LineEvent {
+            op: crate::line_event::ActionOp::AttackArthur,
+            kind: EventKind::AllyAttack,
+            action_index: 1,
+            turn: 1,
+            phase: TapePhase::Main,
+            damage: 4,
+            fire_gy: 0,
+            card: Some("clumsy_apprentice"),
+            kindle: None,
+            drawn: None,
+            discarded: None,
+            prepared: None,
+            imbue: None,
+            weapon: None,
+            command_ally: None,
+            bonuses: Some(AttackBonuses {
+                arthur: 1,
+                hot_cake: 3,
+                unique: 0,
+                ally_attack: 0,
+            }),
+            hand: None,
+            memory: None,
+            allies: None,
+            fast: false,
+            doubled: false,
+            from_memory: false,
+            heated: false,
+            human: false,
+            gy_threshold: false,
+        };
+        attribute_attack_damage(&event, 4, Card::ClumsyApprentice, &mut damage);
+        assert_eq!(damage[Card::ClumsyApprentice.index()], 0);
+        assert_eq!(damage[Card::Arthur.index()], 1);
+        assert_eq!(damage[Card::HotCake.index()], 3);
+    }
+
+    #[test]
+    fn records_material_plays() {
+        let state = State::new(&[Card::Arthur], true, 1);
+        let mut stats = LineCardStats::default();
+        stats.record_action(Action::MaterializeHammer, state, state, &[]);
+        assert_eq!(stats.material_plays[MAT_HAMMER], 1);
+        let sparse = stats.to_sparse();
+        assert_eq!(sparse.plays.get("impact_hammer").copied(), Some(1));
+    }
+
+    #[test]
+    fn records_weapon_attack_damage() {
+        let mut before = State::new(&[Card::Arthur], true, 1);
+        before.weapon = Weapon::ImpactHammer;
+        let mut after = before;
+        after.damage = 3;
+        let mut stats = LineCardStats::default();
+        stats.record_action(Action::AttackWithWeapon, before, after, &[]);
+        assert_eq!(stats.material_attacks[MAT_HAMMER], 1);
+        assert_eq!(stats.material_damage[MAT_HAMMER], 3);
+        let sparse = stats.to_sparse();
+        assert_eq!(sparse.attacks.get("impact_hammer").copied(), Some(1));
+        assert_eq!(sparse.damage.get("impact_hammer").copied(), Some(3));
+    }
+
+    #[test]
+    fn finish_includes_material_rows() {
+        let mut acc = DeckStatAccumulator::with_deck(&[Card::Arthur]);
+        acc.add_sample(&[Card::Arthur], &LineCardStats::default());
+        let rows = acc.finish();
+        let hammer = rows
+            .iter()
+            .find(|row| row.card == "impact_hammer")
+            .expect("impact hammer row");
+        assert_eq!(hammer.copies, 1);
+        assert_eq!(hammer.seen, 1);
+        assert_eq!(hammer.plays, 0);
     }
 }

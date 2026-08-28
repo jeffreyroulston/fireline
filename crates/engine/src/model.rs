@@ -81,8 +81,8 @@ impl Ally {
     }
 
     pub fn set_attack_buff(&mut self, attack_buff: u8) {
-        self.0 = (self.0 & !(0xFF << Self::BUFF_SHIFT))
-            | ((attack_buff as u32) << Self::BUFF_SHIFT);
+        self.0 =
+            (self.0 & !(0xFF << Self::BUFF_SHIFT)) | ((attack_buff as u32) << Self::BUFF_SHIFT);
     }
 }
 
@@ -468,12 +468,7 @@ impl State {
     }
 
     /// Pays with kindle. Returns `Some(reserve_all_fire)` on success.
-    fn pay_with_kindle_with(
-        &mut self,
-        cost: u8,
-        kindle: u8,
-        mode: PaymentMode,
-    ) -> Option<bool> {
+    fn pay_with_kindle_with(&mut self, cost: u8, kindle: u8, mode: PaymentMode) -> Option<bool> {
         let kindle = kindle.min(cost).min(self.fire_gy);
         let reserve = cost.saturating_sub(kindle);
         let all_fire = self.pay_reserve_with(reserve, mode)?;
@@ -654,20 +649,22 @@ impl State {
         self.agility = 0;
     }
 
-    pub fn enemy_cull(&mut self, mut steps: Option<&mut Vec<Step>>) {
+    pub fn enemy_cull(&mut self, mut tape: Option<&mut crate::line_event::EventTape>) {
+        use crate::line_event::{EventFields, EventKind, TapePhase};
         let mut index = 0;
         while index < self.ally_len as usize {
             let ally = self.allies[index];
             if ally.immortal() || self.ally_has_stealth(ally) {
                 index += 1;
             } else if let Some(card) = self.remove_ally(index, true) {
-                if let Some(steps) = steps.as_deref_mut() {
+                if let Some(tape) = tape.as_deref_mut() {
                     if card.on_death_damage() > 0 {
-                        steps.push(Step::new(
+                        tape.push(
                             *self,
-                            "EMai",
-                            format!("{} On Death", card.name()),
-                        ));
+                            TapePhase::EnemyMain,
+                            EventKind::OnDeath,
+                            EventFields::card(card),
+                        );
                     }
                 }
             }
@@ -681,30 +678,6 @@ impl State {
         self.weapon_durability = self.weapon_durability.saturating_sub(1);
         if self.weapon_durability == 0 {
             self.weapon = Weapon::None;
-        }
-    }
-
-    pub fn hand_display(self) -> String {
-        let cards = ALL_CARDS
-            .iter()
-            .flat_map(|&card| std::iter::repeat_n(card.short(), self.hand[card.index()] as usize))
-            .collect::<Vec<_>>();
-        if cards.is_empty() {
-            "HAND0".to_string()
-        } else {
-            format!("HAND{} {}", self.hand_len, cards.join(", "))
-        }
-    }
-
-    pub fn memory_display(self) -> String {
-        let cards = ALL_CARDS
-            .iter()
-            .flat_map(|&card| std::iter::repeat_n(card.short(), self.memory[card.index()] as usize))
-            .collect::<Vec<_>>();
-        if cards.is_empty() {
-            "MEM0".to_string()
-        } else {
-            format!("MEM{} {}", self.memory_len, cards.join(", "))
         }
     }
 }
@@ -743,62 +716,14 @@ pub enum Action {
         card: Card,
         kindle: u8,
         prepared: bool,
-    /// For Imbue cards: pay Fire-only (guarantees imbue when legal).
-    /// When false, use normal reserve payment and imbue only if that payment is all Fire.
-    imbue: bool,
+        /// For Imbue cards: pay Fire-only (guarantees imbue when legal).
+        /// When false, use normal reserve payment and imbue only if that payment is all Fire.
+        imbue: bool,
     },
     BlazingThrow,
     MercenaryBlade,
     /// Champion declares an attack by wielding the equipped weapon (no attack card).
     AttackWithWeapon,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "ts", derive(TS))]
-#[cfg_attr(
-    feature = "ts",
-    ts(export, export_to = "../../../packages/contracts/generated/")
-)]
-pub struct Step {
-    pub turn: u8,
-    pub phase: &'static str,
-    pub damage: u8,
-    pub allies: u8,
-    pub ally_names: Vec<&'static str>,
-    pub fire_gy: u8,
-    pub action: String,
-    pub memory: String,
-    pub hand: String,
-    pub display: String,
-}
-
-impl Step {
-    pub fn new(state: State, phase: &'static str, action: impl Into<String>) -> Self {
-        let action = action.into();
-        let memory = state.memory_display();
-        let hand = state.hand_display();
-        let ally_names = state.allies[..state.ally_len as usize]
-            .iter()
-            .map(|ally| ally.card().name())
-            .collect();
-        let display = format!(
-            "{} {:<4} | {:>3} | allies={} | FireGY {} | {:<42} | {:<34} | {}",
-            state.turn, phase, state.damage, state.ally_len, state.fire_gy, action, memory, hand
-        );
-        Self {
-            turn: state.turn,
-            phase,
-            damage: state.damage,
-            allies: state.ally_len,
-            ally_names,
-            fire_gy: state.fire_gy,
-            action,
-            memory,
-            hand,
-            display,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -862,9 +787,13 @@ pub struct SolveRequest {
     pub max_turns: u8,
     #[serde(default)]
     pub sim_type: SimType,
-    /// Full maindeck counts. Required for Monte Carlo and Two-pass (minus the opening hand).
+    /// Full maindeck counts. Required for Monte Carlo, Two-pass, and Oracle (minus the opening hand).
     #[serde(default)]
     pub deck: BTreeMap<String, u8>,
+    /// Remaining library in draw order. When set, Two-pass and Oracle use this
+    /// queue as-is instead of shuffling `deck` minus the hand.
+    #[serde(default)]
+    pub queue: Option<Vec<String>>,
     #[serde(default = "default_rollouts")]
     pub rollouts: u16,
     #[serde(default = "default_seed")]
@@ -885,6 +814,7 @@ pub enum SimType {
     FireBrick,
     MonteCarlo,
     TwoPass,
+    OracleOnly,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -898,7 +828,7 @@ pub struct PassResult {
     pub max_damage: u8,
     /// Final hand + memory size on the chosen max-damage line.
     pub end_influence: u8,
-    pub steps: Vec<Step>,
+    pub events: Vec<crate::line_event::LineEvent>,
     pub nodes: u64,
     pub memo_entries: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -914,7 +844,7 @@ pub struct PassResult {
 )]
 pub struct McRollout {
     pub damage: u8,
-    pub steps: Vec<Step>,
+    pub events: Vec<crate::line_event::LineEvent>,
     pub nodes: u64,
 }
 
@@ -928,6 +858,7 @@ pub struct McRollout {
 pub struct DamageDistribution {
     pub damages: Vec<u8>,
     pub mean: f64,
+    pub p10: u8,
     pub p50: u8,
     pub p90: u8,
     pub min: u8,
@@ -959,7 +890,7 @@ pub struct SolveResult {
     pub max_damage: u8,
     /// Final hand + memory size on the chosen max-damage line.
     pub end_influence: u8,
-    pub steps: Vec<Step>,
+    pub events: Vec<crate::line_event::LineEvent>,
     pub nodes: u64,
     pub memo_entries: usize,
     pub elapsed_ms: f64,
@@ -970,6 +901,9 @@ pub struct SolveResult {
     pub two_pass: Option<TwoPassResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub card_stats: Vec<crate::stats::CardStat>,
+    /// Sparse per-card counters for the headline line (persist → run_sample_card_stats).
+    #[serde(skip_serializing_if = "crate::stats::SparseLineStats::is_empty_stats")]
+    pub line_card_stats: crate::stats::SparseLineStats,
     /// Raw line counters for the headline / oracle path (skipped in JSON).
     #[serde(skip)]
     #[cfg_attr(feature = "ts", ts(skip))]

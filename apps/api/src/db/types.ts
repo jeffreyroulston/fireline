@@ -1,3 +1,26 @@
+export interface CardsTable {
+  id: string;
+  name: string;
+  short: string;
+  kind: string;
+  cost: number;
+  element: string;
+  power: number | null;
+  life: number | null;
+  stealth: boolean;
+  unique: boolean;
+  assassin_power_bonus: number | null;
+  assassin_stealth: boolean;
+  automaton: boolean;
+  fast: boolean;
+  floating_memory: boolean;
+  kindle: number | null;
+  prepare: number | null;
+  aliases: string[];
+  sort_index: number;
+  updated_at: Date;
+}
+
 export interface DecksTable {
   id: string;
   name: string;
@@ -45,8 +68,10 @@ export interface RunsTable {
   elapsed_ms: number | null;
   error_message: string | null;
   mean_damage: number | null;
+  p10_damage: number | null;
   p50_damage: number | null;
   p90_damage: number | null;
+  mean_end_influence: number | null;
   max_damage: number | null;
   min_damage: number | null;
   best_score: number | null;
@@ -64,7 +89,27 @@ export interface RunSamplesTable {
   occurrence_count: number;
   damage: number;
   nodes: string;
-  steps: unknown[] | null;
+}
+
+export interface RunSampleEventsTable {
+  sample_id: string;
+  seq: number;
+  action_index: number;
+  op: string;
+  kind: string;
+  card_id: string | null;
+  drawn_id: string | null;
+  discarded_id: string | null;
+  payload: Record<string, unknown>;
+}
+
+export interface RunSampleCardStatsTable {
+  sample_id: string;
+  card_id: string;
+  plays: number;
+  attacks: number;
+  damage: number;
+  drawn: number;
 }
 
 export interface RunCardStatsTable {
@@ -89,10 +134,20 @@ export interface RunCandidatesTable {
   deck_hash: string;
 }
 
+export interface DeckCardsTable {
+  deck_id: string;
+  card_id: string;
+  copies: number;
+}
+
 export interface Database {
+  cards: CardsTable;
   decks: DecksTable;
+  deck_cards: DeckCardsTable;
   runs: RunsTable;
   run_samples: RunSamplesTable;
+  run_sample_events: RunSampleEventsTable;
+  run_sample_card_stats: RunSampleCardStatsTable;
   run_card_stats: RunCardStatsTable;
   run_candidates: RunCandidatesTable;
 }

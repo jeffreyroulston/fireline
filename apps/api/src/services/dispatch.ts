@@ -68,6 +68,10 @@ export class RunDispatcher {
   }
 
   cancel(runId: string): void {
+    const index = this.queue.findIndex((job) => job.runId === runId);
+    if (index >= 0) {
+      this.queue.splice(index, 1);
+    }
     runHub.getAbort(runId)?.abort();
   }
 

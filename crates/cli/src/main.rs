@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
-use ga_fire_engine::{evaluate_json, optimize_json, solve_json};
-use std::{fs, process::ExitCode};
+use ga_fire_engine::{SolveRequest, evaluate_json, format_line_event_row, optimize_json, solve};
+use std::{collections::BTreeMap, fs, process::ExitCode};
 
 #[derive(Parser)]
 #[command(name = "ga-fire", about = "Optimized Grand Archive FiZa damage solver")]
@@ -50,25 +50,45 @@ fn run() -> Result<String, String> {
             turns,
             json,
         } => {
-            let input = serde_json::json!({
-                "hand": cards,
-                "goFirst": go_first,
-                "maxTurns": turns,
-            });
-            let output = solve_json(&input.to_string())?;
+            let request = SolveRequest {
+                hand: cards,
+                go_first,
+                max_turns: turns,
+                sim_type: Default::default(),
+                deck: BTreeMap::new(),
+                queue: None,
+                rollouts: 12,
+                seed: 42,
+                budget: Default::default(),
+            };
+            let result = solve(&request)?;
             if json {
-                return Ok(output);
+                return serde_json::to_string(&result).map_err(|error| error.to_string());
             }
-            let result: serde_json::Value =
-                serde_json::from_str(&output).map_err(|error| error.to_string())?;
             let mut formatted = format!(
                 "Max damage: {}  |  states: {}  |  {:.2} ms\n",
-                result["maxDamage"],
-                result["nodes"],
-                result["elapsedMs"].as_f64().unwrap_or_default()
+                result.max_damage, result.nodes, result.elapsed_ms
             );
-            for step in result["steps"].as_array().into_iter().flatten() {
-                formatted.push_str(step["display"].as_str().unwrap_or_default());
+            let mut last_hand: Option<Vec<&str>> = None;
+            let mut last_memory: Option<Vec<&str>> = None;
+            let mut last_allies: Option<Vec<&str>> = None;
+            for mut event in result.events {
+                if event.hand.is_some() {
+                    last_hand = event.hand.clone();
+                } else {
+                    event.hand = last_hand.clone();
+                }
+                if event.memory.is_some() {
+                    last_memory = event.memory.clone();
+                } else {
+                    event.memory = last_memory.clone();
+                }
+                if event.allies.is_some() {
+                    last_allies = event.allies.clone();
+                } else {
+                    event.allies = last_allies.clone();
+                }
+                formatted.push_str(&format_line_event_row(&event));
                 formatted.push('\n');
             }
             Ok(formatted)

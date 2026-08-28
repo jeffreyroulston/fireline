@@ -1,12 +1,15 @@
 "use client";
 
 import type { SimType } from "@/lib/engine";
+import { SectionHeading } from "./section-heading";
 
 export function RunSettings({
   goFirst,
   turns,
   simType,
   rollouts,
+  seed,
+  orderedPile,
   onFirstChange,
   onTurnsChange,
   onSimTypeChange,
@@ -16,6 +19,8 @@ export function RunSettings({
   turns: number;
   simType: SimType;
   rollouts: number;
+  seed?: number;
+  orderedPile?: boolean;
   onFirstChange: (value: boolean) => void;
   onTurnsChange: (value: number) => void;
   onSimTypeChange: (value: SimType) => void;
@@ -23,6 +28,7 @@ export function RunSettings({
 }) {
   return (
     <div className="settings-stack">
+      <SectionHeading title="CALCULATION SETTINGS" />
       <div className="settings-row">
         <label>
           Turn order
@@ -57,6 +63,7 @@ export function RunSettings({
             <option value="fire_brick">Fire brick (default)</option>
             <option value="monte_carlo">Monte Carlo — Sample</option>
             <option value="two_pass">Two-pass</option>
+            <option value="oracle_only">Oracle only</option>
           </select>
         </label>
         {simType === "monte_carlo" && (
@@ -74,10 +81,16 @@ export function RunSettings({
           </label>
         )}
       </div>
+      {seed != null && (
+        <p className="seed-readout">
+          Seed <strong>{seed}</strong>
+        </p>
+      )}
       {simType !== "fire_brick" && (
         <p className="sim-hint">
-          Uses the maindeck from the Decks tab so unknown draws can be
-          sampled.
+          {orderedPile
+            ? "Two-pass and Oracle draw the remaining shuffled pile in order. Monte Carlo still reshuffles that leftover for each rollout."
+            : "Uses the maindeck from the Decks tab so unknown draws can be sampled."}
         </p>
       )}
     </div>

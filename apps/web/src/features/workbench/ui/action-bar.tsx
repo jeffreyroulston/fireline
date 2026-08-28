@@ -10,12 +10,14 @@ export function ActionBar({
   onRun,
   onCancel,
   progress,
+  monteCarloRollouts,
 }: {
   label: string;
   busy: boolean;
   onRun: () => void;
   onCancel: () => void;
   progress?: OptimizeProgress | null;
+  monteCarloRollouts?: number;
 }) {
   const percent = progressPercent(progress);
 
@@ -33,7 +35,11 @@ export function ActionBar({
         )}
       </div>
       {busy && progress && (
-        <OptimizeProgressPanel progress={progress} percent={percent} />
+        <OptimizeProgressPanel
+          progress={progress}
+          percent={percent}
+          monteCarloRollouts={monteCarloRollouts}
+        />
       )}
     </div>
   );

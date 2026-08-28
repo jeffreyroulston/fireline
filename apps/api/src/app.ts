@@ -1,13 +1,14 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { sql, type Kysely } from "kysely";
-import type { SolveRequest, SolveResult } from "@ga-fire/contracts";
+import type { EngineVersion, SolveRequest, SolveResult } from "@ga-fire/contracts";
 import type { Database } from "./db/types.js";
-import { deckHash, newId, parseDeckText } from "./lib/deck.js";
+import { catalogTokenIndex, deckHash, newId, parseDeckText } from "./lib/deck.js";
 import { toJsonb } from "./lib/jsonb.js";
-import { getCards } from "./services/cards-cache.js";
+import { loadEventsBySampleId } from "./lib/load-sample-events.js";
+import { getCard, getCards, listDecksForCard, replaceDeckCards } from "./services/card-catalog.js";
 import type { RunDispatcher } from "./services/dispatch.js";
-import { markRunCancelled, persistSolveResult } from "./services/persist.js";
+import { persistSolveResult } from "./services/persist.js";
 import { runHub, sseJson } from "./services/run-hub.js";
 import { fetchWorkerJson, WorkerError } from "./services/worker.js";
 import {
@@ -19,7 +20,13 @@ import {
   pooledSampleHighlights,
   rankedCandidates,
 } from "./services/analysis.js";
-import { parseAttributionVersion, parseVersionTriple } from "./lib/version.js";
+import {
+  cardDatabase,
+  cardDatabaseCardDecks,
+  cardDatabasePairings,
+  cardDatabasePlayMatrix,
+} from "./services/card-database.js";
+import { parseAttributionVersion, parseDamageBounds, parseVersionTriple } from "./lib/version.js";
 
 export function createApp(options: {
   db: Kysely<Database>;
@@ -30,9 +37,31 @@ export function createApp(options: {
 
   app.get("/health", (c) => c.json({ ok: true }));
 
+  app.get("/version", async (c) => {
+    try {
+      const version = await fetchWorkerJson<EngineVersion>(options.workerBase, "/version");
+      return c.json({
+        ...version,
+        cardDigest: String(version.cardDigest),
+      });
+    } catch (error) {
+      if (error instanceof WorkerError) {
+        return c.json({ error: error.message }, (error.status === 503 ? 503 : 502) as 502 | 503);
+      }
+      throw error;
+    }
+  });
+
   app.get("/cards", async (c) => {
-    const cards = await getCards(options.workerBase);
+    const cards = await getCards(options.db);
     return c.json(cards);
+  });
+
+  app.get("/cards/:id", async (c) => {
+    const card = await getCard(options.db, c.req.param("id"));
+    if (!card) return c.notFound();
+    const decks = await listDecksForCard(options.db, card.id);
+    return c.json({ ...card, decks });
   });
 
   app.post("/solve", async (c) => {
@@ -80,7 +109,8 @@ export function createApp(options: {
 
   app.post("/decks", async (c) => {
     const body = await c.req.json<{ name?: string; text: string }>();
-    const counts = parseDeckText(body.text);
+    const catalog = await getCards(options.db);
+    const counts = parseDeckText(body.text, catalogTokenIndex(catalog));
     const id = newId();
     const now = new Date();
     const row = {
@@ -92,7 +122,10 @@ export function createApp(options: {
       created_at: now,
       updated_at: now,
     };
-    await options.db.insertInto("decks").values(row).execute();
+    await options.db.transaction().execute(async (trx) => {
+      await trx.insertInto("decks").values(row).execute();
+      await replaceDeckCards(trx, id, counts);
+    });
     return c.json({ ...row, counts, run_count: 0 }, 201);
   });
 
@@ -123,7 +156,8 @@ export function createApp(options: {
     }
 
     const text = body.text ?? existing.text;
-    const counts = parseDeckText(text);
+    const catalog = await getCards(options.db);
+    const counts = parseDeckText(text, catalogTokenIndex(catalog));
     const row = {
       name: body.name?.trim() || existing.name,
       text,
@@ -131,7 +165,10 @@ export function createApp(options: {
       deck_hash: deckHash(counts),
       updated_at: new Date(),
     };
-    await options.db.updateTable("decks").set(row).where("id", "=", existing.id).execute();
+    await options.db.transaction().execute(async (trx) => {
+      await trx.updateTable("decks").set(row).where("id", "=", existing.id).execute();
+      await replaceDeckCards(trx, existing.id, counts);
+    });
     return c.json({
       ...existing,
       ...row,
@@ -184,15 +221,10 @@ export function createApp(options: {
     if ("error" in version) {
       return c.json({ error: version.error }, 400);
     }
-    const cards = await getCards(options.workerBase);
-    const cardNames = Object.fromEntries(
-      cards.map((card) => [card.id, card.name]),
-    );
     const result = await pooledSampleHighlights(options.db, {
       deckHash,
       simType,
       version,
-      cardNames,
     });
     return c.json(result);
   });
@@ -247,13 +279,156 @@ export function createApp(options: {
     if (typeof attributionVersion === "object" && "error" in attributionVersion) {
       return c.json({ error: attributionVersion.error }, 400);
     }
+    const bounds = parseDamageBounds(params);
+    if ("error" in bounds) {
+      return c.json({ error: bounds.error }, 400);
+    }
+    const filtered =
+      bounds.gt != null ||
+      bounds.gte != null ||
+      bounds.lt != null ||
+      bounds.lte != null;
+    const cards = filtered ? await getCards(options.db) : undefined;
     const result = await cardLeaderboard(options.db, {
       deckHash,
       simType,
       version,
       attributionVersion,
+      bounds,
+      cards,
     });
     return c.json(result);
+  });
+
+  app.get("/analysis/card-database", async (c) => {
+    const simType = c.req.query("sim_type");
+    if (!simType) {
+      return c.json({ error: "sim_type is required" }, 400);
+    }
+    const params = new URL(c.req.url).searchParams;
+    const version = parseVersionTriple(params);
+    if ("error" in version) {
+      return c.json({ error: version.error }, 400);
+    }
+    const attributionVersion = parseAttributionVersion(params);
+    if (typeof attributionVersion === "object" && "error" in attributionVersion) {
+      return c.json({ error: attributionVersion.error }, 400);
+    }
+    const currentRules = params.get("current_rules_version");
+    const currentSampler = params.get("current_sampler_version");
+    const currentDigest = params.get("current_card_digest")?.trim();
+    const currentAttrRaw = params.get("current_attribution_version");
+    if (!currentRules || !currentSampler || !currentDigest || !currentAttrRaw) {
+      return c.json(
+        {
+          error:
+            "current_rules_version, current_sampler_version, current_card_digest, and current_attribution_version are required",
+        },
+        400,
+      );
+    }
+    const currentVersion = {
+      rulesVersion: Number(currentRules),
+      samplerVersion: Number(currentSampler),
+      cardDigest: currentDigest,
+    };
+    const currentAttributionVersion = Number(currentAttrRaw);
+    if (
+      !Number.isInteger(currentVersion.rulesVersion) ||
+      !Number.isInteger(currentVersion.samplerVersion) ||
+      !Number.isInteger(currentAttributionVersion)
+    ) {
+      return c.json({ error: "current engine version fields must be integers" }, 400);
+    }
+    const deckIdParams = params.getAll("deck_id").filter(Boolean);
+    const deckFilter = params.get("deck_filter") === "1";
+    const result = await cardDatabase(options.db, {
+      simType,
+      version,
+      attributionVersion,
+      currentVersion,
+      currentAttributionVersion,
+      deckIds: deckFilter ? deckIdParams : undefined,
+    });
+    return c.json(result);
+  });
+
+  app.get("/analysis/card-database/:cardId/decks", async (c) => {
+    const simType = c.req.query("sim_type");
+    if (!simType) {
+      return c.json({ error: "sim_type is required" }, 400);
+    }
+    const params = new URL(c.req.url).searchParams;
+    const version = parseVersionTriple(params);
+    if ("error" in version) {
+      return c.json({ error: version.error }, 400);
+    }
+    const attributionVersion = parseAttributionVersion(params);
+    if (typeof attributionVersion === "object" && "error" in attributionVersion) {
+      return c.json({ error: attributionVersion.error }, 400);
+    }
+    const deckIdParams = params.getAll("deck_id").filter(Boolean);
+    const deckFilter = params.get("deck_filter") === "1";
+    const decks = await cardDatabaseCardDecks(options.db, {
+      cardId: c.req.param("cardId"),
+      simType,
+      version,
+      attributionVersion,
+      deckIds: deckFilter ? deckIdParams : undefined,
+    });
+    return c.json({ decks });
+  });
+
+  app.get("/analysis/card-database/:cardId/play-matrix", async (c) => {
+    const simType = c.req.query("sim_type");
+    if (!simType) {
+      return c.json({ error: "sim_type is required" }, 400);
+    }
+    const params = new URL(c.req.url).searchParams;
+    const version = parseVersionTriple(params);
+    if ("error" in version) {
+      return c.json({ error: version.error }, 400);
+    }
+    const attributionVersion = parseAttributionVersion(params);
+    if (typeof attributionVersion === "object" && "error" in attributionVersion) {
+      return c.json({ error: attributionVersion.error }, 400);
+    }
+    const deckIdParams = params.getAll("deck_id").filter(Boolean);
+    const deckFilter = params.get("deck_filter") === "1";
+    const matrix = await cardDatabasePlayMatrix(options.db, {
+      cardId: c.req.param("cardId"),
+      simType,
+      version,
+      attributionVersion,
+      deckIds: deckFilter ? deckIdParams : undefined,
+    });
+    return c.json(matrix);
+  });
+
+  app.get("/analysis/card-database/:cardId/pairings", async (c) => {
+    const simType = c.req.query("sim_type");
+    if (!simType) {
+      return c.json({ error: "sim_type is required" }, 400);
+    }
+    const params = new URL(c.req.url).searchParams;
+    const version = parseVersionTriple(params);
+    if ("error" in version) {
+      return c.json({ error: version.error }, 400);
+    }
+    const attributionVersion = parseAttributionVersion(params);
+    if (typeof attributionVersion === "object" && "error" in attributionVersion) {
+      return c.json({ error: attributionVersion.error }, 400);
+    }
+    const deckIdParams = params.getAll("deck_id").filter(Boolean);
+    const deckFilter = params.get("deck_filter") === "1";
+    const pairings = await cardDatabasePairings(options.db, {
+      cardId: c.req.param("cardId"),
+      simType,
+      version,
+      attributionVersion,
+      deckIds: deckFilter ? deckIdParams : undefined,
+    });
+    return c.json(pairings);
   });
 
   app.get("/analysis/candidates", async (c) => {
@@ -292,6 +467,14 @@ export function createApp(options: {
       .selectAll()
       .where("run_id", "=", run.id)
       .execute();
+    const eventsBySample = await loadEventsBySampleId(
+      options.db,
+      samples.map((sample) => sample.id),
+    );
+    const samplesWithEvents = samples.map((sample) => ({
+      ...sample,
+      events: eventsBySample.get(sample.id) ?? [],
+    }));
     const cardStats = await options.db
       .selectFrom("run_card_stats")
       .selectAll()
@@ -304,7 +487,7 @@ export function createApp(options: {
       .orderBy("rank", "asc")
       .execute();
 
-    return c.json({ run, samples, cardStats, candidates });
+    return c.json({ run, samples: samplesWithEvents, cardStats, candidates });
   });
 
   app.post("/runs", async (c) => {
@@ -318,16 +501,17 @@ export function createApp(options: {
       return c.json({ error: "kind must be evaluate or optimize" }, 400);
     }
 
-    let deckCounts: Record<string, number> = {};
-    if (body.deckId) {
-      const deck = await options.db
-        .selectFrom("decks")
-        .select(["counts", "deck_hash"])
-        .where("id", "=", body.deckId)
-        .executeTakeFirst();
-      if (!deck) return c.json({ error: "deck not found" }, 404);
-      deckCounts = deck.counts;
+    if (!body.deckId) {
+      return c.json({ error: "deckId is required for evaluate and optimize" }, 400);
     }
+
+    const deck = await options.db
+      .selectFrom("decks")
+      .select(["counts", "deck_hash"])
+      .where("id", "=", body.deckId)
+      .executeTakeFirst();
+    if (!deck) return c.json({ error: "deck not found" }, 404);
+    const deckCounts = deck.counts;
 
     const runId = newId();
     await options.db
@@ -336,7 +520,7 @@ export function createApp(options: {
         id: runId,
         kind: body.kind,
         status: "queued",
-        deck_id: body.deckId ?? null,
+        deck_id: body.deckId,
         deck_counts: toJsonb(deckCounts),
         deck_hash: deckHash(deckCounts),
         request_body: toJsonb(body.payload),
@@ -408,7 +592,7 @@ export function createApp(options: {
   app.delete("/runs/:id", async (c) => {
     const runId = c.req.param("id");
     options.dispatcher.cancel(runId);
-    await markRunCancelled(options.db, runId);
+    await options.db.deleteFrom("runs").where("id", "=", runId).execute();
     return c.body(null, 204);
   });
 

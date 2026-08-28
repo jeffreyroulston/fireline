@@ -1,14 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { type SimType } from "@/lib/engine";
 import type { SavedDeck } from "@/lib/decks";
-import { DamageBars, DamageReadout, DeckPicker, McRangeColumn, RunSettings, ActionBar, SectionHeading, StatLine } from "../ui";
+import { DamageReadout, DeckPicker, RunSettings, ActionBar, SectionHeading } from "../ui";
 import {
+  buildBarHighlights,
   CardLeaderboardPanel,
+  highlightsFromHands,
   leaderboardFromCardStats,
 } from "./card-leaderboard";
-import { SampleDetailPanel } from "./sample-detail";
+import {
+  distributionFromDeckResult,
+  PooledDamagePanel,
+  sampleBarsFromDeckResult,
+} from "./pooled-damage";
 import { SIM_TYPE_LABELS, type DeckResult, type SampleHand } from "../types";
 import type { OptimizeProgress } from "@/lib/api/useRun";
 
@@ -31,6 +37,7 @@ export function DeckEditor({
   onEvaluate,
   onCancel,
   progress,
+  decksLoading = false,
 }: {
   decks: SavedDeck[];
   activeDeck: SavedDeck | null;
@@ -50,6 +57,7 @@ export function DeckEditor({
   onEvaluate: () => void;
   onCancel: () => void;
   progress?: OptimizeProgress | null;
+  decksLoading?: boolean;
 }) {
   return (
     <div className="mode-layout line-mode">
@@ -64,6 +72,7 @@ export function DeckEditor({
             decks={decks}
             value={activeDeck?.id ?? ""}
             onChange={onSwitchDeck}
+            loading={decksLoading}
           />
         </div>
         <p className="deck-select-hint">
@@ -98,6 +107,7 @@ export function DeckEditor({
           onRun={onEvaluate}
           onCancel={onCancel}
           progress={progress}
+          monteCarloRollouts={simType === "monte_carlo" ? rollouts : undefined}
         />
       </div>
     </div>
@@ -113,128 +123,59 @@ export function DeckResults({
   busy: boolean;
   onSendToHandSolver: (sample: SampleHand) => void;
 }) {
-  const [selected, setSelected] = useState<number | null>(null);
-  const [mcIndex, setMcIndex] = useState<number | null>(null);
+  const [selectedLeaderboardCard, setSelectedLeaderboardCard] = useState<
+    string | null
+  >(null);
 
   useEffect(() => {
-    setSelected(null);
-    setMcIndex(null);
+    setSelectedLeaderboardCard(null);
   }, [result]);
 
+  const sampleHighlights = useMemo(
+    () => (result ? highlightsFromHands(result.hands) : []),
+    [result],
+  );
+  const barCardHighlights = useMemo(
+    () => buildBarHighlights(sampleHighlights, selectedLeaderboardCard),
+    [sampleHighlights, selectedLeaderboardCard],
+  );
+
   if (!result) {
+    if (!busy) return null;
+
     return (
-      <aside className="result-rail">
-        <DamageReadout
-          label="EXPECTED DAMAGE"
-          value="—"
-          detail="Sample opening hands to build the distribution"
-          calculating={busy}
-        />
+      <aside className="result-rail" aria-live="polite">
+        <DamageReadout label="EXPECTED DAMAGE" value="—" calculating />
       </aside>
     );
   }
 
   const mode = result.simType ?? "fire_brick";
   const isTwoPass = mode === "two_pass";
-  const isMonteCarlo = mode === "monte_carlo";
-  const twoPassPairs = result.hands.map((hand) => ({
-    brick: hand.twoPass?.brick.maxDamage ?? hand.damage,
-    oracle: hand.twoPass?.oracle.maxDamage ?? hand.damage,
-  }));
-  const mcRanges = result.hands.map((hand) => ({
-    min: hand.distribution?.min ?? hand.damage,
-    max: hand.distribution?.max ?? hand.damage,
-    p50: hand.distribution?.p50 ?? hand.damage,
-  }));
-  const max = isTwoPass
-    ? Math.max(1, ...twoPassPairs.flatMap((pair) => [pair.brick, pair.oracle]))
-    : isMonteCarlo
-      ? Math.max(1, ...mcRanges.map((range) => range.max))
-      : Math.max(...result.damages, 1);
-  const brickMean = isTwoPass
-    ? twoPassPairs.reduce((sum, pair) => sum + pair.brick, 0) /
-      Math.max(twoPassPairs.length, 1)
-    : result.mean;
-  const oracleMean = isTwoPass
-    ? twoPassPairs.reduce((sum, pair) => sum + pair.oracle, 0) /
-      Math.max(twoPassPairs.length, 1)
-    : result.mean;
-  const sample =
-    selected !== null ? (result.hands?.[selected] ?? null) : null;
+  const distribution = distributionFromDeckResult(result);
+  const bars = sampleBarsFromDeckResult(result);
 
   return (
     <aside className="result-rail" aria-live="polite">
-      <DamageReadout
-        label={isTwoPass ? "BRICK / ORACLE MEAN" : "MEAN DAMAGE"}
-        value={
-          isTwoPass ? (
-            <>
-              {brickMean.toFixed(1)}
-              <span className="damage-split">/</span>
-              {oracleMean.toFixed(1)}
-            </>
-          ) : (
-            result.mean.toFixed(1)
-          )
+      <PooledDamagePanel
+        meta={
+          <strong>
+            {SIM_TYPE_LABELS[mode]} · {result.samples} opening hands
+          </strong>
         }
-        detail={
-          <>
-            {SIM_TYPE_LABELS[mode]} · {result.samples} opening hands · click a
-            bar for the line
-          </>
-        }
+        distribution={distribution}
+        bars={bars}
+        simType={mode}
+        cardHighlights={barCardHighlights}
+        liveHands={result.hands}
+        showSendToSolver
+        onSendToHandSolver={onSendToHandSolver}
+        resetKey={`${mode}:${result.samples}:${result.mean}:${result.min}:${result.max}`}
       />
-      {isTwoPass ? (
-        <StatLine
-          items={[
-            {
-              label: "BRICK RANGE",
-              value: (
-                <>
-                  {Math.min(...twoPassPairs.map((p) => p.brick))}–
-                  {Math.max(...twoPassPairs.map((p) => p.brick))}
-                </>
-              ),
-            },
-            {
-              label: "ORACLE RANGE",
-              value: (
-                <>
-                  {Math.min(...twoPassPairs.map((p) => p.oracle))}–
-                  {Math.max(...twoPassPairs.map((p) => p.oracle))}
-                </>
-              ),
-            },
-            {
-              label: "GAP MEAN",
-              value: (oracleMean - brickMean).toFixed(1),
-            },
-          ]}
-        />
-      ) : (
-        <StatLine
-          items={[
-            { label: "P50", value: result.p50 },
-            { label: "P90", value: result.p90 },
-            {
-              label: "RANGE",
-              value: (
-                <>
-                  {result.min}–{result.max}
-                </>
-              ),
-            },
-          ]}
-        />
-      )}
-      {isTwoPass && (
-        <div className="bar-legend" aria-hidden>
-          <span className="is-brick">Fire brick</span>
-          <span className="is-oracle">Oracle</span>
-        </div>
-      )}
       {result.cardStats && result.cardStats.length > 0 && (
         <CardLeaderboardPanel
+          selectedCardId={selectedLeaderboardCard}
+          onSelectedCardIdChange={setSelectedLeaderboardCard}
           {...(isTwoPass &&
           result.brickCardStats &&
           result.brickCardStats.length > 0 &&
@@ -262,92 +203,6 @@ export function DeckResults({
                   result.samples,
                 ),
               })}
-        />
-      )}
-      <div className="damage-bars-scroll">
-        {isTwoPass || isMonteCarlo ? (
-          <div
-            className={`damage-bars ${isTwoPass ? "is-two-pass" : ""} ${isMonteCarlo ? "is-monte-carlo" : ""}`}
-            aria-label={
-              isTwoPass
-                ? "Two-pass brick and oracle damage by opening hand"
-                : "Monte Carlo P50 damage with min–max range"
-            }
-          >
-            {isTwoPass
-              ? twoPassPairs.map((pair, index) => (
-                  <button
-                    type="button"
-                    className={`bar-pair ${selected === index ? "is-selected" : ""}`}
-                    key={`two-pass-${pair.brick}-${pair.oracle}-${index}`}
-                    title={`Hand ${index + 1}: brick ${pair.brick} / oracle ${pair.oracle}`}
-                    aria-pressed={selected === index}
-                    onClick={() => {
-                      setSelected((current) =>
-                        current === index ? null : index,
-                      );
-                      setMcIndex(null);
-                    }}
-                  >
-                    <span
-                      className="bar-pair-brick"
-                      style={{
-                        height: `${Math.max(8, (pair.brick / max) * 100)}%`,
-                      }}
-                    />
-                    <span
-                      className="bar-pair-oracle"
-                      style={{
-                        height: `${Math.max(8, (pair.oracle / max) * 100)}%`,
-                      }}
-                    />
-                  </button>
-                ))
-              : mcRanges.map((range, index) => (
-                  <McRangeColumn
-                    key={`mc-range-${range.min}-${range.max}-${index}`}
-                    min={range.min}
-                    max={range.max}
-                    p50={range.p50}
-                    scaleMax={max}
-                    selected={selected === index}
-                    title={`Hand ${index + 1}: P50 ${range.p50} (${range.min}–${range.max})`}
-                    onClick={() => {
-                      setSelected((current) =>
-                        current === index ? null : index,
-                      );
-                      setMcIndex(null);
-                    }}
-                  />
-                ))}
-          </div>
-        ) : (
-          <DamageBars
-            ariaLabel="Sample damage distribution"
-            scaleMax={max}
-            selectedKey={selected != null ? String(selected) : null}
-            onSelect={(key) => {
-              setSelected(key == null ? null : Number(key));
-              setMcIndex(null);
-            }}
-            items={result.damages.map((damage, index) => ({
-              key: String(index),
-              damage,
-              title: `Hand ${index + 1}: ${damage} damage`,
-            }))}
-          />
-        )}
-      </div>
-
-      {sample && (
-        <SampleDetailPanel
-          sample={sample}
-          handNumber={selected! + 1}
-          mode={mode}
-          mcIndex={mcIndex}
-          onMcIndexChange={setMcIndex}
-          onSendToHandSolver={onSendToHandSolver}
-          resetKeyPrefix={`deck-${selected}`}
         />
       )}
     </aside>

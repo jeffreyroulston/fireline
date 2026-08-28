@@ -1,8 +1,7 @@
 use crate::{
     cards::{CARD_COUNT, Card},
-    model::{
-        DamageDistribution, EffectiveRequest, SimType, SolveRequest, Step, TwoPassResult,
-    },
+    line_event::LineEvent,
+    model::{DamageDistribution, EffectiveRequest, SimType, SolveRequest, TwoPassResult},
     solver::solve_with_progress,
     version::ENGINE_VERSION,
 };
@@ -57,12 +56,15 @@ pub struct SampleHand {
     pub damage: u8,
     /// Final hand + memory on the chosen max-damage line.
     pub end_influence: u8,
-    pub steps: Vec<Step>,
+    pub events: Vec<LineEvent>,
     pub nodes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub distribution: Option<DamageDistribution>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub two_pass: Option<TwoPassResult>,
+    /// Sparse per-card line counters for the chosen path (persist → run_sample_card_stats).
+    #[serde(skip_serializing_if = "crate::stats::SparseLineStats::is_empty_stats")]
+    pub line_card_stats: crate::stats::SparseLineStats,
     #[serde(skip)]
     #[cfg_attr(feature = "ts", ts(skip))]
     pub line_stats: crate::stats::LineCardStats,
@@ -84,10 +86,13 @@ pub struct DeckEvalResult {
     pub damages: Vec<u8>,
     pub hands: Vec<SampleHand>,
     pub mean: f64,
+    pub p10: u8,
     pub p50: u8,
     pub p90: u8,
     pub max: u8,
     pub min: u8,
+    /// Mean final hand + memory across sampled max-damage lines.
+    pub mean_end_influence: f64,
     pub unique_hands: usize,
     pub states_searched: u64,
     pub elapsed_ms: f64,
@@ -262,7 +267,27 @@ fn solve_sample_hand(
     hands_done: u16,
     hands_total: u16,
     on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
+    report_in_hand_progress: bool,
 ) -> Result<SampleHand, String> {
+    let total_rollouts = if request.sim_type == SimType::MonteCarlo {
+        rollouts
+    } else {
+        1
+    };
+    if report_in_hand_progress
+        && report_eval_progress(
+            on_progress,
+            EvalProgress {
+                sample: hands_done,
+                total: hands_total,
+                rollout: 0,
+                total_rollouts,
+            },
+        )
+        .is_break()
+    {
+        return Err("cancelled".into());
+    }
     let hand_ids = drawn.iter().map(|card| card.id().to_string()).collect();
     let result = solve_with_progress(
         &SolveRequest {
@@ -271,11 +296,15 @@ fn solve_sample_hand(
             max_turns,
             sim_type: request.sim_type,
             deck: request.deck.clone(),
+            queue: None,
             rollouts,
             seed: request.seed.wrapping_add(u64::from(sample_index) * 17),
             budget: *budget,
         },
         |rollout, total_rollouts| {
+            if !report_in_hand_progress {
+                return ControlFlow::Continue(());
+            }
             report_eval_progress(
                 on_progress,
                 EvalProgress {
@@ -299,10 +328,11 @@ fn solve_sample_hand(
         hand: drawn.iter().map(|card| card.id()).collect(),
         damage,
         end_influence: result.end_influence,
-        steps: result.steps,
+        events: result.events,
         nodes: result.nodes,
         distribution: result.distribution,
         two_pass: result.two_pass,
+        line_card_stats: result.line_stats.to_sparse(),
         line_stats: result.line_stats,
         brick_line_stats: result.brick_line_stats,
     })
@@ -319,6 +349,7 @@ fn solve_one_unique_hand(
     hands_done: u16,
     hands_total: u16,
     on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
+    report_in_hand_progress: bool,
 ) -> Result<((SimType, [u8; CARD_COUNT]), SampleHand), String> {
     let drawn = drawn_from_key(key);
     let mut sample = solve_sample_hand(
@@ -331,6 +362,7 @@ fn solve_one_unique_hand(
         hands_done,
         hands_total,
         on_progress,
+        report_in_hand_progress,
     )?;
     sample.hand = drawn.iter().map(|card| card.id()).collect();
     Ok(((sim_type, key), sample))
@@ -358,6 +390,7 @@ fn solve_unique_hands(
     } else {
         1
     };
+    let report_in_hand_progress = !parallel;
     if !parallel {
         let mut cache = FxHashMap::default();
         for (index, &(sim_type, key, sample_index)) in unique.iter().enumerate() {
@@ -373,6 +406,7 @@ fn solve_unique_hands(
                 hands_done,
                 total,
                 on_progress,
+                report_in_hand_progress,
             )?;
             cache.insert(cache_key, sample);
             let n = u16::try_from(index + 1).unwrap_or(u16::MAX);
@@ -413,6 +447,7 @@ fn solve_unique_hands(
                 hands_done,
                 total,
                 on_progress,
+                report_in_hand_progress,
             );
             let (cache_key, sample) = match solved {
                 Ok(value) => value,
@@ -600,16 +635,23 @@ fn evaluate_hands(
     sorted.sort_unstable();
     let mean =
         damages.iter().map(|&value| f64::from(value)).sum::<f64>() / damages.len().max(1) as f64;
+    let mean_end_influence = hands
+        .iter()
+        .map(|hand| f64::from(hand.end_influence))
+        .sum::<f64>()
+        / hands.len().max(1) as f64;
     Ok(DeckEvalResult {
         sim_type: request.sim_type,
         samples: damages.len(),
         damages,
         hands,
         mean,
+        p10: percentile(&sorted, 10),
         p50: percentile(&sorted, 50),
         p90: percentile(&sorted, 90),
         max: sorted.last().copied().unwrap_or(0),
         min: sorted.first().copied().unwrap_or(0),
+        mean_end_influence,
         unique_hands: cache.len(),
         states_searched: total_nodes,
         elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
@@ -647,10 +689,7 @@ pub fn optimize(request: &OptimizeRequest) -> Result<OptimizeResult, String> {
 }
 
 /// Number of legal count vectors inside `bounds` that sum to `deck_size`.
-pub fn count_legal_decks(
-    bounds: &BTreeMap<String, Bounds>,
-    deck_size: u8,
-) -> Result<u64, String> {
+pub fn count_legal_decks(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Result<u64, String> {
     validate_bounds(bounds, deck_size)?;
     let ranges = bounds
         .values()
@@ -826,7 +865,11 @@ fn count_compositions(ranges: &[(u8, u8)], deck_size: u8) -> u64 {
     dp[size]
 }
 
-fn consider_top(top: &mut Vec<(f64, BTreeMap<String, u8>)>, score: f64, counts: &BTreeMap<String, u8>) {
+fn consider_top(
+    top: &mut Vec<(f64, BTreeMap<String, u8>)>,
+    score: f64,
+    counts: &BTreeMap<String, u8>,
+) {
     if let Some(existing) = top.iter_mut().find(|(_, known)| known == counts) {
         if score > existing.0 {
             existing.0 = score;
@@ -979,6 +1022,9 @@ mod tests {
         let one = evaluate(&request).unwrap();
         let two = evaluate(&request).unwrap();
         assert_eq!(one.damages, two.damages);
+        assert!(one.p10 <= one.p50);
+        assert!(one.p50 <= one.p90);
+        assert!(one.mean_end_influence >= 0.0);
         assert_eq!(one.effective.root_seed, 9);
         assert_eq!(one.effective.max_turns, Some(2));
         assert_eq!(one.effective.rollouts, Some(1));
@@ -1041,6 +1087,125 @@ mod tests {
     }
 
     #[test]
+    fn parallel_eval_matches_serial_results() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 3),
+            ("kingdom_informant".into(), 3),
+            ("clumsy_apprentice".into(), 3),
+            ("sable_remnant".into(), 2),
+            ("blazing_throw".into(), 2),
+            ("red_hare".into(), 2),
+            ("march_hare".into(), 2),
+        ]);
+        let request = DeckEvalRequest {
+            deck,
+            samples: 8,
+            go_first: true,
+            max_turns: 2,
+            seed: 17,
+            sim_type: SimType::FireBrick,
+            rollouts: 1,
+            budget: crate::budget::Budget::default(),
+        };
+        let serial =
+            evaluate_with_serial_progress(&request, |_| ControlFlow::Continue(())).unwrap();
+        let parallel = evaluate_with_progress(&request, |_| ControlFlow::Continue(())).unwrap();
+        assert_eq!(serial.damages, parallel.damages);
+        assert_eq!(serial.mean, parallel.mean);
+        assert_eq!(serial.p50, parallel.p50);
+        assert_eq!(serial.unique_hands, parallel.unique_hands);
+    }
+
+    #[test]
+    fn parallel_progress_is_monotonic_and_reaches_total() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 3),
+            ("kingdom_informant".into(), 3),
+            ("clumsy_apprentice".into(), 3),
+            ("sable_remnant".into(), 2),
+            ("blazing_throw".into(), 2),
+            ("red_hare".into(), 2),
+            ("march_hare".into(), 2),
+        ]);
+        let mut ticks = Vec::new();
+        let result = evaluate_with_progress(
+            &DeckEvalRequest {
+                deck,
+                samples: 6,
+                go_first: true,
+                max_turns: 2,
+                seed: 21,
+                sim_type: SimType::FireBrick,
+                rollouts: 1,
+                budget: crate::budget::Budget::default(),
+            },
+            |progress| {
+                ticks.push(progress);
+                ControlFlow::Continue(())
+            },
+        )
+        .unwrap();
+        assert_eq!(result.samples, 6);
+        let hand_ticks: Vec<_> = ticks
+            .iter()
+            .filter(|tick| tick.rollout == 0)
+            .map(|tick| tick.sample)
+            .collect();
+        assert!(
+            hand_ticks.windows(2).all(|pair| pair[0] <= pair[1]),
+            "expected monotonic hand progress, got {hand_ticks:?}"
+        );
+        assert_eq!(
+            hand_ticks.last().copied(),
+            Some(6),
+            "expected final hand progress to reach total, got {hand_ticks:?}"
+        );
+    }
+
+    #[test]
+    fn parallel_monte_carlo_reports_hand_progress_only() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 3),
+            ("kingdom_informant".into(), 3),
+            ("clumsy_apprentice".into(), 3),
+            ("sable_remnant".into(), 2),
+            ("blazing_throw".into(), 2),
+            ("red_hare".into(), 2),
+            ("march_hare".into(), 2),
+        ]);
+        let mut ticks = Vec::new();
+        let result = evaluate_with_progress(
+            &DeckEvalRequest {
+                deck,
+                samples: 2,
+                go_first: true,
+                max_turns: 2,
+                seed: 13,
+                sim_type: SimType::MonteCarlo,
+                rollouts: 3,
+                budget: crate::budget::Budget {
+                    max_eval_rollouts: 3,
+                    ..crate::budget::Budget::default()
+                },
+            },
+            |progress| {
+                ticks.push(progress);
+                ControlFlow::Continue(())
+            },
+        )
+        .unwrap();
+        assert_eq!(result.effective.rollouts, Some(3));
+        assert!(
+            ticks.iter().all(|tick| tick.rollout == 0),
+            "parallel MC should not emit rollout ticks, got {ticks:?}"
+        );
+        assert!(
+            ticks.iter().any(|tick| tick.sample == 1 && tick.total == 2),
+            "expected a completed-hand tick, got {ticks:?}"
+        );
+    }
+
+    #[test]
     fn monte_carlo_serial_progress_reports_rollouts() {
         let deck = BTreeMap::from([
             ("arthur".into(), 3),
@@ -1074,11 +1239,15 @@ mod tests {
         .unwrap();
         assert_eq!(result.effective.rollouts, Some(3));
         assert!(
-            ticks.iter().any(|tick| tick.rollout == 1 && tick.total_rollouts == 3),
+            ticks
+                .iter()
+                .any(|tick| tick.rollout == 1 && tick.total_rollouts == 3),
             "expected a mid-hand rollout tick, got {ticks:?}"
         );
         assert!(
-            ticks.iter().any(|tick| tick.rollout == 3 && tick.total_rollouts == 3),
+            ticks
+                .iter()
+                .any(|tick| tick.rollout == 3 && tick.total_rollouts == 3),
             "expected a final-rollout tick, got {ticks:?}"
         );
         assert!(

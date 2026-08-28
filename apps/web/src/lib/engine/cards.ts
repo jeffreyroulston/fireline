@@ -1,6 +1,6 @@
 import type { CardDef, CardId, MaterialId } from "./types";
 
-export const CARDS: Record<CardId, CardDef> = {
+export const CARDS: Record<string, CardDef> = {
   brick: {
     id: "brick",
     name: "Fire Brick",
@@ -100,17 +100,6 @@ export const CARDS: Record<CardId, CardDef> = {
     kind: "action",
     cost: 1,
     element: "fire",
-  },
-  racoo: {
-    id: "racoo",
-    name: "Racoo, Aggro Extender",
-    short: "Racoo",
-    kind: "ally",
-    cost: 2,
-    element: "fire",
-    power: 1,
-    life: 1,
-    stealth: true,
   },
   corhazi_courier: {
     id: "corhazi_courier",
@@ -344,7 +333,7 @@ export const CARDS: Record<CardId, CardDef> = {
   },
 };
 
-export const CARD_LIST = Object.values(CARDS);
+export let CARD_LIST: CardDef[] = Object.values(CARDS);
 
 export const MATERIAL_NAMES: Record<MaterialId, string> = {
   impact_hammer: "Impact Hammer",
@@ -362,9 +351,38 @@ export const DEFAULT_MATERIALS: MaterialId[] = [
   "varuckan_soulknife",
 ];
 
-export const PLAYABLE_CARD_IDS: CardId[] = CARD_LIST.filter(
-  (c) => c.id !== "brick",
+export function isMaterialId(id: string): id is MaterialId {
+  return (DEFAULT_MATERIALS as readonly string[]).includes(id);
+}
+
+export function isPlayableDeckCard(card: CardDef): boolean {
+  return card.id !== "brick" && card.kind !== "material";
+}
+
+export function cardDisplayName(id: string): string {
+  if (isMaterialId(id)) {
+    return CARDS[id]?.name ?? MATERIAL_NAMES[id];
+  }
+  return CARDS[id]?.name ?? id;
+}
+
+export let PLAYABLE_CARD_IDS: CardId[] = CARD_LIST.filter(
+  isPlayableDeckCard,
 ).map((c) => c.id);
+
+export function replaceCardCatalog(cards: CardDef[]): void {
+  if (cards.length === 0) {
+    return;
+  }
+  for (const key of Object.keys(CARDS)) {
+    delete CARDS[key as CardId];
+  }
+  for (const card of cards) {
+    CARDS[card.id] = card;
+  }
+  CARD_LIST = Object.values(CARDS);
+  PLAYABLE_CARD_IDS = CARD_LIST.filter(isPlayableDeckCard).map((card) => card.id);
+}
 
 export function shortName(id: CardId): string {
   return CARDS[id]?.short ?? id;
@@ -374,27 +392,43 @@ export function parseCardToken(token: string): CardId | null {
   const raw = token.trim().toLowerCase();
   if (!raw) return null;
   const t = raw.replace(/[^a-z0-9]+/g, "_");
-  if (t in CARDS) return t as CardId;
-  if (t === "kurhazi_courier") return "corhazi_courier";
-  if (t === "sadi_blood_harvester") return "sadi";
-  if (t === "march_hare_mottled_host") return "march_hare";
-  if (t === "rococo_explosive_maven") return "rococo";
-  if (t === "tweedledum_rattled_dancer") return "tweedledum";
-  if (t === "xiao_qiao_cinderkeeper") return "xiao_qiao";
-  if (t === "arthur_young_heir") return "arthur";
-  if (t === "red_hare_unrivaled_stallion") return "red_hare";
-  if (t === "virgil_altered_future") return "virgil";
-  for (const c of CARD_LIST) {
-    if (
-      c.short.toLowerCase() === raw ||
-      c.name.toLowerCase() === raw ||
-      c.id.replace(/_/g, " ") === raw
-    ) {
-      return c.id;
+  if (t in CARDS) {
+    const card = CARDS[t];
+    if (card?.kind === "material") return null;
+    return t as CardId;
+  }
+  for (const card of CARD_LIST) {
+    if (card.kind === "material") continue;
+    if (card.aliases?.some((alias) => alias === t)) {
+      return card.id;
     }
+    if (
+      card.short.toLowerCase() === raw ||
+      card.name.toLowerCase() === raw ||
+      card.id.replace(/_/g, " ") === raw
+    ) {
+      return card.id;
+    }
+  }
+  const fallback = FALLBACK_ALIASES[t];
+  if (fallback && fallback in CARDS) {
+    return fallback;
   }
   return null;
 }
+
+const FALLBACK_ALIASES: Record<string, CardId> = {
+  fire_brick: "brick",
+  arthur_young_heir: "arthur",
+  red_hare_unrivaled_stallion: "red_hare",
+  kurhazi_courier: "corhazi_courier",
+  sadi_blood_harvester: "sadi",
+  march_hare_mottled_host: "march_hare",
+  rococo_explosive_maven: "rococo",
+  tweedledum_rattled_dancer: "tweedledum",
+  xiao_qiao_cinderkeeper: "xiao_qiao",
+  virgil_altered_future: "virgil",
+};
 
 /** Minimum recognized maindeck size for a valid saved deck. */
 export const MIN_VALID_DECK_SIZE = 60;

@@ -48,7 +48,19 @@ Open [http://localhost](http://localhost). Browser requests to `/api/*` go to th
 Useful overrides:
 
 - `FIRELINE_PORT=8080` — bind the proxy to a different host port
-- `WORKER_CONCURRENCY` / `API_CONCURRENCY` — cap parallel simulations
+- `WORKER_CONCURRENCY` / `API_CONCURRENCY` — cap how many simulations run at once (Docker Compose defaults to `1`; local dev defaults to `2`)
+- `RAYON_NUM_THREADS` — cap Rayon hand parallelism inside the compute worker (defaults to all logical CPUs)
+
+### Threading model
+
+Two knobs control throughput:
+
+1. **Run concurrency** (`WORKER_CONCURRENCY`, `API_CONCURRENCY`): how many solve/evaluate/optimize requests run at the same time. Extra runs wait in the API queue.
+2. **Hand parallelism** (Rayon inside the engine): within one deck evaluation, unique opening hands are solved across available CPU threads.
+
+Docker Compose sets run concurrency to `1` so a single evaluation can use all cores. Local `cargo run -p ga-fire-worker` keeps the default of `2` concurrent runs unless you override the env var.
+
+Monte Carlo deck evaluations report hand-level progress only (`12/64 hands`) when hands run in parallel. Per-rollout ticks are reserved for the serial progress path.
 
 Postgres data persists in the `pgdata` Compose volume. Migrations run automatically when the data API starts.
 

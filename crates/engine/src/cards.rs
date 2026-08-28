@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "ts")]
 use ts_rs::TS;
 
-pub const CARD_COUNT: usize = 34;
+pub const CARD_COUNT: usize = 33;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -19,30 +19,29 @@ pub enum Card {
     IgnitedStab = 7,
     RendingFlames = 8,
     BlazingThrow = 9,
-    Racoo = 10,
-    CorhaziCourier = 11,
-    VeteranBlazebearer = 12,
-    Sadi = 13,
-    CaptivatingCutthroat = 14,
-    DazzlingCourtesan = 15,
-    FieryInterference = 16,
-    HeatedVengeance = 17,
-    IntensifiedPyre = 18,
-    MarchHare = 19,
-    MarkTheTarget = 20,
-    PepperedChef = 21,
-    PlantedExplosive = 22,
-    Rococo = 23,
-    Tweedledum = 24,
-    VermilionDecree = 25,
-    XiaoQiao = 26,
-    HotCake = 27,
-    UncannyRealization = 28,
-    Virgil = 29,
-    ViciousSlice = 30,
-    ManicZealot = 31,
-    Demolition = 32,
-    SurgingBolt = 33,
+    CorhaziCourier = 10,
+    VeteranBlazebearer = 11,
+    Sadi = 12,
+    CaptivatingCutthroat = 13,
+    DazzlingCourtesan = 14,
+    FieryInterference = 15,
+    HeatedVengeance = 16,
+    IntensifiedPyre = 17,
+    MarchHare = 18,
+    MarkTheTarget = 19,
+    PepperedChef = 20,
+    PlantedExplosive = 21,
+    Rococo = 22,
+    Tweedledum = 23,
+    VermilionDecree = 24,
+    XiaoQiao = 25,
+    HotCake = 26,
+    UncannyRealization = 27,
+    Virgil = 28,
+    ViciousSlice = 29,
+    ManicZealot = 30,
+    Demolition = 31,
+    SurgingBolt = 32,
 }
 
 impl Card {
@@ -63,7 +62,6 @@ impl Card {
             Self::IgnitedStab => "ignited_stab",
             Self::RendingFlames => "rending_flames",
             Self::BlazingThrow => "blazing_throw",
-            Self::Racoo => "racoo",
             Self::CorhaziCourier => "corhazi_courier",
             Self::VeteranBlazebearer => "veteran_blazebearer",
             Self::Sadi => "sadi",
@@ -102,7 +100,6 @@ impl Card {
             Self::IgnitedStab => "Ignited Stab",
             Self::RendingFlames => "Rending Flames",
             Self::BlazingThrow => "Blazing Throw",
-            Self::Racoo => "Racoo, Aggro Extender",
             Self::CorhaziCourier => "Corhazi Courier",
             Self::VeteranBlazebearer => "Veteran Blazebearer",
             Self::Sadi => "Sadi, Blood Harvester",
@@ -141,7 +138,6 @@ impl Card {
             Self::IgnitedStab => "Ignit",
             Self::RendingFlames => "Rendi",
             Self::BlazingThrow => "Blazi",
-            Self::Racoo => "Racoo",
             Self::CorhaziCourier => "Corha",
             Self::VeteranBlazebearer => "VBlaz",
             Self::Sadi => "Sadi",
@@ -190,7 +186,6 @@ impl Card {
             | Self::SableRemnant
             | Self::HastyMessenger
             | Self::RedHare
-            | Self::Racoo
             | Self::CaptivatingCutthroat
             | Self::FieryInterference
             | Self::PepperedChef
@@ -209,10 +204,7 @@ impl Card {
 
     pub const fn power(self) -> u8 {
         match self {
-            Self::Tweedledum
-            | Self::RedHare
-            | Self::RendingFlames
-            | Self::UncannyRealization => 3,
+            Self::Tweedledum | Self::RedHare | Self::RendingFlames | Self::UncannyRealization => 3,
             Self::Arthur
             | Self::IgnitedStab
             | Self::VeteranBlazebearer
@@ -227,7 +219,6 @@ impl Card {
             | Self::ClumsyApprentice
             | Self::SableRemnant
             | Self::HastyMessenger
-            | Self::Racoo
             | Self::CorhaziCourier
             | Self::MarchHare
             | Self::Rococo
@@ -246,7 +237,6 @@ impl Card {
                 | Self::SableRemnant
                 | Self::HastyMessenger
                 | Self::RedHare
-                | Self::Racoo
                 | Self::CorhaziCourier
                 | Self::VeteranBlazebearer
                 | Self::Sadi
@@ -319,7 +309,7 @@ impl Card {
     pub const fn is_stealth(self) -> bool {
         matches!(
             self,
-            Self::KingdomInformant | Self::Racoo | Self::CorhaziCourier | Self::XiaoQiao
+            Self::KingdomInformant | Self::CorhaziCourier | Self::XiaoQiao
         )
     }
 
@@ -387,7 +377,6 @@ impl Card {
             Self::SableRemnant => 1,
             Self::HastyMessenger => 2,
             Self::RedHare => 3,
-            Self::Racoo => 1,
             Self::CorhaziCourier => 2,
             Self::VeteranBlazebearer => 3,
             Self::Sadi => 2,
@@ -426,11 +415,7 @@ impl Card {
     }
 
     pub const fn element(self) -> &'static str {
-        if self.is_fire() {
-            "fire"
-        } else {
-            "norm"
-        }
+        if self.is_fire() { "fire" } else { "norm" }
     }
 
     pub const fn is_playable(self) -> bool {
@@ -449,7 +434,6 @@ pub const ALL_CARDS: [Card; CARD_COUNT] = [
     Card::IgnitedStab,
     Card::RendingFlames,
     Card::BlazingThrow,
-    Card::Racoo,
     Card::CorhaziCourier,
     Card::VeteranBlazebearer,
     Card::Sadi,
@@ -475,7 +459,7 @@ pub const ALL_CARDS: [Card; CARD_COUNT] = [
     Card::SurgingBolt,
 ];
 
-pub const PLAYABLE_CARDS: [Card; 33] = [
+pub const PLAYABLE_CARDS: [Card; 32] = [
     Card::Arthur,
     Card::KingdomInformant,
     Card::ClumsyApprentice,
@@ -485,7 +469,6 @@ pub const PLAYABLE_CARDS: [Card; 33] = [
     Card::IgnitedStab,
     Card::RendingFlames,
     Card::BlazingThrow,
-    Card::Racoo,
     Card::CorhaziCourier,
     Card::VeteranBlazebearer,
     Card::Sadi,
@@ -562,11 +545,7 @@ impl CardDef {
             element: card.element(),
             power: {
                 let power = card.power();
-                if power > 0 {
-                    Some(power)
-                } else {
-                    None
-                }
+                if power > 0 { Some(power) } else { None }
             },
             life: card.life(),
             stealth: card.is_stealth(),
@@ -607,7 +586,6 @@ pub fn parse_card(value: &str) -> Option<Card> {
         "ignited_stab" => Card::IgnitedStab,
         "rending_flames" => Card::RendingFlames,
         "blazing_throw" => Card::BlazingThrow,
-        "racoo" | "racoo_aggro_extender" => Card::Racoo,
         "corhazi_courier" | "kurhazi_courier" => Card::CorhaziCourier,
         "veteran_blazebearer" => Card::VeteranBlazebearer,
         "sadi" | "sadi_blood_harvester" => Card::Sadi,

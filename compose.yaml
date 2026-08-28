@@ -21,7 +21,7 @@ services:
       args:
         GIT_SHA: ${GIT_SHA:-dev}
     environment:
-      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/health"]
       interval: 10s
@@ -38,7 +38,7 @@ services:
       DATABASE_URL: postgres://fireline:fireline@postgres:5432/fireline
       WORKER_URL: http://worker:8081
       API_PORT: 8080
-      API_CONCURRENCY: ${API_CONCURRENCY:-2}
+      API_CONCURRENCY: ${API_CONCURRENCY:-1}
     depends_on:
       postgres:
         condition: service_healthy

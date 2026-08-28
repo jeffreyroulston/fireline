@@ -37,7 +37,9 @@ export function InfoPanel() {
           <InfoCard title="Hand solver">
             Draw a random 7-card opening hand from a saved deck, or build one
             card by card, then search for a maximum-damage line over a 2- or
-            3-turn horizon.
+            3-turn horizon. Deck mode shuffles a seeded pile, then draws from
+            the top. The solve uses the opening hand plus those draws; Oracle
+            keeps the leftover pile in order.
           </InfoCard>
           <InfoCard title="Decks">
             Create and edit saved decklists. A valid list needs at least 60
@@ -45,9 +47,9 @@ export function InfoPanel() {
             locked — duplicate it to edit.
           </InfoCard>
           <InfoCard title="Deck damage">
-            Sample opening hands from a saved deck and report mean, P50, P90,
-            and range. Manage lists on the Decks tab; this tab only runs
-            samples.
+            Sample opening hands from a saved deck and report mean, P10, P50,
+            P90, ending influence, and range. Manage lists on the Decks tab;
+            this tab only runs samples.
           </InfoCard>
           <InfoCard title="Ratio lab">
             Start from a saved list, set cut budgets and a replacement pool,
@@ -55,7 +57,10 @@ export function InfoPanel() {
           </InfoCard>
           <InfoCard title="History">
             Review completed sims and pool damage or card rates within one
-            engine version. Simulation types stay on separate charts.
+            engine version. Simulation types stay on separate charts. Filter
+            sample bars and the card board with min and max damage. Out-of-range
+            bars stay visible, greyed out. Pooled mean, P10, P50, P90, and
+            ending influence stay on the full set.
           </InfoCard>
         </div>
       </section>
@@ -71,8 +76,8 @@ export function InfoPanel() {
           <InfoCard title="Monte Carlo — Sample">
             Needs a maindeck from the Decks tab. Shuffles the remaining deck for
             each rollout (1–48), solves optimally with that fixed draw queue,
-            then reports P50 as the headline with mean, P90, and min–max across
-            rollouts.
+            then reports P50 as the headline with mean, P10, P90, and min–max
+            across rollouts.
           </InfoCard>
           <InfoCard title="Two-pass">
             Runs a fire-brick pass (unknown draws stay blank) and one oracle
@@ -80,6 +85,12 @@ export function InfoPanel() {
             lines; the gap is the value of knowing upcoming draws. Headline
             damage is the brick pass. The card leaderboard can show Fire brick,
             Oracle, or Combined attribution.
+          </InfoCard>
+          <InfoCard title="Oracle only">
+            Needs a maindeck from the Decks tab. One shuffled remaining deck is
+            known, then the solver finds the max-damage line against that draw
+            queue. Same oracle pass as two-pass, without the brick comparison.
+            Headline damage is that line.
           </InfoCard>
         </div>
       </section>
@@ -108,8 +119,8 @@ export function InfoPanel() {
           <h3>What the model assumes</h3>
           <ul className="info-list">
             <li>
-              Unknown draws are unplayable fire bricks unless Monte Carlo or the
-              two-pass oracle supplies a draw queue.
+              Unknown draws are unplayable fire bricks unless Monte Carlo, Oracle
+              only, or the two-pass oracle supplies a draw queue.
             </li>
             <li>
               The opponent kills non-stealth, non-immortal allies during its main
@@ -161,11 +172,14 @@ export function InfoPanel() {
             <li>
               Deck damage charts sample hands; click a bar for that hand’s line.
               Monte Carlo bars show P50 with a min–max range; two-pass shows
-              brick and oracle side by side.
+              brick and oracle side by side. Oracle only uses the same single-bar
+              chart as fire brick.
             </li>
             <li>
               History pools only within one engine version so results stay
-              comparable when the solver changes.
+              comparable when the solver changes. Min and max damage grey out
+              bars outside the band and rebuild the card board without changing
+              pooled mean, P50, or P90.
             </li>
           </ul>
         </article>

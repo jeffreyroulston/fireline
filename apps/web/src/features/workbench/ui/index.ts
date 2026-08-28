@@ -1,9 +1,10 @@
 export { ActionBar } from "./action-bar";
-export { ColumnHelp } from "./column-help";
 export { CombatTape } from "./combat-tape";
 export { DamageBars } from "./damage-bars";
 export type { DamageBarItem } from "./damage-bars";
 export { DamageReadout } from "./damage-readout";
+export { DataTable, sortDataTableRows } from "./data-table";
+export type { DataTableColumn, DataTableSort } from "./data-table";
 export { DeckPicker } from "./deck-picker";
 export { HandCard } from "./hand-card";
 export { McRangeColumn } from "./mc-range-column";

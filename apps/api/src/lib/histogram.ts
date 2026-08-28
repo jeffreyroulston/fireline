@@ -68,6 +68,7 @@ function percentileFromHistogram(buckets: number[], percentile: number): number 
 export interface HistogramStats {
   totalSamples: number;
   mean: number;
+  p10: number;
   p50: number;
   p90: number;
   min: number;
@@ -99,6 +100,7 @@ export function histogramStats(buckets: number[]): HistogramStats | null {
   return {
     totalSamples,
     mean: weightedSum / totalSamples,
+    p10: percentileFromHistogram(buckets, 10),
     p50: percentileFromHistogram(buckets, 50),
     p90: percentileFromHistogram(buckets, 90),
     min,

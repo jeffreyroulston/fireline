@@ -69,11 +69,13 @@ export function RatioDeckPicker({
   activeDeck,
   recognizedCount,
   onSwitchDeck,
+  decksLoading = false,
 }: {
   decks: SavedDeck[];
   activeDeck: SavedDeck | null;
   recognizedCount: number;
   onSwitchDeck: (deckId: string) => void;
+  decksLoading?: boolean;
 }) {
   return (
     <div className="ratio-deck-picker">
@@ -86,6 +88,7 @@ export function RatioDeckPicker({
         decks={decks}
         value={activeDeck?.id ?? ""}
         onChange={onSwitchDeck}
+        loading={decksLoading}
       />
       {recognizedCount > 0 && recognizedCount < MIN_VALID_DECK_SIZE && (
         <p className="ratio-refine-hint" role="status">

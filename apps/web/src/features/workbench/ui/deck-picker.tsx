@@ -6,6 +6,8 @@ export function DeckPicker({
   value,
   onChange,
   emptyLabel = "No saved decks",
+  loadingLabel = "Loading decks…",
+  loading = false,
   formatOption,
   disabled,
 }: {
@@ -14,10 +16,14 @@ export function DeckPicker({
   value: string;
   onChange: (deckId: string) => void;
   emptyLabel?: string;
+  loadingLabel?: string;
+  loading?: boolean;
   formatOption?: (deck: SavedDeck) => string;
   disabled?: boolean;
 }) {
-  const isDisabled = disabled ?? decks.length === 0;
+  const isDisabled = disabled ?? (loading ? true : decks.length === 0);
+  const emptyOptionLabel =
+    loading || (value && decks.length === 0) ? loadingLabel : emptyLabel;
 
   return (
     <label className="deck-picker">
@@ -28,7 +34,9 @@ export function DeckPicker({
         disabled={isDisabled}
         autoComplete="off"
       >
-        {decks.length === 0 && <option value="">{emptyLabel}</option>}
+        {decks.length === 0 && (
+          <option value={value}>{emptyOptionLabel}</option>
+        )}
         {decks.map((deck) => (
           <option key={deck.id} value={deck.id}>
             {formatOption ? formatOption(deck) : deck.name}

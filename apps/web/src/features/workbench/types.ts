@@ -1,26 +1,36 @@
+import type { SparseLineStats, TapePhase } from "@ga-fire/contracts";
 import type {
   CardId,
   CardStat,
   DamageDistribution,
   DeckCounts,
-  LineStep,
+  LineEvent,
   SimType,
   TwoPassResult,
 } from "@/lib/engine";
 
-export type Tab = "line" | "manage" | "deck" | "ratios" | "history" | "info";
+export type Tab =
+  | "line"
+  | "manage"
+  | "deck"
+  | "ratios"
+  | "cards"
+  | "history"
+  | "info";
 export type JobType = "solve" | "evaluate" | "optimize";
+export type SolverMode = "hand" | "deck";
 
 export interface SampleHand {
   hand: CardId[];
   damage: number;
   endInfluence?: number;
-  steps: LineStep[];
+  events: LineEvent[];
   nodes: number;
   /** `run_samples.id` when loaded from the database. */
   sampleId?: string | null;
   distribution?: DamageDistribution;
   twoPass?: TwoPassResult;
+  lineCardStats?: SparseLineStats | null;
 }
 
 export interface DeckResult {
@@ -29,10 +39,12 @@ export interface DeckResult {
   damages: number[];
   hands: SampleHand[];
   mean: number;
+  p10?: number;
   p50: number;
   p90: number;
   max: number;
   min: number;
+  meanEndInfluence?: number;
   cardStats?: CardStat[];
   brickCardStats?: CardStat[];
   oracleCardStats?: CardStat[];
@@ -42,6 +54,7 @@ export const SIM_TYPE_LABELS: Record<SimType, string> = {
   fire_brick: "Fire brick",
   monte_carlo: "Monte Carlo — Sample",
   two_pass: "Two-pass",
+  oracle_only: "Oracle only",
 };
 
 export interface RatioResult {
@@ -66,7 +79,7 @@ export type StepDiffMark = "same" | "added" | "removed";
 
 export interface StepDiffInfo {
   mark: StepDiffMark;
-  compareAction?: string;
+  compareEvent?: LineEvent;
 }
 
 export type StepAlignment =
@@ -74,13 +87,13 @@ export type StepAlignment =
   | { kind: "oracle-only"; oracle: number }
   | { kind: "brick-only"; brick: number };
 
-export const PHASE_LABELS: Record<string, string> = {
-  Main: "Main",
-  Mate: "Materialize",
-  Reco: "Recollect",
-  Agil: "Agility",
-  End: "End",
-  EMai: "Enemy Main",
-  EEnd: "Enemy End",
-  Wake: "Wake",
+export const PHASE_LABELS: Record<TapePhase, string> = {
+  main: "Main",
+  materialize: "Materialize",
+  recollect: "Recollect",
+  agility: "Agility",
+  end: "End",
+  enemyMain: "Enemy Main",
+  enemyEnd: "Enemy End",
+  wake: "Wake",
 };

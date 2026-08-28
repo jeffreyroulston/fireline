@@ -14,6 +14,8 @@ export interface OptimizeProgress {
   rolloutsDone?: number;
   /** Monte Carlo: rollouts per opening hand. */
   totalRollouts?: number;
+  /** Set once the worker has begun processing (not just queued locally). */
+  started?: boolean;
 }
 
 type RunKind = "evaluate" | "optimize";
@@ -40,8 +42,10 @@ export function coerceOptimizeProgress(
   const sample = asNumber(data.sample);
   const total = asNumber(data.total);
   if (sample != null && total != null) {
-    const rolloutsDone = asNumber(data.rollout);
-    const totalRollouts = asNumber(data.totalRollouts);
+    const rolloutsDone =
+      asNumber(data.rollout) ?? asNumber(data.rolloutsDone);
+    const totalRollouts =
+      asNumber(data.totalRollouts) ?? asNumber(data.total_rollouts);
     return {
       decksScored: 0,
       totalDecks: 0,
@@ -65,6 +69,24 @@ export function coerceOptimizeProgress(
     handsSimulated: asNumber(data.handsSimulated) ?? 0,
     totalHands: asNumber(data.totalHands) ?? 0,
     bestScore: asNumber(data.bestScore) ?? 0,
+  };
+}
+
+export function mergeOptimizeProgress(
+  current: OptimizeProgress | null | undefined,
+  update: OptimizeProgress,
+): OptimizeProgress {
+  return {
+    decksScored: 0,
+    totalDecks: 0,
+    legalDecks: 0,
+    handsSimulated: 0,
+    totalHands: 0,
+    bestScore: 0,
+    ...current,
+    ...update,
+    totalRollouts: update.totalRollouts ?? current?.totalRollouts,
+    started: true,
   };
 }
 
@@ -154,7 +176,7 @@ export function useRun() {
     async (
       kind: RunKind,
       payload: Record<string, unknown>,
-      deckId: string | undefined,
+      deckId: string,
       handlers: StreamHandlers,
     ) => {
       cleanup();

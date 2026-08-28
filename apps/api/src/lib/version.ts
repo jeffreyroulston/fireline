@@ -48,3 +48,29 @@ export function parseAttributionVersion(
   }
   return value;
 }
+
+export function parseDamageBounds(
+  params: URLSearchParams,
+):
+  | { gt?: number; gte?: number; lt?: number; lte?: number }
+  | { error: string } {
+  const result: { gt?: number; gte?: number; lt?: number; lte?: number } = {};
+  const keys = [
+    ["damage_gt", "gt"],
+    ["damage_gte", "gte"],
+    ["damage_lt", "lt"],
+    ["damage_lte", "lte"],
+  ] as const;
+  for (const [param, field] of keys) {
+    const raw = params.get(param);
+    if (raw == null || raw === "") {
+      continue;
+    }
+    const value = Number(raw);
+    if (!Number.isFinite(value)) {
+      return { error: `${param} must be a number` };
+    }
+    result[field] = value;
+  }
+  return result;
+}

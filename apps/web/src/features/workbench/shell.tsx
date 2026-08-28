@@ -1,15 +1,19 @@
 "use client";
 
+import Link from "next/link";
 import {
   startTransition,
   useDeferredValue,
   useEffect,
+  useMemo,
   useState,
 } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   CARDS,
   MAX_RATIO_DECK_ATTEMPTS,
   MIN_VALID_DECK_SIZE,
+  PLAYABLE_CARD_IDS,
   analyzeDecklist,
   countLegalDecklists,
   deckAttemptPercent,
@@ -21,12 +25,17 @@ import {
   type SolveResult,
 } from "@/lib/engine";
 import { hydrateCardCatalogFromApi } from "@/lib/api/catalog";
-import { solve as apiSolve } from "@/lib/api/client";
-import { useRun, type OptimizeProgress } from "@/lib/api/useRun";
+import {
+  fetchWorkerVersion,
+  solve as apiSolve,
+  type WorkerVersion,
+} from "@/lib/api/client";
+import { mergeOptimizeProgress, useRun, type OptimizeProgress } from "@/lib/api/useRun";
 import {
   createDeckRemote,
   deleteDeckRemote,
   isDeckCardlistLocked,
+  loadActiveDeckId,
   loadDecksFromApi,
   nextDeckName,
   normalizeDeckName,
@@ -38,6 +47,7 @@ import {
 import { DRILL_3_HAND } from "@/lib/fixtures/drills";
 import { DeckEditor, DeckResults } from "./panels/deck-solver";
 import { DecksManage } from "./panels/decks-manage";
+import { CardDatabasePanel } from "./panels/card-database";
 import { HandBuilder, ResultRail } from "./panels/hand-solver";
 import {
   CutBudgetPanel,
@@ -57,35 +67,51 @@ import type {
   RatioRefineCriteria,
   RatioResult,
   SampleHand,
+  SolverMode,
   Tab,
 } from "./types";
 import {
+  cardsFromCounts,
   deckCountsCoveringHand,
-  drawOpeningHand,
   makeSeed,
   OPENING_HAND_SIZE,
   refineBounds,
   REFINE_COPY_CEILING,
+  shuffleDeck,
+  subtractCards,
 } from "./utils";
+import { workbenchHref } from "./routes";
+import { getCachedDecks, setCachedDecks } from "./decks-cache";
 
-export default function FizaWorkbench() {
-  const [tab, setTab] = useState<Tab>("line");
+export default function FizaWorkbench({
+  tab,
+  deckId: routeDeckId,
+}: {
+  tab: Tab;
+  deckId?: string;
+}) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const deckCache = getCachedDecks();
   const [hand, setHand] = useState<CardId[]>(DRILL_3_HAND);
+  const [drawn, setDrawn] = useState<CardId[]>([]);
+  const [orderedDeck, setOrderedDeck] = useState<CardId[]>([]);
+  const [solveSeed, setSolveSeed] = useState(42);
+  const [solverMode, setSolverMode] = useState<SolverMode>("hand");
   const [selectedCard, setSelectedCard] = useState<CardId>("arthur");
   const [goFirst, setGoFirst] = useState(true);
   const [turns, setTurns] = useState(3);
   const [simType, setSimType] = useState<SimType>("fire_brick");
   const [rollouts, setRollouts] = useState(12);
   const [lineResult, setLineResult] = useState<SolveResult | null>(null);
-  const [decks, setDecks] = useState<SavedDeck[]>([]);
-  const [activeDeckId, setActiveDeckId] = useState("");
-  const [decksHydrated, setDecksHydrated] = useState(false);
+  const [decks, setDecks] = useState<SavedDeck[]>(deckCache.decks);
+  const [decksHydrated, setDecksHydrated] = useState(deckCache.hydrated);
+  const [catalogEpoch, setCatalogEpoch] = useState(0);
+  const [workerVersion, setWorkerVersion] = useState<WorkerVersion | null>(
+    null,
+  );
   const [isRenamingDeck, setIsRenamingDeck] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
-  const activeDeck =
-    decks.find((deck) => deck.id === activeDeckId) ?? decks[0] ?? null;
-  const deckText = activeDeck?.text ?? "";
-  const deferredDeckText = useDeferredValue(deckText);
   const [samples, setSamples] = useState(8);
   const [deckResult, setDeckResult] = useState<DeckResult | null>(null);
   const [cutBudgets, setCutBudgets] = useState<
@@ -103,9 +129,24 @@ export default function FizaWorkbench() {
   const [progress, setProgress] = useState<OptimizeProgress | null>(null);
   const [busy, setBusy] = useState<JobType | null>(null);
   const [error, setError] = useState("");
-  const [historyDeckFilter, setHistoryDeckFilter] = useState(true);
   const [historyEpoch, setHistoryEpoch] = useState(0);
   const { startStreamingRun, cancel: cancelRun } = useRun();
+
+  const activeDeckId = useMemo(() => {
+    if (!decksHydrated || decks.length === 0) {
+      return routeDeckId ?? "";
+    }
+    const valid = new Set(decks.map((deck) => deck.id));
+    if (routeDeckId && valid.has(routeDeckId)) {
+      return routeDeckId;
+    }
+    return loadActiveDeckId(decks);
+  }, [decksHydrated, decks, routeDeckId]);
+
+  const activeDeck =
+    decks.find((deck) => deck.id === activeDeckId) ?? decks[0] ?? null;
+  const deckText = activeDeck?.text ?? "";
+  const deferredDeckText = useDeferredValue(deckText);
 
   const ratioBaseCards = parseDecklist(deckText);
   const ratioRecognizedCount = ratioBaseCards.length;
@@ -138,13 +179,26 @@ export default function FizaWorkbench() {
     void (async () => {
       try {
         await hydrateCardCatalogFromApi();
-        const store = await loadDecksFromApi();
+        if (cancelled) {
+          return;
+        }
+        setSelectedCard((current) =>
+          current in CARDS ? current : (PLAYABLE_CARD_IDS[0] ?? current),
+        );
+        setCatalogEpoch((epoch) => epoch + 1);
+        const [store, version] = await Promise.all([
+          loadDecksFromApi(),
+          fetchWorkerVersion().catch(() => null),
+        ]);
         if (cancelled) {
           return;
         }
         setDecks(store.decks);
-        setActiveDeckId(store.activeDeckId);
+        setCachedDecks(store.decks);
         setDecksHydrated(true);
+        if (version) {
+          setWorkerVersion(version);
+        }
       } catch (loadError) {
         if (!cancelled) {
           setError(
@@ -161,6 +215,28 @@ export default function FizaWorkbench() {
   }, []);
 
   useEffect(() => {
+    if (!decksHydrated) {
+      return;
+    }
+    setCachedDecks(decks);
+  }, [decks, decksHydrated]);
+
+  useEffect(() => {
+    if (!decksHydrated || decks.length === 0) {
+      return;
+    }
+    const valid = new Set(decks.map((deck) => deck.id));
+    const resolved =
+      routeDeckId && valid.has(routeDeckId)
+        ? routeDeckId
+        : loadActiveDeckId(decks);
+    if (!routeDeckId || !valid.has(routeDeckId)) {
+      const qs = searchParams.toString();
+      router.replace(workbenchHref(tab, resolved, qs || undefined));
+    }
+  }, [decksHydrated, decks, routeDeckId, tab, router, searchParams]);
+
+  useEffect(() => {
     if (!decksHydrated || !activeDeckId) {
       return;
     }
@@ -168,9 +244,19 @@ export default function FizaWorkbench() {
   }, [activeDeckId, decksHydrated]);
 
   useEffect(() => {
+    if (!decksHydrated) {
+      return;
+    }
+    setDrawn([]);
+    setOrderedDeck([]);
+    setDeckResult(null);
+    setRatioResult(null);
+    setRatioCriteria(null);
+    setError("");
+    setIsRenamingDeck(false);
     setCutBudgets({});
     setReplacements({});
-  }, [activeDeckId]);
+  }, [activeDeckId, decksHydrated]);
 
   useEffect(() => {
     const counts = listToCounts(parseDecklist(deckText));
@@ -240,13 +326,13 @@ export default function FizaWorkbench() {
     }
   }
 
+  function navigateToDeck(deckId: string) {
+    const qs = searchParams.toString();
+    router.push(workbenchHref(tab, deckId, qs || undefined));
+  }
+
   function switchDeck(deckId: string) {
-    setActiveDeckId(deckId);
-    setDeckResult(null);
-    setRatioResult(null);
-    setRatioCriteria(null);
-    setError("");
-    setIsRenamingDeck(false);
+    navigateToDeck(deckId);
   }
 
   async function saveRatioDecklist(
@@ -272,7 +358,7 @@ export default function FizaWorkbench() {
     try {
       const deck = await createDeckRemote(name, text);
       setDecks((current) => [...current, deck]);
-      setActiveDeckId(deck.id);
+      navigateToDeck(deck.id);
       setError("");
     } catch (saveError) {
       setError(
@@ -287,7 +373,7 @@ export default function FizaWorkbench() {
     try {
       const deck = await createDeckRemote(nextDeckName(decks), "");
       setDecks((current) => [...current, deck]);
-      setActiveDeckId(deck.id);
+      navigateToDeck(deck.id);
       setDeckResult(null);
       setError("");
       setIsRenamingDeck(false);
@@ -310,7 +396,7 @@ export default function FizaWorkbench() {
         activeDeck.text,
       );
       setDecks((current) => [...current, deck]);
-      setActiveDeckId(deck.id);
+      navigateToDeck(deck.id);
       setDeckResult(null);
       setError("");
       setIsRenamingDeck(false);
@@ -358,11 +444,11 @@ export default function FizaWorkbench() {
       if (decks.length === 1) {
         const deck = await createDeckRemote(nextDeckName([]), "");
         setDecks([deck]);
-        setActiveDeckId(deck.id);
+        navigateToDeck(deck.id);
       } else {
         const remaining = decks.filter((deck) => deck.id !== activeDeck.id);
         setDecks(remaining);
-        setActiveDeckId(remaining[0]?.id ?? "");
+        navigateToDeck(remaining[0]?.id ?? "");
       }
       setDeckResult(null);
       setError("");
@@ -377,30 +463,40 @@ export default function FizaWorkbench() {
   }
 
   async function solveHand() {
-    if (hand.length < 2) {
+    const known =
+      solverMode === "deck" ? [...hand, ...drawn] : hand;
+    if (known.length < 2) {
       setError("Add at least two cards to solve a line.");
       return;
     }
-    const needsDeck = simType !== "fire_brick";
-    const deckCards = needsDeck ? parseDecklist(deckText) : [];
+    const remainingQueue =
+      solverMode === "deck" && orderedDeck.length > 0
+        ? subtractCards(orderedDeck, known)
+        : undefined;
+    const needsDeck = simType !== "fire_brick" && remainingQueue === undefined;
+    const deckCards = parseDecklist(deckText);
     if (needsDeck && deckCards.length < MIN_VALID_DECK_SIZE) {
       setError(
-        `Monte Carlo and Two-pass need a maindeck (Decks tab) with at least ${MIN_VALID_DECK_SIZE} recognized cards.`,
+        `Monte Carlo, Two-pass, and Oracle need a maindeck (Decks tab) with at least ${MIN_VALID_DECK_SIZE} recognized cards.`,
       );
       return;
     }
-    const deck = needsDeck ? deckCountsCoveringHand(deckCards, hand) : undefined;
+    const deck =
+      simType !== "fire_brick"
+        ? deckCountsCoveringHand(deckCards, known)
+        : undefined;
     setBusy("solve");
     setError("");
     try {
       const result = await apiSolve({
-        hand,
+        hand: known,
         goFirst,
         maxTurns: turns,
         simType,
         rollouts,
-        seed: 42 as unknown as bigint,
+        seed: solveSeed as unknown as bigint,
         ...(deck ? { deck } : {}),
+        ...(remainingQueue !== undefined ? { queue: remainingQueue } : {}),
       } as Parameters<typeof apiSolve>[0]);
       startTransition(() => setLineResult(result as unknown as SolveResult));
     } catch (solveError) {
@@ -423,6 +519,10 @@ export default function FizaWorkbench() {
       return;
     }
     const deckId = activeDeck?.id;
+    if (!deckId) {
+      setError("Save or select a deck before running deck damage.");
+      return;
+    }
     setBusy("evaluate");
     setError("");
     setProgress({
@@ -450,7 +550,8 @@ export default function FizaWorkbench() {
         },
         deckId,
         {
-          onProgress: (progressUpdate) => setProgress(progressUpdate),
+          onProgress: (progressUpdate) =>
+            setProgress((current) => mergeOptimizeProgress(current, progressUpdate)),
           onComplete: (result) => {
             startTransition(() => setDeckResult(result as DeckResult));
             setProgress((current) =>
@@ -487,7 +588,8 @@ export default function FizaWorkbench() {
       const count = ratioBaseCounts[id] ?? 0;
       const nextCut = Math.min(count, Math.max(0, cutUpTo));
       if (nextCut <= 0) {
-        const { [id]: _removed, ...rest } = current;
+        const rest = { ...current };
+        delete rest[id];
         return rest;
       }
       return { ...current, [id]: nextCut };
@@ -500,7 +602,8 @@ export default function FizaWorkbench() {
     }
     setReplacements((current) => {
       if (current[id] != null) {
-        const { [id]: _removed, ...rest } = current;
+        const rest = { ...current };
+        delete rest[id];
         return rest;
       }
       return { ...current, [id]: REFINE_COPY_CEILING };
@@ -553,6 +656,10 @@ export default function FizaWorkbench() {
       return;
     }
     const deckId = activeDeck?.id;
+    if (!deckId) {
+      setError("Save or select a deck before running the ratio lab.");
+      return;
+    }
     setBusy("optimize");
     setError("");
     setRatioResult(null);
@@ -586,7 +693,8 @@ export default function FizaWorkbench() {
         },
         deckId,
         {
-          onProgress: (progressUpdate) => setProgress(progressUpdate),
+          onProgress: (progressUpdate) =>
+            setProgress((current) => mergeOptimizeProgress(current, progressUpdate)),
           onComplete: (result) => {
             const ratio = result as RatioResult;
             startTransition(() => setRatioResult(ratio));
@@ -629,6 +737,9 @@ export default function FizaWorkbench() {
 
   function sendSampleToHandSolver(sample: SampleHand) {
     setHand([...sample.hand]);
+    setDrawn([]);
+    setOrderedDeck([]);
+    setSolverMode("hand");
     setSimType(deckResult?.simType ?? simType);
     setLineResult({
       simType: deckResult?.simType ?? simType,
@@ -637,39 +748,71 @@ export default function FizaWorkbench() {
         sample.endInfluence ??
         sample.twoPass?.brick.endInfluence ??
         0,
-      steps: sample.steps,
+      events: sample.events,
       nodes: sample.nodes,
       distribution: sample.distribution,
       twoPass: sample.twoPass,
     });
-    setTab("line");
+    router.push(workbenchHref("line", activeDeckId));
     setError("");
   }
 
-  function drawRandomHandFromDeck() {
-    const cards = parseDecklist(deckText);
-    if (cards.length < OPENING_HAND_SIZE) {
+  function dealShuffledPile(seed: number) {
+    const pile = cardsFromCounts(listToCounts(parseDecklist(deckText)));
+    if (pile.length < OPENING_HAND_SIZE) {
       setError(
         `Need at least ${OPENING_HAND_SIZE} recognized cards in the selected deck to draw a hand.`,
       );
       return;
     }
-    try {
-      setHand(drawOpeningHand(cards));
-      setLineResult(null);
-      setError("");
-    } catch (drawError) {
-      setError(
-        drawError instanceof Error
-          ? drawError.message
-          : "Could not draw a hand from the deck.",
-      );
+    const ordered = shuffleDeck(pile, seed);
+    setSolveSeed(seed);
+    setOrderedDeck(ordered);
+    setHand(ordered.slice(0, OPENING_HAND_SIZE));
+    setDrawn([]);
+    setLineResult(null);
+    setError("");
+  }
+
+  function drawRandomHandFromDeck() {
+    dealShuffledPile(makeSeed());
+  }
+
+  function shuffleDeckFromSeed() {
+    dealShuffledPile(makeSeed());
+  }
+
+  function drawCardFromDeck() {
+    let pile = orderedDeck;
+    if (pile.length === 0) {
+      const cards = cardsFromCounts(listToCounts(parseDecklist(deckText)));
+      if (cards.length === 0) {
+        setError("The selected deck has no recognized cards to draw.");
+        return;
+      }
+      const seed = makeSeed();
+      pile = shuffleDeck(cards, seed);
+      setSolveSeed(seed);
+      setOrderedDeck(pile);
     }
+    const remaining = subtractCards(pile, [...hand, ...drawn]);
+    const next = remaining[0];
+    if (!next) {
+      setError("No cards left in the deck to draw.");
+      return;
+    }
+    setDrawn([...drawn, next]);
+    setLineResult(null);
+    setError("");
   }
 
   const deckAnalysis = analyzeDecklist(deferredDeckText);
   const recognizedDeckCount = deckAnalysis.recognizedCount;
   const unrecognizedLines = deckAnalysis.unrecognizedLines;
+  const remainingCount = subtractCards(
+    orderedDeck.length > 0 ? orderedDeck : deckAnalysis.cards,
+    [...hand, ...drawn],
+  ).length;
 
   useEffect(() => {
     if (attemptCeiling < 1) return;
@@ -697,40 +840,65 @@ export default function FizaWorkbench() {
             ["manage", "Decks"],
             ["deck", "Deck damage"],
             ["ratios", "Ratio lab"],
+            ["cards", "Card database"],
             ["history", "History"],
             ["info", "Information"],
           ] as const
         ).map(([id, label]) => (
-          <button
+          <Link
             className={tab === id ? "active" : ""}
+            href={workbenchHref(id, activeDeckId || undefined)}
             key={id}
             onClick={() => {
-              setTab(id);
               setError("");
             }}
           >
             {label}
-          </button>
+          </Link>
         ))}
       </nav>
 
-      <section className="tool-plane">
+      <section className="tool-plane" key={catalogEpoch}>
         {tab === "line" && (
           <HandBuilder
             hand={hand}
+            drawn={drawn}
+            solverMode={solverMode}
             selectedCard={selectedCard}
             decks={decks}
             activeDeck={activeDeck}
             recognizedDeckCount={recognizedDeckCount}
+            remainingCount={remainingCount}
+            shuffled={orderedDeck.length > 0}
+            seed={solveSeed}
             goFirst={goFirst}
             turns={turns}
             simType={simType}
             rollouts={rollouts}
             busy={busy === "solve"}
             onHandChange={setHand}
+            onDrawnChange={(next) => {
+              if (next.length === drawn.length + 1) {
+                const added = next[next.length - 1];
+                const remaining = subtractCards(orderedDeck, [...hand, ...drawn]);
+                if (!added || !remaining.includes(added)) {
+                  setError("That card is not left in the shuffled pile.");
+                  return;
+                }
+              }
+              setDrawn(next);
+              setLineResult(null);
+              setError("");
+            }}
+            onSolverModeChange={(mode) => {
+              setSolverMode(mode);
+              setLineResult(null);
+            }}
             onSelectedCardChange={setSelectedCard}
             onSwitchDeck={switchDeck}
             onDrawRandomHand={drawRandomHandFromDeck}
+            onDrawCard={drawCardFromDeck}
+            onShuffleDeck={shuffleDeckFromSeed}
             onGoFirstChange={setGoFirst}
             onTurnsChange={setTurns}
             onSimTypeChange={(value) => {
@@ -740,11 +908,12 @@ export default function FizaWorkbench() {
             onRolloutsChange={setRollouts}
             onSolve={solveHand}
             onCancel={cancelJob}
+            decksLoading={!decksHydrated}
           />
         )}
 
         {tab === "line" && (
-          <ResultRail result={lineResult} busy={busy === "solve"} />
+          <ResultRail result={lineResult} busy={busy === "solve"} hand={hand} />
         )}
 
         {tab === "manage" && (
@@ -766,6 +935,7 @@ export default function FizaWorkbench() {
             onCommitRename={commitDeckRename}
             onCancelRename={cancelDeckRename}
             onDeckTextChange={updateActiveDeckText}
+            decksLoading={!decksHydrated}
           />
         )}
 
@@ -792,6 +962,7 @@ export default function FizaWorkbench() {
             onEvaluate={evaluateCurrentDeck}
             onCancel={cancelJob}
             progress={progress}
+            decksLoading={!decksHydrated}
           />
         )}
 
@@ -815,6 +986,7 @@ export default function FizaWorkbench() {
               activeDeck={activeDeck}
               recognizedCount={ratioRecognizedCount}
               onSwitchDeck={switchDeck}
+              decksLoading={!decksHydrated}
             />
             <CutBudgetPanel
               baseCounts={ratioBaseCounts}
@@ -864,22 +1036,30 @@ export default function FizaWorkbench() {
         {tab === "history" && (
           <HistoryPanel
             decks={decks}
-            activeDeck={activeDeck}
-            filterToActiveDeck={historyDeckFilter}
+            routeDeckId={routeDeckId}
             refreshToken={historyEpoch}
-            onFilterToActiveDeckChange={setHistoryDeckFilter}
             onSwitchDeck={switchDeck}
           />
         )}
 
+        {tab === "cards" && <CardDatabasePanel workerVersion={workerVersion} />}
+
         {tab === "info" && <InfoPanel />}
 
-        {error && tab !== "history" && tab !== "info" && (
+        {error && tab !== "history" && tab !== "info" && tab !== "cards" && (
           <p className="error-banner" role="alert">
             {error}
           </p>
         )}
       </section>
+
+      <footer>
+        <span>
+          {workerVersion
+            ? `r${workerVersion.rules} · s${workerVersion.sampler} · a${workerVersion.attribution} · digest ${String(workerVersion.cardDigest).slice(0, 8)} · ${workerVersion.build}`
+            : "—"}
+        </span>
+      </footer>
     </main>
   );
 }

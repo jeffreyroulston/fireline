@@ -2,13 +2,16 @@ import type { Kysely } from "kysely";
 import type {
   DeckEvalResult,
   EffectiveRequest,
+  LineEvent,
   OptimizeResult,
   SolveRequest,
   SolveResult,
+  SparseLineStats,
 } from "@ga-fire/contracts";
 import type { Database } from "../db/types.js";
 import { deckHash, damageHistogram, handHash, newId } from "../lib/deck.js";
 import { toJsonb } from "../lib/jsonb.js";
+import { lineEventToRow, sparseStatsRows } from "../lib/line-events.js";
 
 function normalizeCounts(counts: Record<string, number | undefined>): Record<string, number> {
   return Object.fromEntries(
@@ -46,6 +49,36 @@ function effectiveRunFields(effective: EffectiveRequest) {
   };
 }
 
+async function insertSampleEvents(
+  trx: Kysely<Database>,
+  sampleId: string,
+  events: LineEvent[] | null | undefined,
+): Promise<void> {
+  if (!events || events.length === 0) {
+    return;
+  }
+  const rows = events.map((event, seq) => lineEventToRow(sampleId, seq, event));
+  const chunkSize = 200;
+  for (let offset = 0; offset < rows.length; offset += chunkSize) {
+    await trx
+      .insertInto("run_sample_events")
+      .values(rows.slice(offset, offset + chunkSize))
+      .execute();
+  }
+}
+
+async function insertSampleCardStats(
+  trx: Kysely<Database>,
+  sampleId: string,
+  stats: SparseLineStats | null | undefined,
+): Promise<void> {
+  const rows = sparseStatsRows(sampleId, stats);
+  if (rows.length === 0) {
+    return;
+  }
+  await trx.insertInto("run_sample_card_stats").values(rows).execute();
+}
+
 /** Persist a hand-solver result and return the `run_samples` row id. */
 export async function persistSolveResult(
   db: Kysely<Database>,
@@ -69,8 +102,10 @@ export async function persistSolveResult(
         completed_at: now,
         elapsed_ms: result.elapsedMs,
         mean_damage: damage,
+        p10_damage: damage,
         p50_damage: damage,
         p90_damage: damage,
+        mean_end_influence: result.endInfluence,
         max_damage: damage,
         min_damage: damage,
         request_body: toJsonb({
@@ -80,8 +115,7 @@ export async function persistSolveResult(
           simType: request.simType,
           deck: request.deck ?? {},
           rollouts: request.rollouts,
-          seed:
-            request.seed != null ? String(request.seed) : null,
+          seed: request.seed != null ? String(request.seed) : null,
         }),
         ...effectiveRunFields(result.effective),
       })
@@ -97,9 +131,11 @@ export async function persistSolveResult(
         occurrence_count: 1,
         damage,
         nodes: String(result.nodes),
-        steps: result.steps != null ? toJsonb(result.steps) : null,
       })
       .execute();
+
+    await insertSampleEvents(trx, sampleId, result.events);
+    await insertSampleCardStats(trx, sampleId, result.lineCardStats);
   });
 
   return { runId, sampleId };
@@ -111,7 +147,17 @@ export async function persistEvaluateResult(
   result: DeckEvalResult,
 ): Promise<void> {
   const effective = result.effective;
-  const handGroups = new Map<string, { cardIds: string[]; damage: number; nodes: string; steps: unknown[] | null; count: number }>();
+  const handGroups = new Map<
+    string,
+    {
+      cardIds: string[];
+      damage: number;
+      nodes: string;
+      events: LineEvent[];
+      lineCardStats: SparseLineStats | undefined;
+      count: number;
+    }
+  >();
 
   for (const hand of result.hands) {
     const key = handHash(hand.hand);
@@ -124,7 +170,8 @@ export async function persistEvaluateResult(
       cardIds: [...hand.hand],
       damage: hand.damage,
       nodes: String(hand.nodes),
-      steps: hand.steps ?? null,
+      events: hand.events ?? [],
+      lineCardStats: hand.lineCardStats,
       count: 1,
     });
   }
@@ -137,8 +184,10 @@ export async function persistEvaluateResult(
         completed_at: new Date(),
         elapsed_ms: result.elapsedMs,
         mean_damage: result.mean,
+        p10_damage: result.p10,
         p50_damage: result.p50,
         p90_damage: result.p90,
+        mean_end_influence: result.meanEndInfluence,
         max_damage: result.max,
         min_damage: result.min,
         damage_histogram: toJsonb(damageHistogram(result.damages)),
@@ -149,19 +198,21 @@ export async function persistEvaluateResult(
       .execute();
 
     for (const [hash, sample] of handGroups) {
+      const sampleId = newId();
       await trx
         .insertInto("run_samples")
         .values({
-          id: newId(),
+          id: sampleId,
           run_id: runId,
           hand_hash: hash,
           card_ids: toJsonb(sample.cardIds),
           occurrence_count: sample.count,
           damage: sample.damage,
           nodes: sample.nodes,
-          steps: sample.steps != null ? toJsonb(sample.steps) : null,
         })
         .execute();
+      await insertSampleEvents(trx, sampleId, sample.events);
+      await insertSampleCardStats(trx, sampleId, sample.lineCardStats);
     }
 
     for (const stat of result.cardStats ?? []) {

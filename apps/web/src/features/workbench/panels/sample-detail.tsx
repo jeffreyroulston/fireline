@@ -1,8 +1,30 @@
 "use client";
 
-import type { DamageDistribution, SimType } from "@/lib/engine";
+import type { ReactNode } from "react";
+import type { CardId, DamageDistribution, LineEvent, SimType, SolveResult } from "@/lib/engine";
 import type { SampleHand } from "../types";
 import { DamageBars, HandCard, OptimalLine, SectionHeading, TwoPassCompare } from "../ui";
+
+function showsDrawnStrip(mode: SimType): boolean {
+  return mode === "oracle_only" || mode === "monte_carlo";
+}
+
+function drawnCardIds(events: LineEvent[]): CardId[] {
+  return events.flatMap((event) =>
+    event.drawn ? [event.drawn as CardId] : [],
+  );
+}
+
+function lineEventsForDrawn(
+  sample: SampleHand,
+  mode: SimType,
+  mcIndex: number | null,
+): LineEvent[] {
+  if (mode === "monte_carlo" && mcIndex != null && sample.distribution) {
+    return sample.distribution.rollouts[mcIndex]?.events ?? sample.events;
+  }
+  return sample.events;
+}
 
 export function MonteCarloSampleDetail({
   distribution,
@@ -34,7 +56,7 @@ export function MonteCarloSampleDetail({
       {rollout && (
         <OptimalLine
           label={`ROLLOUT ${selected! + 1} · ${rollout.damage} DAMAGE`}
-          steps={rollout.steps}
+          events={rollout.events}
           resetKey={`sample-mc-${selected}-${rollout.damage}`}
         />
       )}
@@ -42,7 +64,7 @@ export function MonteCarloSampleDetail({
   );
 }
 
-export function SampleDetailPanel({
+export function LineInspector({
   sample,
   handNumber,
   mode,
@@ -51,28 +73,39 @@ export function SampleDetailPanel({
   onSendToHandSolver,
   showSendToSolver = true,
   resetKeyPrefix = "sample",
+  title,
 }: {
   sample: SampleHand;
-  handNumber: number;
+  handNumber?: number;
   mode: SimType;
   mcIndex: number | null;
   onMcIndexChange: (index: number | null) => void;
   onSendToHandSolver?: (sample: SampleHand) => void;
   showSendToSolver?: boolean;
   resetKeyPrefix?: string;
+  title?: ReactNode;
 }) {
+  const showingMc = mode === "monte_carlo" && Boolean(sample.distribution);
+  const showingTwoPass = mode === "two_pass" && Boolean(sample.twoPass);
+  const drawn = showsDrawnStrip(mode)
+    ? drawnCardIds(lineEventsForDrawn(sample, mode, mcIndex))
+    : [];
+  const damageLabel = sample.twoPass
+    ? `${sample.twoPass.brick.maxDamage} / ${sample.twoPass.oracle.maxDamage} DAMAGE`
+    : sample.distribution
+      ? `${sample.distribution.min}–${sample.distribution.max} (P50 ${sample.distribution.p50})`
+      : `${sample.damage} DAMAGE`;
+
   return (
     <div className="sample-detail">
       <SectionHeading
         title={
-          <>
-            HAND {handNumber} ·{" "}
-            {sample.twoPass
-              ? `${sample.twoPass.brick.maxDamage} / ${sample.twoPass.oracle.maxDamage} DAMAGE`
-              : sample.distribution
-                ? `${sample.distribution.min}–${sample.distribution.max} (P50 ${sample.distribution.p50})`
-                : `${sample.damage} DAMAGE`}
-          </>
+          title ?? (
+            <>
+              {handNumber != null ? `HAND ${handNumber} · ` : ""}
+              {damageLabel}
+            </>
+          )
         }
         meta={<strong>{sample.nodes.toLocaleString()} states</strong>}
       />
@@ -81,6 +114,22 @@ export function SampleDetailPanel({
           <HandCard key={`${id}-${index}`} id={id} />
         ))}
       </div>
+      {drawn.length > 0 && (
+        <div className="sample-drawn">
+          <SectionHeading
+            title="DRAWN"
+            meta={<strong>{drawn.length} cards</strong>}
+          />
+          <div
+            className="hand-strip sample-hand"
+            aria-label="Cards drawn on the line"
+          >
+            {drawn.map((id, index) => (
+              <HandCard key={`drawn-${id}-${index}`} id={id} />
+            ))}
+          </div>
+        </div>
+      )}
       {showSendToSolver && onSendToHandSolver && (
         <button
           type="button"
@@ -91,7 +140,7 @@ export function SampleDetailPanel({
         </button>
       )}
 
-      {mode === "monte_carlo" && sample.distribution && (
+      {showingMc && sample.distribution && (
         <MonteCarloSampleDetail
           distribution={sample.distribution}
           selected={mcIndex}
@@ -99,7 +148,7 @@ export function SampleDetailPanel({
         />
       )}
 
-      {mode === "two_pass" && sample.twoPass && (
+      {showingTwoPass && sample.twoPass && (
         <TwoPassCompare
           brick={sample.twoPass.brick}
           oracle={sample.twoPass.oracle}
@@ -108,13 +157,29 @@ export function SampleDetailPanel({
         />
       )}
 
-      {mode === "fire_brick" && sample.steps.length > 0 && (
+      {!showingMc && !showingTwoPass && sample.events.length > 0 && (
         <OptimalLine
           sampleId={sample.sampleId}
-          steps={sample.steps}
-          resetKey={`${resetKeyPrefix}-${handNumber}-${sample.damage}-${sample.nodes}`}
+          events={sample.events}
+          resetKey={`${resetKeyPrefix}-${handNumber ?? "line"}-${sample.damage}-${sample.nodes}`}
         />
       )}
     </div>
   );
+}
+
+export function sampleFromSolveResult(
+  result: SolveResult,
+  hand: CardId[],
+): SampleHand {
+  return {
+    hand,
+    damage: result.maxDamage,
+    endInfluence: result.endInfluence,
+    events: result.events,
+    nodes: Number(result.nodes),
+    sampleId: result.sampleId,
+    distribution: result.distribution,
+    twoPass: result.twoPass,
+  };
 }

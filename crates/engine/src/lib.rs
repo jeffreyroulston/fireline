@@ -1,6 +1,7 @@
 pub mod budget;
 pub mod cards;
 pub mod deck;
+pub mod line_event;
 pub mod model;
 pub mod solver;
 pub mod stats;
@@ -10,15 +11,19 @@ pub mod version;
 mod bindings;
 
 pub use budget::Budget;
-pub use cards::{card_catalog, CardDef};
+pub use cards::{CardDef, card_catalog};
 pub use deck::{
     DeckEvalRequest, DeckEvalResult, EvalProgress, OptimizeProgress, OptimizeRequest,
     OptimizeResult, count_legal_decks, evaluate, evaluate_with_progress,
     evaluate_with_serial_progress, optimize, optimize_with_progress,
 };
+pub use line_event::{
+    ActionOp, AttackBonuses, EventKind, LineEvent, TapePhase, format_line_event,
+    format_line_event_row,
+};
 pub use model::{EffectiveRequest, PassResult, SimType, SolveRequest, SolveResult};
-pub use version::{EngineVersion, ENGINE_VERSION};
 pub use solver::{solve, solve_cards, solve_pass, solve_with_progress};
+pub use version::{ENGINE_VERSION, EngineVersion};
 
 pub fn solve_json(input: &str) -> Result<String, String> {
     let request: SolveRequest =

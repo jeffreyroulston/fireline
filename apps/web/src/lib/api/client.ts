@@ -1,4 +1,4 @@
-import type { SolveRequest, SolveResult } from "@ga-fire/contracts";
+import type { LineEvent, SolveRequest, SolveResult } from "@ga-fire/contracts";
 
 const API_PREFIX = "/api";
 
@@ -37,7 +37,41 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   return response;
 }
 
-export async function fetchCards() {
+export type WorkerVersion = {
+  rules: number;
+  sampler: number;
+  attribution: number;
+  cardDigest: string;
+  build: string;
+};
+
+export async function fetchWorkerVersion(): Promise<WorkerVersion> {
+  const response = await apiFetch("/version");
+  return response.json();
+}
+
+export async function fetchCards(): Promise<
+  Array<{
+    id: string;
+    name: string;
+    short: string;
+    kind: string;
+    cost: number;
+    element: string;
+    power?: number | null;
+    life?: number | null;
+    stealth?: boolean;
+    unique?: boolean;
+    assassinPowerBonus?: number | null;
+    assassinStealth?: boolean;
+    automaton?: boolean;
+    fast?: boolean;
+    floatingMemory?: boolean;
+    kindle?: number | null;
+    prepare?: number | null;
+    aliases?: string[];
+  }>
+> {
   const response = await apiFetch("/cards");
   return response.json();
 }
@@ -47,7 +81,9 @@ export async function solve(
 ): Promise<SolveResult & { sampleId?: string | null }> {
   const response = await apiFetch("/solve", {
     method: "POST",
-    body: JSON.stringify(request),
+    body: JSON.stringify(request, (_key, value) =>
+      typeof value === "bigint" ? Number(value) : value,
+    ),
   });
   return response.json();
 }
@@ -83,7 +119,7 @@ export async function deleteDeckOnApi(id: string): Promise<void> {
 export async function createRun(
   kind: "evaluate" | "optimize",
   payload: Record<string, unknown>,
-  deckId?: string,
+  deckId: string,
 ): Promise<{ id: string; status: string }> {
   const response = await apiFetch("/runs", {
     method: "POST",
@@ -110,6 +146,7 @@ export interface RunHistoryRow {
   deckName: string | null;
   rootSeed: string | null;
   samples: number | null;
+  rollouts: number | null;
   meanDamage: number | null;
   p50Damage: number | null;
   bestScore: number | null;
@@ -144,10 +181,12 @@ export interface PooledDamageResponse {
   distribution: {
     totalSamples: number;
     mean: number;
+    p10: number;
     p50: number;
     p90: number;
     min: number;
     max: number;
+    meanEndInfluence: number | null;
     buckets: number[];
   } | null;
   runs?: PooledRunSamples[];
@@ -255,6 +294,10 @@ export async function fetchCardLeaderboard(options: {
   samplerVersion: number;
   cardDigest: string;
   attributionVersion: number;
+  damageGt?: number;
+  damageGte?: number;
+  damageLt?: number;
+  damageLte?: number;
 }) {
   const response = await apiFetch(
     `/analysis/card-leaderboard${analysisQuery({
@@ -264,6 +307,10 @@ export async function fetchCardLeaderboard(options: {
       sampler_version: options.samplerVersion,
       card_digest: options.cardDigest,
       attribution_version: options.attributionVersion,
+      damage_gt: options.damageGt,
+      damage_gte: options.damageGte,
+      damage_lt: options.damageLt,
+      damage_lte: options.damageLte,
     })}`,
   );
   return response.json() as Promise<CardLeaderboardResponse>;
@@ -277,7 +324,7 @@ export interface PooledSampleResponse {
   hand: string[];
   damage: number;
   nodes: number;
-  steps: Array<Record<string, unknown>>;
+  events: LineEvent[];
 }
 
 export async function fetchPooledSampleHighlights(options: {
@@ -325,4 +372,241 @@ export async function fetchRankedCandidates(options: {
     })}`,
   );
   return response.json() as Promise<RankedCandidatesResponse>;
+}
+
+export type CardDatabasePerformance = {
+  runCount: number;
+  deckCount: number;
+  eligibleSamples: number;
+  opened: number;
+  openedCopies: number;
+  drawn: number;
+  seen: number;
+  plays: number;
+  attacks: number;
+  damage: number;
+  openRate: number;
+  seeRate: number;
+  playWhenInHand: number;
+  damageWhenSeen: number;
+  withHandMean: number | null;
+  withoutHandMean: number | null;
+  handLift: number | null;
+  withHandSamples: number;
+  withoutHandSamples: number;
+};
+
+export type CardDatabaseCard = {
+  id: string;
+  name: string;
+  short: string;
+  kind: string;
+  cost: number;
+  element: string;
+  power?: number | null;
+  life?: number | null;
+  stealth?: boolean;
+  unique?: boolean;
+  assassinPowerBonus?: number | null;
+  assassinStealth?: boolean;
+  automaton?: boolean;
+  fast?: boolean;
+  floatingMemory?: boolean;
+  kindle?: number | null;
+  prepare?: number | null;
+  aliases?: string[];
+  performance: CardDatabasePerformance | null;
+  hasOlderData: boolean;
+};
+
+export type CardDatabaseContributor = {
+  deckId: string;
+  name: string;
+  runCount: number;
+  samples: number;
+  sampleShare: number;
+};
+
+export type CardDatabaseResponse = {
+  simType: string;
+  version: {
+    rulesVersion: number;
+    samplerVersion: number;
+    cardDigest: string;
+  };
+  attributionVersion: number;
+  currentVersion: {
+    rulesVersion: number;
+    samplerVersion: number;
+    cardDigest: string;
+  };
+  currentAttributionVersion: number;
+  totalRuns: number;
+  totalSamples: number;
+  contributors: CardDatabaseContributor[];
+  cards: CardDatabaseCard[];
+};
+
+export async function fetchCardDatabase(options: {
+  simType: string;
+  rulesVersion: number;
+  samplerVersion: number;
+  cardDigest: string;
+  attributionVersion: number;
+  currentRulesVersion: number;
+  currentSamplerVersion: number;
+  currentCardDigest: string;
+  currentAttributionVersion: number;
+  deckIds?: string[];
+}): Promise<CardDatabaseResponse> {
+  const search = new URLSearchParams({
+    sim_type: options.simType,
+    rules_version: String(options.rulesVersion),
+    sampler_version: String(options.samplerVersion),
+    card_digest: options.cardDigest,
+    attribution_version: String(options.attributionVersion),
+    current_rules_version: String(options.currentRulesVersion),
+    current_sampler_version: String(options.currentSamplerVersion),
+    current_card_digest: options.currentCardDigest,
+    current_attribution_version: String(options.currentAttributionVersion),
+  });
+  for (const deckId of options.deckIds ?? []) {
+    search.append("deck_id", deckId);
+  }
+  if (options.deckIds !== undefined) {
+    search.set("deck_filter", "1");
+  }
+  const response = await apiFetch(`/analysis/card-database?${search}`);
+  return response.json() as Promise<CardDatabaseResponse>;
+}
+
+export type CardDatabaseCardDecksResponse = {
+  decks: Array<{
+    deckId: string;
+    name: string;
+    copies: number | null;
+    runCount: number;
+    samples: number;
+    damageWhenSeen: number | null;
+    withHandMean: number | null;
+    withoutHandMean: number | null;
+    handLift: number | null;
+    withHandSamples: number;
+    withoutHandSamples: number;
+  }>;
+};
+
+export async function fetchCardDatabaseCardDecks(options: {
+  cardId: string;
+  simType: string;
+  rulesVersion: number;
+  samplerVersion: number;
+  cardDigest: string;
+  attributionVersion: number;
+  deckIds?: string[];
+}): Promise<CardDatabaseCardDecksResponse> {
+  const search = new URLSearchParams({
+    sim_type: options.simType,
+    rules_version: String(options.rulesVersion),
+    sampler_version: String(options.samplerVersion),
+    card_digest: options.cardDigest,
+    attribution_version: String(options.attributionVersion),
+  });
+  for (const deckId of options.deckIds ?? []) {
+    search.append("deck_id", deckId);
+  }
+  if (options.deckIds !== undefined) {
+    search.set("deck_filter", "1");
+  }
+  const response = await apiFetch(
+    `/analysis/card-database/${encodeURIComponent(options.cardId)}/decks?${search}`,
+  );
+  return response.json() as Promise<CardDatabaseCardDecksResponse>;
+}
+
+export type CardPlayMatrixResponse = {
+  totalPlays: number;
+  totalSamples: number;
+  cells: Array<{
+    turn: number;
+    phase: string;
+    plays: number;
+    shareOfPlays: number;
+    perSample: number;
+  }>;
+};
+
+export async function fetchCardDatabasePlayMatrix(options: {
+  cardId: string;
+  simType: string;
+  rulesVersion: number;
+  samplerVersion: number;
+  cardDigest: string;
+  attributionVersion: number;
+  deckIds?: string[];
+}): Promise<CardPlayMatrixResponse> {
+  const search = new URLSearchParams({
+    sim_type: options.simType,
+    rules_version: String(options.rulesVersion),
+    sampler_version: String(options.samplerVersion),
+    card_digest: options.cardDigest,
+    attribution_version: String(options.attributionVersion),
+  });
+  for (const deckId of options.deckIds ?? []) {
+    search.append("deck_id", deckId);
+  }
+  if (options.deckIds !== undefined) {
+    search.set("deck_filter", "1");
+  }
+  const response = await apiFetch(
+    `/analysis/card-database/${encodeURIComponent(options.cardId)}/play-matrix?${search}`,
+  );
+  return response.json() as Promise<CardPlayMatrixResponse>;
+}
+
+export type CardDatabasePairingRow = {
+  cardId: string;
+  name: string;
+  bothMean: number;
+  selectedWithoutPartnerMean: number;
+  partnerWithoutSelectedMean: number;
+  pairsWithMeDelta: number;
+  dependsOnMeDelta: number;
+  bothCount: number;
+  selectedWithoutPartnerCount: number;
+  partnerWithoutSelectedCount: number;
+};
+
+export type CardDatabasePairingsResponse = {
+  cardId: string;
+  totalSamples: number;
+  partners: CardDatabasePairingRow[];
+};
+
+export async function fetchCardDatabasePairings(options: {
+  cardId: string;
+  simType: string;
+  rulesVersion: number;
+  samplerVersion: number;
+  cardDigest: string;
+  attributionVersion: number;
+  deckIds?: string[];
+}): Promise<CardDatabasePairingsResponse> {
+  const search = new URLSearchParams({
+    sim_type: options.simType,
+    rules_version: String(options.rulesVersion),
+    sampler_version: String(options.samplerVersion),
+    card_digest: options.cardDigest,
+    attribution_version: String(options.attributionVersion),
+  });
+  for (const deckId of options.deckIds ?? []) {
+    search.append("deck_id", deckId);
+  }
+  if (options.deckIds !== undefined) {
+    search.set("deck_filter", "1");
+  }
+  const response = await apiFetch(
+    `/analysis/card-database/${encodeURIComponent(options.cardId)}/pairings?${search}`,
+  );
+  return response.json() as Promise<CardDatabasePairingsResponse>;
 }

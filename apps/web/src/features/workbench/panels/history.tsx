@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { type SimType } from "@/lib/engine";
 import {
+  deleteRun,
   fetchCardLeaderboard,
   fetchPooledDamage,
   fetchPooledSampleHighlights,
@@ -19,15 +20,15 @@ import {
   buildBarHighlights,
   CardLeaderboardPanel,
 } from "./card-leaderboard";
-import { DamageBellCurve } from "./damage-bell-curve";
 import {
-  PooledDamageBarChart,
-  PooledSampleDetail,
-  usePooledSampleSelection,
+  PooledDamagePanel,
   type PooledSampleBar,
-} from "./pooled-damage-bars";
+} from "./pooled-damage";
 import { SIM_TYPE_LABELS } from "../types";
-import { PanelTopline, SectionHeading, StatLine } from "../ui";
+import { PanelTopline, SectionHeading } from "../ui";
+import type { DamageRange } from "../lib/damage-range";
+import { historyQueryPatch, parseSimParam } from "../routes";
+import { useWorkbenchQuery } from "../use-workbench-query";
 
 function groupKey(group: VersionGroup): string {
   return `${group.rulesVersion}:${group.samplerVersion}:${group.cardDigest}:${group.attributionVersion}`;
@@ -54,11 +55,41 @@ function formatWhen(iso: string): string {
   });
 }
 
+function formatRunTime(elapsedMs: number | null): string {
+  if (elapsedMs == null) {
+    return "—";
+  }
+  if (elapsedMs < 1000) {
+    return `${Math.round(elapsedMs)}ms`;
+  }
+  if (elapsedMs < 60_000) {
+    return `${(elapsedMs / 1000).toFixed(1)}s`;
+  }
+  if (elapsedMs < 3_600_000) {
+    const minutes = Math.floor(elapsedMs / 60_000);
+    const seconds = Math.round((elapsedMs % 60_000) / 1000);
+    return `${minutes}m ${seconds}s`;
+  }
+  const hours = Math.floor(elapsedMs / 3_600_000);
+  const minutes = Math.round((elapsedMs % 3_600_000) / 60_000);
+  return `${hours}h ${minutes}m`;
+}
+
 function resultLabel(run: RunHistoryRow): string {
   if (run.kind === "optimize") {
     return run.bestScore != null ? run.bestScore.toFixed(2) : "—";
   }
   return run.meanDamage != null ? run.meanDamage.toFixed(1) : "—";
+}
+
+function handsLabel(run: RunHistoryRow): string {
+  if (run.samples == null) {
+    return "—";
+  }
+  if (run.simType === "monte_carlo" && run.rollouts != null) {
+    return `${run.samples} (${run.rollouts})`;
+  }
+  return String(run.samples);
 }
 
 function statusClass(status: string): string {
@@ -128,23 +159,6 @@ function resolvePoolHash(
   return fromRun ?? deck.deckHash;
 }
 
-function formatSigned(value: number, digits = 1): string {
-  const abs = Math.abs(value).toFixed(digits);
-  if (value > 0) {
-    return `+${abs}`;
-  }
-  if (value < 0) {
-    return `−${abs}`;
-  }
-  return digits === 0 ? "0" : (0).toFixed(digits);
-}
-
-function deltaTone(value: number): "is-hotter" | "is-cooler" | "" {
-  if (value > 0) return "is-hotter";
-  if (value < 0) return "is-cooler";
-  return "";
-}
-
 function poolLegendLabel(
   deckName: string,
   sim: SimType,
@@ -164,23 +178,34 @@ function poolLegendLabel(
 
 export function HistoryPanel({
   decks,
-  activeDeck,
-  filterToActiveDeck,
+  routeDeckId,
   refreshToken,
-  onFilterToActiveDeckChange,
   onSwitchDeck,
 }: {
   decks: SavedDeck[];
-  activeDeck: SavedDeck | null;
-  filterToActiveDeck: boolean;
+  routeDeckId?: string;
   refreshToken: number;
-  onFilterToActiveDeckChange: (value: boolean) => void;
   onSwitchDeck: (deckId: string) => void;
 }) {
+  const { searchParams, replaceQuery } = useWorkbenchQuery("history");
+  const [filterDeckId, setFilterDeckId] = useState<string | null>(
+    routeDeckId ?? null,
+  );
+
+  useEffect(() => {
+    if (!routeDeckId) {
+      return;
+    }
+    setFilterDeckId(routeDeckId);
+  }, [routeDeckId]);
   const [runs, setRuns] = useState<RunHistoryRow[]>([]);
   const [groups, setGroups] = useState<VersionGroup[]>([]);
-  const [simType, setSimType] = useState<SimType>("fire_brick");
-  const [selectedGroupKey, setSelectedGroupKey] = useState("");
+  const [simType, setSimType] = useState<SimType>(
+    () => parseSimParam(searchParams.get("sim")) ?? "fire_brick",
+  );
+  const [selectedGroupKey, setSelectedGroupKey] = useState(
+    () => searchParams.get("vg") ?? "",
+  );
   const [pooled, setPooled] = useState<PooledDamageResponse | null>(null);
   const [leaderboard, setLeaderboard] = useState<CardLeaderboardResponse | null>(
     null,
@@ -189,9 +214,12 @@ export function HistoryPanel({
     useState<PooledSampleHighlightsResponse | null>(null);
   const [selectedLeaderboardCard, setSelectedLeaderboardCard] = useState<
     string | null
-  >(null);
+  >(() => searchParams.get("card"));
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [localEpoch, setLocalEpoch] = useState(0);
+  const dataEpoch = refreshToken + localEpoch;
 
   const [compareOpen, setCompareOpen] = useState(false);
   const [compareDeckId, setCompareDeckId] = useState("");
@@ -204,8 +232,14 @@ export function HistoryPanel({
   const [compareLoading, setCompareLoading] = useState(false);
   const [compareError, setCompareError] = useState("");
   const [compareRuns, setCompareRuns] = useState<RunHistoryRow[]>([]);
+  const [appliedRange, setAppliedRange] = useState<DamageRange | null>(null);
+  const [filteredLeaderboard, setFilteredLeaderboard] =
+    useState<CardLeaderboardResponse | null>(null);
+  const [filterLoading, setFilterLoading] = useState(false);
 
-  const selectedDeck = filterToActiveDeck ? activeDeck : null;
+  const selectedDeck = filterDeckId
+    ? (decks.find((deck) => deck.id === filterDeckId) ?? null)
+    : null;
   const deckId = selectedDeck?.id;
   const deckHash = selectedDeck?.deckHash;
   const poolHash = useMemo(
@@ -238,6 +272,12 @@ export function HistoryPanel({
     !!pooled?.distribution;
 
   useEffect(() => {
+    setSimType(parseSimParam(searchParams.get("sim")) ?? "fire_brick");
+    setSelectedGroupKey(searchParams.get("vg") ?? "");
+    setSelectedLeaderboardCard(searchParams.get("card"));
+  }, [searchParams]);
+
+  useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
@@ -261,7 +301,7 @@ export function HistoryPanel({
     return () => {
       cancelled = true;
     };
-  }, [deckId, deckHash, refreshToken]);
+  }, [deckId, deckHash, dataEpoch]);
 
   useEffect(() => {
     if (!deckId && !deckHash) {
@@ -284,6 +324,13 @@ export function HistoryPanel({
         if (!cancelled) {
           setGroups(nextGroups);
           setSelectedGroupKey((current) => {
+            const fromUrl = searchParams.get("vg");
+            if (
+              fromUrl &&
+              nextGroups.some((group) => groupKey(group) === fromUrl)
+            ) {
+              return fromUrl;
+            }
             if (current && nextGroups.some((group) => groupKey(group) === current)) {
               return current;
             }
@@ -303,7 +350,7 @@ export function HistoryPanel({
     return () => {
       cancelled = true;
     };
-  }, [deckId, deckHash, simType, refreshToken]);
+  }, [deckId, deckHash, simType, dataEpoch, searchParams]);
 
   useEffect(() => {
     if (!selectedGroupKey || !poolHash || !selectedGroup?.attributionVersion) {
@@ -364,7 +411,7 @@ export function HistoryPanel({
     return () => {
       cancelled = true;
     };
-  }, [selectedGroupKey, poolHash, simType, selectedGroup, refreshToken]);
+  }, [selectedGroupKey, poolHash, simType, selectedGroup, dataEpoch]);
 
   useEffect(() => {
     if (!compareOpen || !compareDeckId) {
@@ -387,7 +434,7 @@ export function HistoryPanel({
     return () => {
       cancelled = true;
     };
-  }, [compareOpen, compareDeckId, refreshToken]);
+  }, [compareOpen, compareDeckId, dataEpoch]);
 
   useEffect(() => {
     if (!compareOpen || !compareDeckId) {
@@ -428,7 +475,7 @@ export function HistoryPanel({
     return () => {
       cancelled = true;
     };
-  }, [compareOpen, compareDeckId, compareSimType, refreshToken]);
+  }, [compareOpen, compareDeckId, compareSimType, dataEpoch]);
 
   useEffect(() => {
     if (
@@ -487,31 +534,59 @@ export function HistoryPanel({
     comparePoolHash,
     compareSimType,
     compareGroup,
-    refreshToken,
+    dataEpoch,
   ]);
 
   const sampleBars = useMemo(() => sampleBarsFromPooled(pooled), [pooled]);
-  const sampleMax = Math.max(pooled?.distribution?.max ?? 0, 1);
   const pooledSampleKey = pooled
     ? `${poolHash ?? ""}:${simType}:${selectedGroupKey}:${pooled.runCount}`
     : "";
-  const [selectedBarKey, setSelectedBarKey] = useState<string | null>(null);
-  const selectedSampleBar = useMemo(
-    () =>
-      selectedBarKey != null
-        ? (sampleBars.find((bar) => bar.key === selectedBarKey) ?? null)
-        : null,
-    [sampleBars, selectedBarKey],
-  );
-  const pooledSample = usePooledSampleSelection(
-    selectedSampleBar?.runId ?? null,
-    selectedSampleBar?.sampleIndex ?? null,
-  );
 
   useEffect(() => {
-    setSelectedBarKey(null);
     setSelectedLeaderboardCard(null);
-  }, [pooledSampleKey]);
+    if (searchParams.get("card")) {
+      replaceQuery((current) => historyQueryPatch(current, { card: null }));
+    }
+  }, [pooledSampleKey, replaceQuery, searchParams]);
+
+  useEffect(() => {
+    if (!appliedRange || !poolHash || !selectedGroup?.attributionVersion) {
+      setFilteredLeaderboard(null);
+      setFilterLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setFilterLoading(true);
+    void (async () => {
+      try {
+        const boardResult = await fetchCardLeaderboard({
+          deckHash: poolHash,
+          simType,
+          rulesVersion: selectedGroup.rulesVersion,
+          samplerVersion: selectedGroup.samplerVersion,
+          cardDigest: selectedGroup.cardDigest,
+          attributionVersion: selectedGroup.attributionVersion!,
+          damageGte: appliedRange.gte,
+          damageLte: appliedRange.lte,
+        });
+        if (!cancelled) {
+          setFilteredLeaderboard(boardResult);
+        }
+      } catch {
+        if (!cancelled) {
+          setFilteredLeaderboard(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setFilterLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [appliedRange, poolHash, simType, selectedGroup, dataEpoch]);
 
   const barCardHighlights = useMemo(
     () =>
@@ -521,6 +596,27 @@ export function HistoryPanel({
       ),
     [sampleHighlights, selectedLeaderboardCard],
   );
+  const activeLeaderboard = appliedRange ? filteredLeaderboard : leaderboard;
+
+  async function handleDeleteRun(run: RunHistoryRow) {
+    if (deletingId) {
+      return;
+    }
+    setDeletingId(run.id);
+    setError("");
+    try {
+      await deleteRun(run.id);
+      setLocalEpoch((current) => current + 1);
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Could not delete that run.",
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   function openCompare() {
     setCompareOpen(true);
@@ -580,21 +676,23 @@ export function HistoryPanel({
     <div className="history-mode">
       <PanelTopline kicker="CROSS-RUN ANALYSIS">
         Review completed sims, then pool damage and card rates only within one
-        engine version. Simulation types stay on separate charts.
+        engine version. Simulation types stay on separate charts. Filter the
+        bars and card board by damage. Pooled mean, P10, P50, P90, and ending
+        influence stay on the full set.
       </PanelTopline>
 
       <div className="history-controls">
         <label>
           Deck
           <select
-            value={filterToActiveDeck ? (activeDeck?.id ?? "") : "all"}
+            value={filterDeckId ?? "all"}
             onChange={(event) => {
               const value = event.target.value;
               if (value === "all") {
-                onFilterToActiveDeckChange(false);
+                setFilterDeckId(null);
                 return;
               }
-              onFilterToActiveDeckChange(true);
+              setFilterDeckId(value);
               onSwitchDeck(value);
             }}
           >
@@ -610,7 +708,11 @@ export function HistoryPanel({
           Sim type
           <select
             value={simType}
-            onChange={(event) => setSimType(event.target.value as SimType)}
+            onChange={(event) => {
+              const value = event.target.value as SimType;
+              setSimType(value);
+              replaceQuery((current) => historyQueryPatch(current, { sim: value }));
+            }}
           >
             {(Object.keys(SIM_TYPE_LABELS) as SimType[]).map((id) => (
               <option key={id} value={id}>
@@ -624,7 +726,11 @@ export function HistoryPanel({
           <select
             value={selectedDeck ? selectedGroupKey : ""}
             disabled={!selectedDeck || groups.length === 0}
-            onChange={(event) => setSelectedGroupKey(event.target.value)}
+            onChange={(event) => {
+              const value = event.target.value;
+              setSelectedGroupKey(value);
+              replaceQuery((current) => historyQueryPatch(current, { vg: value }));
+            }}
           >
             {!selectedDeck && (
               <option value="">Pick a deck to pool</option>
@@ -657,8 +763,8 @@ export function HistoryPanel({
         {runs.length === 0 ? (
           <p className="history-empty">
             No completed runs yet
-            {filterToActiveDeck && activeDeck
-              ? ` for ${activeDeck.name}`
+            {filterDeckId && selectedDeck
+              ? ` for ${selectedDeck.name}`
               : ""}
             . Finish an evaluate or optimize to fill this table.
           </p>
@@ -671,9 +777,14 @@ export function HistoryPanel({
                   <th>Deck</th>
                   <th>Kind</th>
                   <th>Sim</th>
+                  <th>Hands</th>
+                  <th>Runtime</th>
                   <th>Status</th>
                   <th>Version</th>
                   <th>Result</th>
+                  <th>
+                    <span className="visually-hidden">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -692,6 +803,8 @@ export function HistoryPanel({
                         ? (SIM_TYPE_LABELS[run.simType as SimType] ?? run.simType)
                         : "—"}
                     </td>
+                    <td className="history-mono">{handsLabel(run)}</td>
+                    <td className="history-mono">{formatRunTime(run.elapsedMs)}</td>
                     <td>
                       <span
                         className={`history-status ${statusClass(run.status)}`}
@@ -701,6 +814,16 @@ export function HistoryPanel({
                     </td>
                     <td className="history-mono">{formatVersionShort(run)}</td>
                     <td className="history-result">{resultLabel(run)}</td>
+                    <td className="history-actions">
+                      <button
+                        type="button"
+                        className="text-action is-danger"
+                        disabled={deletingId != null}
+                        onClick={() => void handleDeleteRun(run)}
+                      >
+                        {deletingId === run.id ? "Deleting…" : "Delete"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -713,38 +836,43 @@ export function HistoryPanel({
 
       {pooled?.distribution && baselineDist && (
         <div className="history-analysis">
-          <section className="history-panel history-pooled">
-            <SectionHeading
-              className="history-pooled-heading"
-              title="POOLED DAMAGE"
-              meta={
-                <div className="history-pooled-heading-meta">
-                  <strong>
-                    {comparing && compareDist
-                      ? `${pooled.runCount} vs ${comparePooled?.runCount ?? 0} runs · ${baselineDist.totalSamples} vs ${compareDist.totalSamples} samples`
-                      : `${pooled.runCount} runs · ${baselineDist.totalSamples} samples`}
-                  </strong>
-                  {compareOpen ? (
-                    <button
-                      type="button"
-                      className="secondary-action"
-                      onClick={clearCompare}
-                    >
-                      Clear compare
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="secondary-action"
-                      onClick={openCompare}
-                    >
-                      Compare
-                    </button>
-                  )}
-                </div>
-              }
-            />
-
+          <PooledDamagePanel
+            meta={
+              <div className="history-pooled-heading-meta">
+                <strong>
+                  {comparing && compareDist
+                    ? `${pooled.runCount} vs ${comparePooled?.runCount ?? 0} runs · ${baselineDist.totalSamples} vs ${compareDist.totalSamples} samples`
+                    : `${pooled.runCount} runs · ${baselineDist.totalSamples} samples`}
+                </strong>
+                {compareOpen ? (
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={clearCompare}
+                  >
+                    Clear compare
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={openCompare}
+                  >
+                    Compare
+                  </button>
+                )}
+              </div>
+            }
+            distribution={baselineDist}
+            compareDistribution={comparing ? compareDist : null}
+            baselineLegend={baselineLegend}
+            compareLegend={compareLegend}
+            bars={sampleBars}
+            simType={simType}
+            cardHighlights={barCardHighlights}
+            resetKey={pooledSampleKey}
+            onAppliedRangeChange={setAppliedRange}
+          >
             {compareOpen && (
               <div className="history-compare-panel">
                 <p className="history-compare-kicker">COMPARE AGAINST</p>
@@ -813,163 +941,22 @@ export function HistoryPanel({
                 )}
               </div>
             )}
+          </PooledDamagePanel>
 
-            {comparing && compareDist ? (
-              <>
-                <div className="history-compare-legend" aria-hidden="true">
-                  <span className="is-baseline">{baselineLegend}</span>
-                  <span className="is-compare">{compareLegend}</span>
-                </div>
-                <div className="stat-line history-compare-stats">
-                  <span>
-                    <small>MEAN</small>
-                    <b className="history-compare-pair">
-                      <em className="is-baseline">
-                        {baselineDist.mean.toFixed(1)}
-                      </em>
-                      <em className="is-compare">
-                        {compareDist.mean.toFixed(1)}
-                      </em>
-                    </b>
-                    <i
-                      className={`history-delta ${deltaTone(compareDist.mean - baselineDist.mean)}`}
-                    >
-                      {formatSigned(compareDist.mean - baselineDist.mean, 1)}
-                    </i>
-                  </span>
-                  <span>
-                    <small>P50</small>
-                    <b className="history-compare-pair">
-                      <em className="is-baseline">{baselineDist.p50}</em>
-                      <em className="is-compare">{compareDist.p50}</em>
-                    </b>
-                    <i
-                      className={`history-delta ${deltaTone(compareDist.p50 - baselineDist.p50)}`}
-                    >
-                      {formatSigned(compareDist.p50 - baselineDist.p50, 0)}
-                    </i>
-                  </span>
-                  <span>
-                    <small>P90</small>
-                    <b className="history-compare-pair">
-                      <em className="is-baseline">{baselineDist.p90}</em>
-                      <em className="is-compare">{compareDist.p90}</em>
-                    </b>
-                    <i
-                      className={`history-delta ${deltaTone(compareDist.p90 - baselineDist.p90)}`}
-                    >
-                      {formatSigned(compareDist.p90 - baselineDist.p90, 0)}
-                    </i>
-                  </span>
-                  <span>
-                    <small>RANGE</small>
-                    <b className="history-compare-pair">
-                      <em className="is-baseline">
-                        {baselineDist.min}–{baselineDist.max}
-                      </em>
-                      <em className="is-compare">
-                        {compareDist.min}–{compareDist.max}
-                      </em>
-                    </b>
-                    <i className="history-delta history-delta-range">
-                      <span
-                        className={deltaTone(compareDist.min - baselineDist.min)}
-                      >
-                        min {formatSigned(compareDist.min - baselineDist.min, 0)}
-                      </span>
-                      <span
-                        className={deltaTone(compareDist.max - baselineDist.max)}
-                      >
-                        max {formatSigned(compareDist.max - baselineDist.max, 0)}
-                      </span>
-                    </i>
-                  </span>
-                </div>
-              </>
-            ) : (
-              <StatLine
-                items={[
-                  { label: "MEAN", value: baselineDist.mean.toFixed(1) },
-                  { label: "P50", value: baselineDist.p50 },
-                  { label: "P90", value: baselineDist.p90 },
-                  {
-                    label: "RANGE",
-                    value: (
-                      <>
-                        {baselineDist.min}–{baselineDist.max}
-                      </>
-                    ),
-                  },
-                ]}
-              />
-            )}
-
-            <div
-              className={`history-pooled-charts${comparing ? " is-compare" : ""}`}
-            >
-              <div className="history-bell-plot">
-                {comparing && compareDist ? (
-                  <DamageBellCurve
-                    series={[
-                      {
-                        id: "baseline",
-                        buckets: baselineDist.buckets,
-                        mean: baselineDist.mean,
-                        p50: baselineDist.p50,
-                        p90: baselineDist.p90,
-                        min: baselineDist.min,
-                        max: baselineDist.max,
-                      },
-                      {
-                        id: "compare",
-                        buckets: compareDist.buckets,
-                        mean: compareDist.mean,
-                        p50: compareDist.p50,
-                        p90: compareDist.p90,
-                        min: compareDist.min,
-                        max: compareDist.max,
-                      },
-                    ]}
-                  />
-                ) : (
-                  <DamageBellCurve
-                    buckets={baselineDist.buckets}
-                    mean={baselineDist.mean}
-                    p50={baselineDist.p50}
-                    p90={baselineDist.p90}
-                    min={baselineDist.min}
-                    max={baselineDist.max}
-                  />
-                )}
-              </div>
-              {!comparing && (
-                <PooledDamageBarChart
-                  bars={sampleBars}
-                  sampleMax={sampleMax}
-                  selectedKey={selectedBarKey}
-                  onSelectedKeyChange={setSelectedBarKey}
-                  cardHighlights={barCardHighlights}
-                />
-              )}
-            </div>
-            {!comparing && (
-              <PooledSampleDetail
-                selectedBar={selectedSampleBar}
-                simType={simType}
-                sample={pooledSample.sample}
-                loading={pooledSample.loading}
-                loadError={pooledSample.loadError}
-                mcIndex={pooledSample.mcIndex}
-                onMcIndexChange={pooledSample.setMcIndex}
-              />
-            )}
-          </section>
-
-          {leaderboard && leaderboard.cards.length > 0 && (
+          {filterLoading && appliedRange && !filteredLeaderboard && (
+            <p className="sim-hint">Updating card board…</p>
+          )}
+          {activeLeaderboard &&
+            (activeLeaderboard.cards.length > 0 || appliedRange) && (
             <CardLeaderboardPanel
-              leaderboard={leaderboard}
+              leaderboard={activeLeaderboard}
               selectedCardId={selectedLeaderboardCard}
-              onSelectedCardIdChange={setSelectedLeaderboardCard}
+              onSelectedCardIdChange={(cardId) => {
+                setSelectedLeaderboardCard(cardId);
+                replaceQuery((current) =>
+                  historyQueryPatch(current, { card: cardId }),
+                );
+              }}
             />
           )}
         </div>

@@ -34,9 +34,7 @@ fn bench_with_stats(name: &str, c: &mut Criterion, mut solve: impl FnMut() -> Pa
         "{name}: nodes={} memo_entries={} max_damage={}",
         pass.nodes, pass.memo_entries, pass.max_damage
     );
-    c.bench_function(name, move |bench| {
-        bench.iter(|| black_box(solve()))
-    });
+    c.bench_function(name, move |bench| bench.iter(|| black_box(solve())));
 }
 
 fn fire_brick_drill_three(c: &mut Criterion) {
@@ -61,5 +59,10 @@ fn oracle_full_queue(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, fire_brick_drill_three, fire_brick_ally_heavy, oracle_full_queue);
+criterion_group!(
+    benches,
+    fire_brick_drill_three,
+    fire_brick_ally_heavy,
+    oracle_full_queue
+);
 criterion_main!(benches);

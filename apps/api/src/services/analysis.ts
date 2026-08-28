@@ -12,8 +12,14 @@ import {
   reconstructSampleHand,
 } from "../lib/sample-order.js";
 import { handHash } from "../lib/deck.js";
-import { playedOpeningCards } from "../lib/sample-card-highlights.js";
+import { loadEventsBySampleId } from "../lib/load-sample-events.js";
 import type { VersionTriple } from "../lib/version.js";
+import { isMaterialCardId } from "../db/card-seed.js";
+import {
+  cardLeaderboardFromSamples,
+  hasDamageBounds,
+  type DamageBounds,
+} from "./filtered-leaderboard.js";
 
 const COMPLETE = "complete" as const;
 
@@ -80,6 +86,7 @@ export async function pooledDamageDistribution(
       "deck_counts",
       "root_seed",
       "mean_damage",
+      "mean_end_influence",
       "samples",
       "started_at",
     ])
@@ -142,6 +149,7 @@ export async function pooledDamageDistribution(
     return [
       {
         histogram,
+        meanEndInfluence: run.mean_end_influence,
         sampleRun: {
           id: run.id,
           startedAt: run.started_at,
@@ -154,7 +162,24 @@ export async function pooledDamageDistribution(
   });
 
   const merged = mergeHistograms(parsed.map((entry) => entry.histogram));
-  const distribution = histogramStats(merged);
+  const damageStats = histogramStats(merged);
+  let influenceWeighted = 0;
+  let influenceSamples = 0;
+  for (const entry of parsed) {
+    const samples = entry.sampleRun.samples ?? entry.sampleRun.damages.length;
+    if (entry.meanEndInfluence == null || samples <= 0) {
+      continue;
+    }
+    influenceWeighted += entry.meanEndInfluence * samples;
+    influenceSamples += samples;
+  }
+  const distribution = damageStats
+    ? {
+        ...damageStats,
+        meanEndInfluence:
+          influenceSamples > 0 ? influenceWeighted / influenceSamples : null,
+      }
+    : null;
 
   return {
     runCount: parsed.length,
@@ -192,7 +217,7 @@ export async function getPooledSample(
 
   const sampleRows = await db
     .selectFrom("run_samples")
-    .select(["id", "hand_hash", "card_ids", "damage", "nodes", "steps"])
+    .select(["id", "hand_hash", "card_ids", "damage", "nodes"])
     .where("run_id", "=", run.id)
     .execute();
 
@@ -229,6 +254,9 @@ export async function getPooledSample(
 
   const hash = handHash(hand);
   const sample = sampleRows.find((row) => row.hand_hash === hash);
+  const eventsBySample = sample
+    ? await loadEventsBySampleId(db, [sample.id])
+    : new Map();
 
   return {
     runId: run.id,
@@ -238,7 +266,7 @@ export async function getPooledSample(
     hand: sample?.card_ids ?? hand,
     damage: damages[options.sampleIndex]!,
     nodes: sample ? Number(sample.nodes) : 0,
-    steps: sample?.steps ?? [],
+    events: sample ? (eventsBySample.get(sample.id) ?? []) : [],
   };
 }
 
@@ -248,7 +276,6 @@ export async function pooledSampleHighlights(
     deckHash: string;
     simType: string;
     version: VersionTriple;
-    cardNames: Record<string, string>;
   },
 ) {
   const runs = await db
@@ -271,17 +298,19 @@ export async function pooledSampleHighlights(
     .execute();
 
   if (runs.length === 0) {
-    return { samples: [] as Array<{
-      runId: string;
-      sampleIndex: number;
-      inHand: string[];
-      played: string[];
-    }> };
+    return {
+      samples: [] as Array<{
+        runId: string;
+        sampleIndex: number;
+        inHand: string[];
+        played: string[];
+      }>,
+    };
   }
 
   const sampleRows = await db
     .selectFrom("run_samples")
-    .select(["run_id", "hand_hash", "card_ids", "damage", "steps"])
+    .select(["id", "run_id", "hand_hash", "card_ids", "damage"])
     .where(
       "run_id",
       "in",
@@ -289,27 +318,45 @@ export async function pooledSampleHighlights(
     )
     .execute();
 
+  const sampleIds = sampleRows.map((row) => row.id);
+  const playRows =
+    sampleIds.length === 0
+      ? []
+      : await db
+          .selectFrom("run_sample_card_stats")
+          .select(["sample_id", "card_id", "plays", "attacks"])
+          .where("sample_id", "in", sampleIds)
+          .execute();
+
+  const playsBySample = new Map<string, Map<string, number>>();
+  const attacksBySample = new Map<string, Map<string, number>>();
+  for (const row of playRows) {
+    let byCard = playsBySample.get(row.sample_id);
+    if (!byCard) {
+      byCard = new Map();
+      playsBySample.set(row.sample_id, byCard);
+    }
+    byCard.set(row.card_id, row.plays);
+    let attacksByCard = attacksBySample.get(row.sample_id);
+    if (!attacksByCard) {
+      attacksByCard = new Map();
+      attacksBySample.set(row.sample_id, attacksByCard);
+    }
+    attacksByCard.set(row.card_id, row.attacks);
+  }
+
   const samplesByRun = new Map<
     string,
-    Map<
-      string,
-      { cardIds: string[]; steps: unknown[] | null }
-    >
+    Map<string, { id: string; cardIds: string[] }>
   >();
+  const handDamagesByRun = new Map<string, Map<string, number>>();
   for (const row of sampleRows) {
     let byHand = samplesByRun.get(row.run_id);
     if (!byHand) {
       byHand = new Map();
       samplesByRun.set(row.run_id, byHand);
     }
-    byHand.set(row.hand_hash, {
-      cardIds: row.card_ids,
-      steps: row.steps,
-    });
-  }
-
-  const handDamagesByRun = new Map<string, Map<string, number>>();
-  for (const row of sampleRows) {
+    byHand.set(row.hand_hash, { id: row.id, cardIds: row.card_ids });
     let handDamages = handDamagesByRun.get(row.run_id);
     if (!handDamages) {
       handDamages = new Map();
@@ -350,16 +397,36 @@ export async function pooledSampleHighlights(
       }
       const stored = byHand.get(handHash(hand));
       const openingHand = stored?.cardIds ?? hand;
-      const steps = (stored?.steps ?? []) as Array<{ action: string }>;
+      const playCounts = stored
+        ? (playsBySample.get(stored.id) ?? new Map())
+        : new Map();
+      const attackCounts = stored
+        ? (attacksBySample.get(stored.id) ?? new Map())
+        : new Map();
+      const openingCopies = new Map<string, number>();
+      for (const cardId of openingHand) {
+        openingCopies.set(cardId, (openingCopies.get(cardId) ?? 0) + 1);
+      }
+      const played: string[] = [];
+      for (const [cardId, copies] of openingCopies) {
+        if ((playCounts.get(cardId) ?? 0) >= copies) {
+          played.push(cardId);
+        }
+      }
+      const usedIds = new Set([...playCounts.keys(), ...attackCounts.keys()]);
+      for (const cardId of usedIds) {
+        if (!isMaterialCardId(cardId) || played.includes(cardId)) {
+          continue;
+        }
+        if ((playCounts.get(cardId) ?? 0) > 0 || (attackCounts.get(cardId) ?? 0) > 0) {
+          played.push(cardId);
+        }
+      }
       samples.push({
         runId: run.id,
         sampleIndex,
         inHand: openingHand,
-        played: playedOpeningCards(
-          openingHand,
-          steps,
-          options.cardNames,
-        ),
+        played,
       });
     }
   }
@@ -374,8 +441,21 @@ export async function cardLeaderboard(
     simType: string;
     version: VersionTriple;
     attributionVersion: number;
+    bounds?: DamageBounds;
+    cards?: Array<{ id: string; name: string }>;
   },
 ) {
+  if (hasDamageBounds(options.bounds) && options.cards) {
+    return cardLeaderboardFromSamples(db, {
+      deckHash: options.deckHash,
+      simType: options.simType,
+      version: options.version,
+      attributionVersion: options.attributionVersion,
+      bounds: options.bounds!,
+      cards: options.cards,
+    });
+  }
+
   const runCountRow = await db
     .selectFrom("runs")
     .select(sql<number>`count(*)::int`.as("runCount"))
@@ -526,6 +606,7 @@ export async function listRunHistory(
       "decks.name as deckName",
       "runs.root_seed as rootSeed",
       "runs.samples as samples",
+      "runs.rollouts as rollouts",
       "runs.mean_damage as meanDamage",
       "runs.p50_damage as p50Damage",
       "runs.best_score as bestScore",

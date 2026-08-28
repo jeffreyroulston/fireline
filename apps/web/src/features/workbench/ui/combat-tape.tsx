@@ -1,19 +1,28 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { LineStep } from "@/lib/engine";
-import { stepMatchesQuery } from "../lib/step-matches-query";
+import type { LineEvent } from "@/lib/engine";
+import { CARD_LIST } from "@/lib/engine";
+import { eventMatchesQuery } from "../lib/event-matches-query";
+import { expandEventZones } from "../lib/expand-zones";
+import { formatLineEvent, formatLineEventRow } from "../lib/format-line-event";
 import { PHASE_LABELS, type StepDiffInfo } from "../types";
-import { parseZoneCards } from "../lib/parse-zone-cards";
+
+function zoneNames(ids: string[] | null | undefined): string[] {
+  if (!ids?.length) return [];
+  return ids.map(
+    (id) => CARD_LIST.find((card) => card.id === id)?.name ?? id,
+  );
+}
 
 export function CombatTape({
-  steps,
+  events,
   resetKey,
   stepDiff,
   diffPerspective,
   query = "",
 }: {
-  steps: LineStep[];
+  events: LineEvent[];
   resetKey: unknown;
   stepDiff?: StepDiffInfo[];
   diffPerspective?: "oracle" | "brick";
@@ -21,6 +30,8 @@ export function CombatTape({
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const searching = query.trim().length > 0;
+  const expandedEvents = expandEventZones(events);
+  const catalog = CARD_LIST;
 
   useEffect(() => {
     setExpanded(null);
@@ -28,16 +39,22 @@ export function CombatTape({
 
   return (
     <ol className={searching ? "is-searching" : undefined}>
-      {steps.map((step, index) => {
+      {expandedEvents.map((event, index) => {
         const open = expanded === index;
-        const memoryCards = parseZoneCards(step.memory, "MEM");
-        const handCards = parseZoneCards(step.hand, "HAND");
+        const title = formatLineEvent(event, catalog);
+        const row = formatLineEventRow(event, catalog);
+        const allyNames = zoneNames(event.allies);
+        const memoryCards = zoneNames(event.memory);
+        const handCards = zoneNames(event.hand);
         const damageDelta =
-          index > 0 ? step.damage - steps[index - 1].damage : step.damage;
+          index > 0
+            ? event.damage - expandedEvents[index - 1].damage
+            : event.damage;
         const diff = stepDiff?.[index];
         const isOracleDiff =
           diffPerspective === "oracle" && diff?.mark === "added";
-        const matches = searching && stepMatchesQuery(step, query);
+        const matches =
+          searching && eventMatchesQuery(event, query, catalog);
         const className =
           [
             open ? "is-expanded" : undefined,
@@ -48,7 +65,7 @@ export function CombatTape({
             .join(" ") || undefined;
 
         return (
-          <li key={`${step.display}-${index}`} className={className}>
+          <li key={`${title}-${index}`} className={className}>
             <button
               type="button"
               className="tape-row"
@@ -58,30 +75,30 @@ export function CombatTape({
               }
             >
               <span>{String(index).padStart(2, "0")}</span>
-              <code>{step.display}</code>
+              <code>{row}</code>
             </button>
             {open && (
               <div className="tape-expand">
-                {isOracleDiff && diff?.compareAction && (
+                {isOracleDiff && diff?.compareEvent && (
                   <p className="tape-diff-compare">
                     <span>Fire brick</span>
-                    {diff.compareAction}
+                    {formatLineEvent(diff.compareEvent, catalog)}
                   </p>
                 )}
-                <p className="tape-expand-action">{step.action}</p>
+                <p className="tape-expand-action">{title}</p>
                 <dl className="tape-expand-stats">
                   <div>
                     <dt>Turn</dt>
-                    <dd>{step.turn}</dd>
+                    <dd>{event.turn}</dd>
                   </div>
                   <div>
                     <dt>Phase</dt>
-                    <dd>{PHASE_LABELS[step.phase] ?? step.phase}</dd>
+                    <dd>{PHASE_LABELS[event.phase] ?? event.phase}</dd>
                   </div>
                   <div>
                     <dt>Damage</dt>
                     <dd>
-                      {step.damage}
+                      {event.damage}
                       {damageDelta > 0 && (
                         <span className="tape-damage-delta">+{damageDelta}</span>
                       )}
@@ -89,19 +106,19 @@ export function CombatTape({
                   </div>
                   <div>
                     <dt>Allies</dt>
-                    <dd>{step.allies}</dd>
+                    <dd>{allyNames.length}</dd>
                   </div>
                   <div>
                     <dt>Fire GY</dt>
-                    <dd>{step.fireGy}</dd>
+                    <dd>{event.fireGy}</dd>
                   </div>
                 </dl>
                 <div className="tape-expand-zones">
                   <div>
-                    <span>Allies · {step.allyNames?.length ?? 0}</span>
-                    {(step.allyNames?.length ?? 0) > 0 && (
+                    <span>Allies · {allyNames.length}</span>
+                    {allyNames.length > 0 && (
                       <ul>
-                        {step.allyNames.map((card, cardIndex) => (
+                        {allyNames.map((card, cardIndex) => (
                           <li key={`ally-${card}-${cardIndex}`}>{card}</li>
                         ))}
                       </ul>

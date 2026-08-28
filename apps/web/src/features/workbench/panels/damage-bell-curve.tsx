@@ -10,6 +10,8 @@ import {
   YAxis,
 } from "recharts";
 
+import type { DamageRange } from "../lib/damage-range";
+
 const EMBER = "#ec5a2a";
 const EMBER_DARK = "#bc3519";
 const ORACLE = "#2f6fed";
@@ -29,6 +31,7 @@ export interface DamageBellSeries {
   id: string;
   buckets: number[];
   mean: number;
+  p10?: number;
   p50: number;
   p90: number;
   min: number;
@@ -184,6 +187,7 @@ function MarkerLabelBackground({
 function toSeriesList(props: {
   buckets?: number[];
   mean?: number;
+  p10?: number;
   p50?: number;
   p90?: number;
   min?: number;
@@ -206,6 +210,7 @@ function toSeriesList(props: {
         id: "baseline",
         buckets: props.buckets,
         mean: props.mean,
+        p10: props.p10,
         p50: props.p50,
         p90: props.p90,
         min: props.min,
@@ -219,24 +224,28 @@ function toSeriesList(props: {
 export function DamageBellCurve({
   buckets,
   mean,
+  p10,
   p50,
   p90,
   min,
   max,
   series: seriesProp,
+  range = null,
 }: {
   buckets?: number[];
   mean?: number;
+  p10?: number;
   p50?: number;
   p90?: number;
   min?: number;
   max?: number;
   series?: DamageBellSeries[];
+  range?: DamageRange | null;
 }) {
   const gradientBase = useId().replace(/:/g, "");
   const seriesList = useMemo(
-    () => toSeriesList({ buckets, mean, p50, p90, min, max, series: seriesProp }),
-    [buckets, mean, p50, p90, min, max, seriesProp],
+    () => toSeriesList({ buckets, mean, p10, p50, p90, min, max, series: seriesProp }),
+    [buckets, mean, p10, p50, p90, min, max, seriesProp],
   );
   const overlay = seriesList.length > 1;
 
@@ -303,6 +312,18 @@ export function DamageBellCurve({
           dash: undefined as string | undefined,
           opacity: 0.4,
         },
+        ...(baseline.p10 != null
+          ? [
+              {
+                key: "p10",
+                label: "P10",
+                value: baseline.p10,
+                stroke: MUTED,
+                dash: "4 4" as string | undefined,
+                opacity: 0.22,
+              },
+            ]
+          : []),
         {
           key: "p50",
           label: "P50",
@@ -320,6 +341,23 @@ export function DamageBellCurve({
           opacity: 0.22,
         },
       ];
+
+  const rangeMarkers = [
+    range?.gte != null
+      ? {
+          key: "range-min",
+          label: "MIN",
+          value: range.gte,
+        }
+      : null,
+    range?.lte != null
+      ? {
+          key: "range-max",
+          label: "MAX",
+          value: range.lte,
+        }
+      : null,
+  ].filter((marker) => marker != null);
 
   return (
     <div className="damage-bell-curve">
@@ -423,6 +461,23 @@ export function DamageBellCurve({
                       fontFamily: "IBM Plex Mono",
                     }
               }
+            />
+          ))}
+          {rangeMarkers.map((marker) => (
+            <ReferenceLine
+              key={marker.key}
+              x={marker.value}
+              stroke={EMBER_DARK}
+              strokeOpacity={0.85}
+              strokeWidth={1.25}
+              label={(props) => (
+                <MarkerLabelBackground
+                  viewBox={props.viewBox}
+                  dy={18}
+                  text={marker.label}
+                  fill={EMBER_DARK}
+                />
+              )}
             />
           ))}
         </AreaChart>

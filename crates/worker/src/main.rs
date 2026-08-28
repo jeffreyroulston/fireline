@@ -31,7 +31,9 @@ enum EvaluateStreamEvent {
         total_rollouts: u16,
     },
     Result(DeckEvalResult),
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -49,10 +51,7 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let concurrency = std::env::var("WORKER_CONCURRENCY")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(2);
+    let concurrency = worker_concurrency();
     let host = std::env::var("WORKER_HOST").unwrap_or_else(|_| "0.0.0.0".into());
     let port = std::env::var("WORKER_PORT")
         .ok()
@@ -120,14 +119,15 @@ async fn evaluate_handler(
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     request.budget = merge_budget(request.budget, state.budget);
     stream_ndjson(move |tx| {
-        let result = ga_fire_engine::evaluate_with_serial_progress(&request, |progress: EvalProgress| {
+        let result = ga_fire_engine::evaluate_with_progress(&request, |progress: EvalProgress| {
             let event = EvaluateStreamEvent::Progress {
                 sample: progress.sample,
                 total: progress.total,
                 rollout: progress.rollout,
                 total_rollouts: progress.total_rollouts,
             };
-            if tx.blocking_send(serde_json::to_string(&event).expect("serialize progress") + "\n")
+            if tx
+                .blocking_send(serde_json::to_string(&event).expect("serialize progress") + "\n")
                 .is_err()
             {
                 return ControlFlow::Break(());
@@ -137,11 +137,13 @@ async fn evaluate_handler(
         match result {
             Ok(value) => {
                 let event = EvaluateStreamEvent::Result(value);
-                let _ = tx.blocking_send(serde_json::to_string(&event).expect("serialize result") + "\n");
+                let _ = tx
+                    .blocking_send(serde_json::to_string(&event).expect("serialize result") + "\n");
             }
             Err(message) => {
                 let event = EvaluateStreamEvent::Error { message };
-                let _ = tx.blocking_send(serde_json::to_string(&event).expect("serialize error") + "\n");
+                let _ = tx
+                    .blocking_send(serde_json::to_string(&event).expect("serialize error") + "\n");
             }
         }
     })
@@ -161,7 +163,8 @@ async fn optimize_handler(
     stream_ndjson(move |tx| {
         let result = ga_fire_engine::optimize_with_progress(&request, |progress| {
             let event = OptimizeStreamEvent::Progress(progress);
-            if tx.blocking_send(serde_json::to_string(&event).expect("serialize progress") + "\n")
+            if tx
+                .blocking_send(serde_json::to_string(&event).expect("serialize progress") + "\n")
                 .is_err()
             {
                 return ControlFlow::Break(());
@@ -171,15 +174,28 @@ async fn optimize_handler(
         match result {
             Ok(value) => {
                 let event = OptimizeStreamEvent::Result(value);
-                let _ = tx.blocking_send(serde_json::to_string(&event).expect("serialize result") + "\n");
+                let _ = tx
+                    .blocking_send(serde_json::to_string(&event).expect("serialize result") + "\n");
             }
             Err(message) => {
                 let event = OptimizeStreamEvent::Error { message };
-                let _ = tx.blocking_send(serde_json::to_string(&event).expect("serialize error") + "\n");
+                let _ = tx
+                    .blocking_send(serde_json::to_string(&event).expect("serialize error") + "\n");
             }
         }
     })
     .await
+}
+
+fn default_worker_concurrency() -> usize {
+    2
+}
+
+fn worker_concurrency() -> usize {
+    std::env::var("WORKER_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(default_worker_concurrency)
 }
 
 fn merge_budget(request: Budget, worker: Budget) -> Budget {
@@ -209,6 +225,11 @@ async fn stream_ndjson(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_concurrency_defaults_to_two_for_local_dev() {
+        assert_eq!(default_worker_concurrency(), 2);
+    }
 
     #[test]
     fn merge_budget_keeps_explicit_request_budget() {

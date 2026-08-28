@@ -5,9 +5,12 @@ mod export {
     use crate::{
         budget::Budget,
         cards::CardDef,
-        deck::{DeckEvalRequest, DeckEvalResult, OptimizeProgress, OptimizeRequest, OptimizeResult},
+        deck::{
+            DeckEvalRequest, DeckEvalResult, OptimizeProgress, OptimizeRequest, OptimizeResult,
+        },
+        line_event::{ActionOp, AttackBonuses, EventKind, LineEvent, TapePhase},
         model::{Bounds, EffectiveRequest, SimType, SolveRequest, SolveResult},
-        stats::CardStat,
+        stats::{CardStat, SparseLineStats},
         version::EngineVersion,
     };
     use ts_rs::TS;
@@ -27,6 +30,12 @@ mod export {
         OptimizeResult::export_all().expect("optimize result");
         OptimizeProgress::export_all().expect("optimize progress");
         CardStat::export_all().expect("card stat");
+        SparseLineStats::export_all().expect("sparse line stats");
         CardDef::export_all().expect("card def");
+        ActionOp::export_all().expect("action op");
+        EventKind::export_all().expect("event kind");
+        TapePhase::export_all().expect("tape phase");
+        AttackBonuses::export_all().expect("attack bonuses");
+        LineEvent::export_all().expect("line event");
     }
 }

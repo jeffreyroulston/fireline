@@ -1,9 +1,33 @@
-import type { LineStep } from "@/lib/engine";
+import type { LineEvent } from "@ga-fire/contracts";
 import type { StepAlignment, StepDiffInfo } from "../types";
 
-export function twoPassStepDiff(
-  brick: LineStep[],
-  oracle: LineStep[],
+function eventKey(event: LineEvent): string {
+  const modifiers = JSON.stringify({
+    kindle: event.kindle ?? null,
+    prepared: event.prepared ?? null,
+    imbue: event.imbue ?? null,
+    weapon: event.weapon ?? null,
+    commandAlly: event.commandAlly ?? null,
+    bonuses: event.bonuses ?? null,
+    fast: event.fast ?? false,
+    doubled: event.doubled ?? false,
+    heated: event.heated ?? false,
+    human: event.human ?? false,
+    gyThreshold: event.gyThreshold ?? false,
+    fromMemory: event.fromMemory ?? false,
+    drawn: event.drawn ?? null,
+    discarded: event.discarded ?? null,
+  });
+  return `${event.op}\0${event.kind}\0${event.card ?? ""}\0${modifiers}`;
+}
+
+function eventsEqual(a: LineEvent, b: LineEvent): boolean {
+  return eventKey(a) === eventKey(b);
+}
+
+export function twoPassEventDiff(
+  brick: LineEvent[],
+  oracle: LineEvent[],
 ): { brick: StepDiffInfo[]; oracle: StepDiffInfo[] } {
   const brickInfo: StepDiffInfo[] = brick.map(() => ({ mark: "same" }));
   const oracleInfo: StepDiffInfo[] = oracle.map(() => ({ mark: "same" }));
@@ -18,7 +42,7 @@ export function twoPassStepDiff(
 
   for (let i = 1; i <= m; i += 1) {
     for (let j = 1; j <= n; j += 1) {
-      if (brick[i - 1].action === oracle[j - 1].action) {
+      if (eventsEqual(brick[i - 1], oracle[j - 1])) {
         dp[i][j] = dp[i - 1][j - 1] + 1;
       } else {
         dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
@@ -31,11 +55,7 @@ export function twoPassStepDiff(
   let j = n;
 
   while (i > 0 || j > 0) {
-    if (
-      i > 0 &&
-      j > 0 &&
-      brick[i - 1].action === oracle[j - 1].action
-    ) {
+    if (i > 0 && j > 0 && eventsEqual(brick[i - 1], oracle[j - 1])) {
       alignment.push({ kind: "match", brick: i - 1, oracle: j - 1 });
       i -= 1;
       j -= 1;
@@ -62,7 +82,7 @@ export function twoPassStepDiff(
       if (paired?.kind === "brick-only") {
         oracleInfo[entry.oracle] = {
           mark: "added",
-          compareAction: brick[paired.brick].action,
+          compareEvent: brick[paired.brick],
         };
         brickInfo[paired.brick] = { mark: "removed" };
         index += 1;
@@ -76,7 +96,7 @@ export function twoPassStepDiff(
     if (paired?.kind === "oracle-only") {
       oracleInfo[paired.oracle] = {
         mark: "added",
-        compareAction: brick[entry.brick].action,
+        compareEvent: brick[entry.brick],
       };
       brickInfo[entry.brick] = { mark: "removed" };
       index += 1;

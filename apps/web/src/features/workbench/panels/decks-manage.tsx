@@ -3,8 +3,14 @@
 import { cardImageUrl } from "@/lib/card-images";
 import type { SavedDeck } from "@/lib/decks";
 import { isDeckCardlistLocked } from "@/lib/decks";
-import { CARDS, MIN_VALID_DECK_SIZE } from "@/lib/engine";
-import type { CardDef, CardId } from "@/lib/engine/types";
+import {
+  CARDS,
+  DEFAULT_MATERIALS,
+  MATERIAL_NAMES,
+  MIN_VALID_DECK_SIZE,
+  isMaterialId,
+} from "@/lib/engine";
+import type { CardDef, CardId, MaterialId } from "@/lib/engine/types";
 import {
   useCallback,
   useEffect,
@@ -174,8 +180,22 @@ function DeckCardPreview({
   );
 }
 
-function DeckCardFace({ id, qty }: { id: CardId; qty: number }) {
-  const card = CARDS[id];
+function resolveDeckCard(id: CardId | MaterialId): CardDef | null {
+  const fromCatalog = CARDS[id];
+  if (fromCatalog) return fromCatalog;
+  if (!isMaterialId(id)) return null;
+  return {
+    id: id as CardId,
+    name: MATERIAL_NAMES[id],
+    short: MATERIAL_NAMES[id].slice(0, 5),
+    kind: "material",
+    cost: 0,
+    element: "norm",
+  };
+}
+
+function DeckCardFace({ id, qty }: { id: CardId | MaterialId; qty: number }) {
+  const card = resolveDeckCard(id);
   const src = cardImageUrl(id);
   const faceRef = useRef<HTMLElement>(null);
   const timerRef = useRef<number | null>(null);
@@ -203,6 +223,8 @@ function DeckCardFace({ id, qty }: { id: CardId; qty: number }) {
   }
 
   useEffect(() => () => clearTimer(), []);
+
+  if (!card) return null;
 
   return (
     <figure
@@ -251,20 +273,34 @@ function DeckCardFace({ id, qty }: { id: CardId; qty: number }) {
 
 function DeckCardGrid({ cards }: { cards: CardId[] }) {
   const entries = tallyCards(cards);
-  if (entries.length === 0) return null;
 
   return (
-    <div className="deck-card-panel">
-      <SectionHeading
-        title="CARD LIST"
-        meta={<strong>{entries.length} unique</strong>}
-      />
-      <div className="deck-card-grid" aria-label="Deck card images">
-        {entries.map(({ id, qty }) => (
-          <DeckCardFace key={id} id={id} qty={qty} />
-        ))}
+    <>
+      {entries.length > 0 && (
+        <div className="deck-card-panel">
+          <SectionHeading
+            title="CARD LIST"
+            meta={<strong>{entries.length} unique</strong>}
+          />
+          <div className="deck-card-grid" aria-label="Deck card images">
+            {entries.map(({ id, qty }) => (
+              <DeckCardFace key={id} id={id} qty={qty} />
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="deck-card-panel">
+        <SectionHeading
+          title="MATERIAL DECK"
+          meta={<strong>{DEFAULT_MATERIALS.length} cards</strong>}
+        />
+        <div className="deck-card-grid" aria-label="Material deck card images">
+          {DEFAULT_MATERIALS.map((id) => (
+            <DeckCardFace key={id} id={id} qty={1} />
+          ))}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -286,6 +322,7 @@ export function DecksManage({
   onCommitRename,
   onCancelRename,
   onDeckTextChange,
+  decksLoading = false,
 }: {
   decks: SavedDeck[];
   activeDeck: SavedDeck | null;
@@ -304,6 +341,7 @@ export function DecksManage({
   onCommitRename: () => void;
   onCancelRename: () => void;
   onDeckTextChange: (text: string) => void;
+  decksLoading?: boolean;
 }) {
   const locked = activeDeck ? isDeckCardlistLocked(activeDeck) : false;
   const underSize = recognizedDeckCount < MIN_VALID_DECK_SIZE;
@@ -335,6 +373,7 @@ export function DecksManage({
             decks={decks}
             value={activeDeck?.id ?? ""}
             onChange={onSwitchDeck}
+            loading={decksLoading}
             formatOption={(deck) =>
               `${deck.name}${isDeckCardlistLocked(deck) ? " · locked" : ""}`
             }
@@ -352,7 +391,6 @@ export function DecksManage({
               type="button"
               onClick={onDuplicateDeck}
               disabled={!activeDeck}
-              autoComplete="off"
             >
               Duplicate
             </button>
@@ -361,7 +399,6 @@ export function DecksManage({
               type="button"
               onClick={onStartRename}
               disabled={!activeDeck}
-              autoComplete="off"
             >
               Rename
             </button>
@@ -370,7 +407,6 @@ export function DecksManage({
               type="button"
               onClick={onDeleteDeck}
               disabled={!activeDeck}
-              autoComplete="off"
             >
               Delete
             </button>
@@ -413,15 +449,16 @@ export function DecksManage({
             </p>
           </div>
         )}
-        <label className="deck-input">
-          One card per line, with quantity
-          <textarea
-            value={deckText}
-            onChange={(event) => onDeckTextChange(event.target.value)}
-            spellCheck={false}
-            readOnly={locked}
-          />
-        </label>
+        {!locked && (
+          <label className="deck-input">
+            One card per line, with quantity
+            <textarea
+              value={deckText}
+              onChange={(event) => onDeckTextChange(event.target.value)}
+              spellCheck={false}
+            />
+          </label>
+        )}
         {issues.length > 0 && (
           <div className="deck-issues" role="alert">
             <SectionHeading

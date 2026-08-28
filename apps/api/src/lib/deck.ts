@@ -1,18 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 
-const CARD_ALIASES: Record<string, string> = {
-  kurhazi_courier: "corhazi_courier",
-  sadi_blood_harvester: "sadi",
-  march_hare_mottled_host: "march_hare",
-  rococo_explosive_maven: "rococo",
-  tweedledum_rattled_dancer: "tweedledum",
-  xiao_qiao_cinderkeeper: "xiao_qiao",
-  arthur_young_heir: "arthur",
-  red_hare_unrivaled_stallion: "red_hare",
-  fire_brick: "brick",
-  virgil_altered_future: "virgil",
-};
-
 export function normalizeCardToken(token: string): string | null {
   const normalized = token
     .trim()
@@ -21,11 +8,52 @@ export function normalizeCardToken(token: string): string | null {
     .split("_")
     .filter(Boolean)
     .join("_");
-  if (!normalized) return null;
-  return CARD_ALIASES[normalized] ?? normalized;
+  return normalized || null;
 }
 
-export function parseDeckText(text: string): Record<string, number> {
+export type CatalogLookup = {
+  id: string;
+  name: string;
+  short: string;
+  aliases: string[];
+};
+
+/** Map every known token (id, name, short, alias) to a catalog id. */
+export function catalogTokenIndex(
+  cards: CatalogLookup[],
+): Map<string, string> {
+  const index = new Map<string, string>();
+  const add = (token: string | null, id: string) => {
+    if (!token) return;
+    if (!index.has(token)) {
+      index.set(token, id);
+    }
+  };
+  for (const card of cards) {
+    add(card.id, card.id);
+    add(normalizeCardToken(card.id.replaceAll("_", " ")), card.id);
+    add(normalizeCardToken(card.name), card.id);
+    add(normalizeCardToken(card.short), card.id);
+    for (const alias of card.aliases) {
+      add(normalizeCardToken(alias), card.id);
+    }
+  }
+  return index;
+}
+
+export function resolveCatalogToken(
+  token: string,
+  index: Map<string, string>,
+): string | null {
+  const normalized = normalizeCardToken(token);
+  if (!normalized) return null;
+  return index.get(normalized) ?? null;
+}
+
+export function parseDeckText(
+  text: string,
+  index: Map<string, string>,
+): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -40,13 +68,13 @@ export function parseDeckText(text: string): Record<string, number> {
       trimmed.match(/^(\d+)\s+(.+)$/);
     if (countMatch) {
       const n = Math.min(60, parseInt(countMatch[1], 10));
-      const id = normalizeCardToken(countMatch[2]);
+      const id = resolveCatalogToken(countMatch[2], index);
       if (!id) continue;
       counts[id] = (counts[id] ?? 0) + n;
       continue;
     }
 
-    const id = normalizeCardToken(trimmed);
+    const id = resolveCatalogToken(trimmed, index);
     if (id) {
       counts[id] = (counts[id] ?? 0) + 1;
     }
