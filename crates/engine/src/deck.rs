@@ -1,7 +1,7 @@
 use crate::{
     cards::{CARD_COUNT, Card},
     line_event::LineEvent,
-    model::{DamageDistribution, EffectiveRequest, SimType, SolveRequest, TwoPassResult},
+    model::{DamageDistribution, EffectiveRequest, SimType, SolveRequest, TwoPassResult, resolve_materials_bitmask},
     solver::solve_with_progress,
     version::ENGINE_VERSION,
 };
@@ -42,6 +42,8 @@ pub struct DeckEvalRequest {
     pub rollouts: u16,
     #[serde(default)]
     pub budget: crate::budget::Budget,
+    #[serde(default)]
+    pub materials: BTreeMap<String, u8>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -126,6 +128,8 @@ pub struct OptimizeRequest {
     pub seed: u64,
     #[serde(default)]
     pub budget: crate::budget::Budget,
+    #[serde(default)]
+    pub materials: BTreeMap<String, u8>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
@@ -232,7 +236,7 @@ const fn default_rollouts() -> u16 {
 }
 
 /// Legacy alias kept for documentation; use `Budget::default().max_optimize_decks`.
-const _MAX_OPTIMIZE_DECKS: u32 = 500;
+const _MAX_OPTIMIZE_DECKS: u32 = 5000;
 
 #[derive(Clone)]
 struct SampleDraw {
@@ -300,6 +304,7 @@ fn solve_sample_hand(
             rollouts,
             seed: request.seed.wrapping_add(u64::from(sample_index) * 17),
             budget: *budget,
+            materials: request.materials.clone(),
         },
         |rollout, total_rollouts| {
             if !report_in_hand_progress {
@@ -590,10 +595,14 @@ fn evaluate_hands(
     let mut hands = Vec::with_capacity(draws.len());
     let mut damages = Vec::with_capacity(draws.len());
     let mut total_nodes = 0;
-    let mut stats_acc = crate::stats::DeckStatAccumulator::with_deck(&deck);
-    let mut brick_stats_acc = crate::stats::DeckStatAccumulator::with_deck(&deck);
-    let mut oracle_stats_acc = crate::stats::DeckStatAccumulator::with_deck(&deck);
     let is_two_pass = request.sim_type == SimType::TwoPass;
+    let materials_mask = resolve_materials_bitmask(&request.materials);
+    let mut stats_acc =
+        crate::stats::DeckStatAccumulator::with_deck_and_materials(&deck, materials_mask);
+    let mut brick_stats_acc =
+        crate::stats::DeckStatAccumulator::with_deck_and_materials(&deck, materials_mask);
+    let mut oracle_stats_acc =
+        crate::stats::DeckStatAccumulator::with_deck_and_materials(&deck, materials_mask);
 
     for draw in &draws {
         let cache_key = (request.sim_type, draw.key);
@@ -928,6 +937,7 @@ fn score_optimize_deck(
             sim_type: SimType::FireBrick,
             rollouts: 1,
             budget: request.budget,
+            materials: request.materials.clone(),
         },
         |progress| {
             let hands_simulated = u64::from(deck_number.saturating_sub(1)) * u64::from(samples)
@@ -1018,6 +1028,7 @@ mod tests {
             sim_type: SimType::FireBrick,
             rollouts: 1,
             budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
         };
         let one = evaluate(&request).unwrap();
         let two = evaluate(&request).unwrap();
@@ -1046,6 +1057,7 @@ mod tests {
             metric: Metric::Mean,
             seed: 4,
             budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
         })
         .unwrap();
         assert_eq!(
@@ -1080,6 +1092,7 @@ mod tests {
             sim_type: SimType::FireBrick,
             rollouts: 0,
             budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
         })
         .unwrap();
         assert_eq!(result.effective.max_turns, Some(2));
@@ -1106,6 +1119,7 @@ mod tests {
             sim_type: SimType::FireBrick,
             rollouts: 1,
             budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
         };
         let serial =
             evaluate_with_serial_progress(&request, |_| ControlFlow::Continue(())).unwrap();
@@ -1138,6 +1152,7 @@ mod tests {
                 sim_type: SimType::FireBrick,
                 rollouts: 1,
                 budget: crate::budget::Budget::default(),
+                materials: BTreeMap::new(),
             },
             |progress| {
                 ticks.push(progress);
@@ -1187,6 +1202,7 @@ mod tests {
                     max_eval_rollouts: 3,
                     ..crate::budget::Budget::default()
                 },
+                materials: BTreeMap::new(),
             },
             |progress| {
                 ticks.push(progress);
@@ -1230,6 +1246,7 @@ mod tests {
                     max_eval_rollouts: 3,
                     ..crate::budget::Budget::default()
                 },
+                materials: BTreeMap::new(),
             },
             |progress| {
                 ticks.push(progress);
@@ -1272,6 +1289,7 @@ mod tests {
             sim_type: SimType::FireBrick,
             rollouts: 1,
             budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
         })
         .unwrap();
         for stat in &result.card_stats {

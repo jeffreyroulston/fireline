@@ -4,6 +4,11 @@ import { sql, type Kysely } from "kysely";
 import type { EngineVersion, SolveRequest, SolveResult } from "@ga-fire/contracts";
 import type { Database } from "./db/types.js";
 import { catalogTokenIndex, deckHash, newId, parseDeckText } from "./lib/deck.js";
+import {
+  formatMaterialParseIssues,
+  materialCountsHash,
+  parseAndValidateMaterialDeck,
+} from "./lib/material-deck.js";
 import { toJsonb } from "./lib/jsonb.js";
 import { loadEventsBySampleId } from "./lib/load-sample-events.js";
 import { getCard, getCards, listDecksForCard, replaceDeckCards } from "./services/card-catalog.js";
@@ -87,6 +92,40 @@ export function createApp(options: {
     select count(*)::int from runs where runs.deck_id = decks.id
   )`;
 
+  const materialDeckRefCount = sql<number>`(
+    select count(*)::int from decks where decks.material_deck_id = material_decks.id
+  )`;
+
+  const materialDeckRunCount = sql<number>`(
+    select count(*)::int from runs where runs.material_deck_id = material_decks.id
+  )`;
+
+  async function getStandardMaterialDeckId(): Promise<string> {
+    const row = await options.db
+      .selectFrom("material_decks")
+      .select("id")
+      .where("is_system", "=", true)
+      .executeTakeFirst();
+    if (!row) {
+      throw new Error("Standard materials preset is missing.");
+    }
+    return row.id;
+  }
+
+  async function loadMaterialDeckCounts(
+    materialDeckId: string,
+  ): Promise<Record<string, number>> {
+    const row = await options.db
+      .selectFrom("material_decks")
+      .select("counts")
+      .where("id", "=", materialDeckId)
+      .executeTakeFirst();
+    if (!row) {
+      throw new Error("Material deck not found.");
+    }
+    return row.counts;
+  }
+
   app.get("/decks", async (c) => {
     const rows = await options.db
       .selectFrom("decks")
@@ -109,9 +148,23 @@ export function createApp(options: {
   });
 
   app.post("/decks", async (c) => {
-    const body = await c.req.json<{ name?: string; text: string }>();
+    const body = await c.req.json<{
+      name?: string;
+      text: string;
+      materialDeckId?: string;
+    }>();
     const catalog = await getCards(options.db);
     const counts = parseDeckText(body.text, catalogTokenIndex(catalog));
+    const materialDeckId =
+      body.materialDeckId ?? (await getStandardMaterialDeckId());
+    const materialExists = await options.db
+      .selectFrom("material_decks")
+      .select("id")
+      .where("id", "=", materialDeckId)
+      .executeTakeFirst();
+    if (!materialExists) {
+      return c.json({ error: "Material deck not found." }, 404);
+    }
     const id = newId();
     const now = new Date();
     const row = {
@@ -120,6 +173,7 @@ export function createApp(options: {
       text: body.text,
       counts: toJsonb(counts),
       deck_hash: deckHash(counts),
+      material_deck_id: materialDeckId,
       created_at: now,
       updated_at: now,
     };
@@ -131,7 +185,11 @@ export function createApp(options: {
   });
 
   app.put("/decks/:id", async (c) => {
-    const body = await c.req.json<{ name?: string; text?: string }>();
+    const body = await c.req.json<{
+      name?: string;
+      text?: string;
+      materialDeckId?: string;
+    }>();
     const existing = await options.db
       .selectFrom("decks")
       .selectAll()
@@ -156,6 +214,27 @@ export function createApp(options: {
       );
     }
 
+    if (body.materialDeckId !== undefined && runCount > 0) {
+      return c.json(
+        {
+          error:
+            "Material deck assignment is locked after simulations. Duplicate the deck to change it.",
+        },
+        409,
+      );
+    }
+
+    if (body.materialDeckId !== undefined) {
+      const materialExists = await options.db
+        .selectFrom("material_decks")
+        .select("id")
+        .where("id", "=", body.materialDeckId)
+        .executeTakeFirst();
+      if (!materialExists) {
+        return c.json({ error: "Material deck not found." }, 404);
+      }
+    }
+
     const text = body.text ?? existing.text;
     const catalog = await getCards(options.db);
     const counts = parseDeckText(text, catalogTokenIndex(catalog));
@@ -164,6 +243,7 @@ export function createApp(options: {
       text,
       counts: toJsonb(counts),
       deck_hash: deckHash(counts),
+      material_deck_id: body.materialDeckId ?? existing.material_deck_id,
       updated_at: new Date(),
     };
     await options.db.transaction().execute(async (trx) => {
@@ -182,6 +262,158 @@ export function createApp(options: {
     const result = await options.db
       .deleteFrom("decks")
       .where("id", "=", c.req.param("id"))
+      .executeTakeFirst();
+    if (!result.numDeletedRows) return c.notFound();
+    return c.body(null, 204);
+  });
+
+  app.get("/material-decks", async (c) => {
+    const rows = await options.db
+      .selectFrom("material_decks")
+      .selectAll("material_decks")
+      .select(materialDeckRefCount.as("deck_count"))
+      .select(materialDeckRunCount.as("run_count"))
+      .orderBy("updated_at", "desc")
+      .execute();
+    return c.json(rows);
+  });
+
+  app.get("/material-decks/:id", async (c) => {
+    const row = await options.db
+      .selectFrom("material_decks")
+      .selectAll("material_decks")
+      .select(materialDeckRefCount.as("deck_count"))
+      .select(materialDeckRunCount.as("run_count"))
+      .where("id", "=", c.req.param("id"))
+      .executeTakeFirst();
+    if (!row) return c.notFound();
+    return c.json(row);
+  });
+
+  app.post("/material-decks", async (c) => {
+    const body = await c.req.json<{ name?: string; text: string }>();
+    const catalog = await getCards(options.db);
+    const { counts, issues } = parseAndValidateMaterialDeck(body.text, catalog);
+    const blocking = issues.filter(
+      (issue) =>
+        issue.kind === "empty" ||
+        issue.kind === "unrecognized" ||
+        issue.kind === "not_material" ||
+        issue.kind === "too_many_copies",
+    );
+    if (blocking.length > 0) {
+      return c.json(
+        { error: formatMaterialParseIssues(blocking).join(" ") },
+        400,
+      );
+    }
+    const id = newId();
+    const now = new Date();
+    const row = {
+      id,
+      name: body.name?.trim() || "Untitled material deck",
+      text: body.text,
+      counts: toJsonb(counts),
+      material_hash: materialCountsHash(counts),
+      is_system: false,
+      created_at: now,
+      updated_at: now,
+    };
+    await options.db.insertInto("material_decks").values(row).execute();
+    return c.json({ ...row, counts, deck_count: 0, run_count: 0 }, 201);
+  });
+
+  app.put("/material-decks/:id", async (c) => {
+    const body = await c.req.json<{ name?: string; text?: string }>();
+    if (body.text !== undefined) {
+      return c.json(
+        { error: "Material deck card lists cannot be edited. Duplicate to change cards." },
+        409,
+      );
+    }
+    const existing = await options.db
+      .selectFrom("material_decks")
+      .selectAll()
+      .where("id", "=", c.req.param("id"))
+      .executeTakeFirst();
+    if (!existing) return c.notFound();
+    const name = body.name?.trim() || existing.name;
+    const row = { name, updated_at: new Date() };
+    await options.db
+      .updateTable("material_decks")
+      .set(row)
+      .where("id", "=", existing.id)
+      .execute();
+    const deckCountRow = await options.db
+      .selectFrom("decks")
+      .select(sql<number>`count(*)::int`.as("deck_count"))
+      .where("material_deck_id", "=", existing.id)
+      .executeTakeFirst();
+    const runCountRow = await options.db
+      .selectFrom("runs")
+      .select(sql<number>`count(*)::int`.as("run_count"))
+      .where("material_deck_id", "=", existing.id)
+      .executeTakeFirst();
+    return c.json({
+      ...existing,
+      ...row,
+      deck_count: deckCountRow?.deck_count ?? 0,
+      run_count: runCountRow?.run_count ?? 0,
+    });
+  });
+
+  app.delete("/material-decks/:id", async (c) => {
+    const id = c.req.param("id");
+    const existing = await options.db
+      .selectFrom("material_decks")
+      .selectAll()
+      .where("id", "=", id)
+      .executeTakeFirst();
+    if (!existing) return c.notFound();
+    if (existing.is_system) {
+      return c.json(
+        { error: "The Standard materials preset cannot be deleted." },
+        409,
+      );
+    }
+
+    const linkedDecks = await options.db
+      .selectFrom("decks")
+      .select([
+        "decks.id as id",
+        "decks.name as name",
+        sql<boolean>`exists(
+          select 1 from runs where runs.deck_id = decks.id
+        )`.as("locked"),
+      ])
+      .where("decks.material_deck_id", "=", id)
+      .execute();
+
+    const runCountRow = await options.db
+      .selectFrom("runs")
+      .select(sql<number>`count(*)::int`.as("run_count"))
+      .where("material_deck_id", "=", id)
+      .executeTakeFirst();
+    const runCount = runCountRow?.run_count ?? 0;
+
+    if (linkedDecks.length > 0 || runCount > 0) {
+      const linked = linkedDecks.map((deck) => ({
+        id: deck.id,
+        name: deck.name,
+        locked: Boolean(deck.locked),
+      }));
+      return c.json(
+        {
+          error: "Material deck is linked to other decks or runs.",
+          linkedDecks: linked,
+        },
+        409,
+      );
+    }
+
+    const result = await options.db
+      .deleteFrom("material_decks")
+      .where("id", "=", id)
       .executeTakeFirst();
     if (!result.numDeletedRows) return c.notFound();
     return c.body(null, 204);
@@ -389,13 +621,12 @@ export function createApp(options: {
     }
     const currentRules = params.get("current_rules_version");
     const currentSampler = params.get("current_sampler_version");
-    const currentDigest = params.get("current_card_digest")?.trim();
     const currentAttrRaw = params.get("current_attribution_version");
-    if (!currentRules || !currentSampler || !currentDigest || !currentAttrRaw) {
+    if (!currentRules || !currentSampler || !currentAttrRaw) {
       return c.json(
         {
           error:
-            "current_rules_version, current_sampler_version, current_card_digest, and current_attribution_version are required",
+            "current_rules_version, current_sampler_version, and current_attribution_version are required",
         },
         400,
       );
@@ -403,7 +634,6 @@ export function createApp(options: {
     const currentVersion = {
       rulesVersion: Number(currentRules),
       samplerVersion: Number(currentSampler),
-      cardDigest: currentDigest,
     };
     const currentAttributionVersion = Number(currentAttrRaw);
     if (
@@ -509,7 +739,13 @@ export function createApp(options: {
     if ("error" in version) {
       return c.json({ error: version.error }, 400);
     }
-    const result = await rankedCandidates(options.db, { version });
+    const deckHash = c.req.query("deck_hash") || undefined;
+    const deckId = c.req.query("deck_id") || undefined;
+    const result = await rankedCandidates(options.db, {
+      version,
+      deckId,
+      deckHash,
+    });
     return c.json(result);
   });
 
@@ -580,11 +816,16 @@ export function createApp(options: {
 
     const deck = await options.db
       .selectFrom("decks")
-      .select(["counts", "deck_hash"])
+      .select(["counts", "deck_hash", "material_deck_id"])
       .where("id", "=", body.deckId)
       .executeTakeFirst();
     if (!deck) return c.json({ error: "deck not found" }, 404);
     const deckCounts = deck.counts;
+    const materialCounts = await loadMaterialDeckCounts(deck.material_deck_id);
+    const payload = {
+      ...body.payload,
+      materials: materialCounts,
+    };
 
     const runId = newId();
     await options.db
@@ -594,9 +835,10 @@ export function createApp(options: {
         kind: body.kind,
         status: "queued",
         deck_id: body.deckId,
+        material_deck_id: deck.material_deck_id,
         deck_counts: toJsonb(deckCounts),
         deck_hash: deckHash(deckCounts),
-        request_body: toJsonb(body.payload),
+        request_body: toJsonb(payload),
         started_at: new Date(),
       })
       .execute();
@@ -605,7 +847,7 @@ export function createApp(options: {
     options.dispatcher.enqueue({
       runId,
       kind: body.kind,
-      body: body.payload,
+      body: payload,
     });
 
     return c.json({ id: runId, status: "queued" }, 202);

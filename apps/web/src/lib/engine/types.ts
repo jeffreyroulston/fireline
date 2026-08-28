@@ -37,14 +37,19 @@ export type CardId =
   | "manic_zealot"
   | "demolition"
   | "surging_bolt"
-  | "woodland_squirrels";
+  | "woodland_squirrels"
+  | "duchess_six_of_hearts"
+  | "wandering_glaivier"
+  | "flagrant_guide";
 
 export type MaterialId =
   | "impact_hammer"
   | "mercenary_blade"
   | "poisoned_dagger"
   | "zander_1"
-  | "varuckan_soulknife";
+  | "zander_2"
+  | "varuckan_soulknife"
+  | "tristan_1";
 
 export type Phase =
   | "main"

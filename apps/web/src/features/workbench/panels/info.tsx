@@ -36,8 +36,8 @@ export function InfoPanel() {
         <div className="info-card-grid">
           <InfoCard title="Hand solver">
             Draw a random 7-card opening hand from a saved deck, or build one
-            card by card, then search for a maximum-damage line over a 2- or
-            3-turn horizon. Deck mode shuffles a seeded pile, then draws from
+            card by card, then search for a maximum-damage line over a 2–5 turn
+            horizon (3 by default). Deck mode shuffles a seeded pile, then draws from
             the top. The solve uses the opening hand plus those draws; Oracle
             keeps the leftover pile in order.
           </InfoCard>
@@ -99,11 +99,12 @@ export function InfoPanel() {
         <SectionHeading title="SHARED SETTINGS" />
         <div className="info-card-grid info-card-grid-3">
           <InfoCard title="Turn order">
-            Going first or second. On turn one while going first, champion and
-            ally attacks are blocked.
+            Going first or second. Going second draws one card at the start of
+            your first turn. On turn one while going first, champion and ally
+            attacks are blocked.
           </InfoCard>
           <InfoCard title="Turn horizon">
-            Solve over 2 or 3 turns. Each turn advances through Main,
+            Solve over 2–5 turns (3 by default). Each turn advances through Main,
             Materialize, Recollect, Agility, End, then the opponent’s main
             (cull), Wake, and the next materialize/recollect cycle.
           </InfoCard>
@@ -168,9 +169,9 @@ export function InfoPanel() {
             Every simulation is stamped with an engine version. The workbench
             footer shows it as{" "}
             <code>r18 · s1 · a8 · digest 78328050 · dev</code> (numbers match
-            the running build). History and the card database only pool runs that
-            share the same version so cross-run stats stay comparable after code
-            or card data changes.
+            the running build).             History and the card database pool runs that share the same engine
+            version (rules, sampler, and attribution) so cross-run stats stay
+            comparable after code changes.
           </p>
           <ul className="info-list">
             <li>
@@ -184,13 +185,13 @@ export function InfoPanel() {
             <li>
               <strong>a (attribution).</strong> Bumped manually when stat
               attribution labels or parsing change. Card leaderboard aggregation
-              requires a match; damage pooling uses r, s, and digest only.
+              requires a match; damage pooling uses r and s only.
             </li>
             <li>
               <strong>digest.</strong> First eight digits of a hash over every
-              card attribute that affects simulation (cost, power, tags, kindle,
-              prepare, imbue, on-death damage, and similar). Updates
-              automatically when card data changes; no manual bump.
+              card attribute that affects simulation. Shown in the footer only;
+              card data changes do not split pooled History or card database
+              stats.
             </li>
             <li>
               <strong>build.</strong> Git commit SHA at compile time, or{" "}

@@ -10,6 +10,12 @@ import {
 import type { CardLeaderboardResponse } from "@/lib/api/client";
 import { InfoPopover } from "@/components/info-popover";
 import { SectionHeading } from "../ui";
+import type { SampleHand } from "../types";
+import {
+  computeHandLiftByCard,
+  formatLift,
+  liftDeltaTone,
+} from "../lib/hand-lift";
 
 function formatPct(value: number): string {
   return `${(value * 100).toFixed(0)}%`;
@@ -102,7 +108,21 @@ export function highlightsFromHands(
 export function leaderboardFromCardStats(
   stats: CardStat[],
   samples: number,
+  options?: {
+    hands?: SampleHand[];
+    pass?: LeaderboardPass;
+  },
 ): CardLeaderboardResponse {
+  const pass =
+    options?.pass === "combined" ? undefined : options?.pass;
+  const lifts =
+    options?.hands && options.hands.length > 0
+      ? computeHandLiftByCard(
+          options.hands,
+          stats.map((row) => row.card),
+          pass,
+        )
+      : null;
   return {
     runCount: 1,
     totalSamples: Math.max(samples, 1),
@@ -113,11 +133,23 @@ export function leaderboardFromCardStats(
       playWhenInHand: row.playWhenInHand,
       damageWhenSeen: row.damageWhenSeen,
       damageShare: row.damageShare,
+      handLift: lifts?.get(row.card) ?? null,
     })),
   };
 }
 
 type LeaderboardRow = CardLeaderboardResponse["cards"][number];
+
+function LiftCell({ value }: { value: number | null }) {
+  if (value == null) {
+    return "—";
+  }
+  return (
+    <span className={`card-db-partner-delta ${liftDeltaTone(value)}`}>
+      {formatLift(value)}
+    </span>
+  );
+}
 
 function LeaderboardBody({
   rows,
@@ -162,6 +194,9 @@ function LeaderboardBody({
             <td>{formatPct(row.seeRate)}</td>
             <td>{formatPct(row.playWhenInHand)}</td>
             <td>{row.damageWhenSeen.toFixed(1)}</td>
+            <td>
+              <LiftCell value={row.handLift} />
+            </td>
             <td>{formatPct(row.damageShare)}</td>
           </tr>
         );
@@ -277,6 +312,13 @@ export function CardLeaderboardPanel({
                 </InfoPopover>
               </th>
               <th>
+                <InfoPopover label="Lift">
+                  Mean damage when this card opens in hand minus mean damage
+                  from the same deck without it in the opening hand. Needs at
+                  least five samples in each bucket.
+                </InfoPopover>
+              </th>
+              <th>
                 <InfoPopover label="Share">
                   This card&apos;s share of total attributed damage across the
                   pool.
@@ -294,7 +336,7 @@ export function CardLeaderboardPanel({
             <>
               <tbody>
                 <tr className="leaderboard-section-row">
-                  <th colSpan={6} scope="colgroup">
+                  <th colSpan={7} scope="colgroup">
                     Materials
                   </th>
                 </tr>

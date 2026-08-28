@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "ts")]
 use ts_rs::TS;
 
-pub const CARD_COUNT: usize = 34;
+pub const CARD_COUNT: usize = 37;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -43,6 +43,9 @@ pub enum Card {
     Demolition = 31,
     SurgingBolt = 32,
     WoodlandSquirrels = 33,
+    DuchessSixOfHearts = 34,
+    WanderingGlaivier = 35,
+    FlagrantGuide = 36,
 }
 
 impl Card {
@@ -87,6 +90,9 @@ impl Card {
             Self::Demolition => "demolition",
             Self::SurgingBolt => "surging_bolt",
             Self::WoodlandSquirrels => "woodland_squirrels",
+            Self::DuchessSixOfHearts => "duchess_six_of_hearts",
+            Self::WanderingGlaivier => "wandering_glaivier",
+            Self::FlagrantGuide => "flagrant_guide",
         }
     }
 
@@ -126,6 +132,9 @@ impl Card {
             Self::Demolition => "Demolition",
             Self::SurgingBolt => "Surging Bolt",
             Self::WoodlandSquirrels => "Woodland Squirrels",
+            Self::DuchessSixOfHearts => "Duchess, Six of Hearts",
+            Self::WanderingGlaivier => "Wandering Glaivier",
+            Self::FlagrantGuide => "Flagrant Guide",
         }
     }
 
@@ -165,12 +174,16 @@ impl Card {
             Self::Demolition => "Demol",
             Self::SurgingBolt => "SBolt",
             Self::WoodlandSquirrels => "Sqrls",
+            Self::DuchessSixOfHearts => "Duc6H",
+            Self::WanderingGlaivier => "WGlaiv",
+            Self::FlagrantGuide => "FGuid",
         }
     }
 
     pub const fn cost(self) -> u8 {
         match self {
             Self::WoodlandSquirrels => 0,
+            Self::DuchessSixOfHearts => 6,
             Self::Brick => 9,
             Self::Arthur => 4,
             Self::CorhaziCourier
@@ -185,7 +198,9 @@ impl Card {
             | Self::HotCake
             | Self::Virgil
             | Self::Demolition
-            | Self::SurgingBolt => 3,
+            | Self::SurgingBolt
+            | Self::WanderingGlaivier
+            | Self::FlagrantGuide => 3,
             Self::KingdomInformant
             | Self::ClumsyApprentice
             | Self::SableRemnant
@@ -209,6 +224,7 @@ impl Card {
 
     pub const fn power(self) -> u8 {
         match self {
+            Self::DuchessSixOfHearts => 4,
             Self::Tweedledum | Self::RedHare | Self::RendingFlames | Self::UncannyRealization => 3,
             Self::Arthur
             | Self::IgnitedStab
@@ -219,7 +235,8 @@ impl Card {
             | Self::HeatedVengeance
             | Self::PepperedChef
             | Self::Virgil
-            | Self::ViciousSlice => 2,
+            | Self::ViciousSlice
+            | Self::WanderingGlaivier => 2,
             Self::KingdomInformant
             | Self::ClumsyApprentice
             | Self::SableRemnant
@@ -229,7 +246,8 @@ impl Card {
             | Self::Rococo
             | Self::XiaoQiao
             | Self::ManicZealot
-            | Self::WoodlandSquirrels => 1,
+            | Self::WoodlandSquirrels
+            | Self::FlagrantGuide => 1,
             _ => 0,
         }
     }
@@ -256,6 +274,9 @@ impl Card {
                 | Self::Virgil
                 | Self::ManicZealot
                 | Self::WoodlandSquirrels
+                | Self::DuchessSixOfHearts
+                | Self::WanderingGlaivier
+                | Self::FlagrantGuide
         )
     }
 
@@ -336,6 +357,7 @@ impl Card {
                 | Self::Tweedledum
                 | Self::XiaoQiao
                 | Self::Virgil
+                | Self::DuchessSixOfHearts
         )
     }
 
@@ -349,6 +371,7 @@ impl Card {
     pub const fn kindle(self) -> u8 {
         match self {
             Self::DazzlingCourtesan | Self::IntensifiedPyre => 3,
+            Self::DuchessSixOfHearts => 6,
             _ => 0,
         }
     }
@@ -376,6 +399,16 @@ impl Card {
         }
     }
 
+    /// Optional champion level offered on enter (Flagrant Guide).
+    pub const fn on_enter_level(self) -> bool {
+        matches!(self, Self::FlagrantGuide)
+    }
+
+    /// Draw a card when this ally dies to the graveyard (self only; opponent draws are not modeled).
+    pub const fn on_death_draw(self) -> bool {
+        matches!(self, Self::WanderingGlaivier)
+    }
+
     pub const fn life(self) -> Option<u8> {
         Some(match self {
             Self::Brick => return None,
@@ -398,6 +431,9 @@ impl Card {
             Self::Virgil => 2,
             Self::ManicZealot => 1,
             Self::WoodlandSquirrels => 1,
+            Self::DuchessSixOfHearts => 2,
+            Self::WanderingGlaivier => 1,
+            Self::FlagrantGuide => 3,
             _ => return None,
         })
     }
@@ -425,6 +461,11 @@ impl Card {
 
     pub const fn element(self) -> &'static str {
         if self.is_fire() { "fire" } else { "norm" }
+    }
+
+    /// Assassin action/attack eligible for Zander, Deft Executor graveyard return.
+    pub const fn zander_gy_returnable(self) -> bool {
+        self.is_attack() || self.is_action()
     }
 
     pub const fn is_playable(self) -> bool {
@@ -467,9 +508,12 @@ pub const ALL_CARDS: [Card; CARD_COUNT] = [
     Card::Demolition,
     Card::SurgingBolt,
     Card::WoodlandSquirrels,
+    Card::DuchessSixOfHearts,
+    Card::WanderingGlaivier,
+    Card::FlagrantGuide,
 ];
 
-pub const PLAYABLE_CARDS: [Card; 33] = [
+pub const PLAYABLE_CARDS: [Card; 36] = [
     Card::Arthur,
     Card::KingdomInformant,
     Card::ClumsyApprentice,
@@ -503,6 +547,9 @@ pub const PLAYABLE_CARDS: [Card; 33] = [
     Card::Demolition,
     Card::SurgingBolt,
     Card::WoodlandSquirrels,
+    Card::DuchessSixOfHearts,
+    Card::WanderingGlaivier,
+    Card::FlagrantGuide,
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -621,6 +668,9 @@ pub fn parse_card(value: &str) -> Option<Card> {
         "demolition" => Card::Demolition,
         "surging_bolt" => Card::SurgingBolt,
         "woodland_squirrels" => Card::WoodlandSquirrels,
+        "duchess_six_of_hearts" => Card::DuchessSixOfHearts,
+        "wandering_glaivier" => Card::WanderingGlaivier,
+        "flagrant_guide" => Card::FlagrantGuide,
         _ => return None,
     })
 }

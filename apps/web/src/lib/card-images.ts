@@ -37,11 +37,16 @@ const CARD_IMAGE_PATHS: Partial<Record<CardId | MaterialId, string>> = {
   demolition: "/cards/images/o56arxxu83.jpg",
   surging_bolt: "/cards/images/h5lahljr2d.jpg",
   woodland_squirrels: "/cards/images/UyNpsv41nN.jpg",
+  duchess_six_of_hearts: "/cards/images/gxw0q94fym.jpg",
+  wandering_glaivier: "/cards/images/paqm8uowyt.jpg",
+  flagrant_guide: "/cards/images/24uRBjFtiS.jpg",
   impact_hammer: "/cards/images/nkcqjdmuih.jpg",
   mercenary_blade: "/cards/images/evrbdzdhmf.jpg",
   poisoned_dagger: "/cards/images/ua6rsfsw2v.jpg",
   zander_1: "/cards/images/07vvmdvbku.jpg",
+  zander_2: "/cards/images/xvzpkpasit.jpg",
   varuckan_soulknife: "/cards/images/jxhktrfo66.jpg",
+  tristan_1: "/cards/images/5dgq56cjg0.jpg",
 };
 
 export function cardImageUrl(id: CardId | MaterialId | string): string | null {

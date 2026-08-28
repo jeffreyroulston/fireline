@@ -9,26 +9,32 @@ use std::collections::BTreeMap;
 #[cfg(feature = "ts")]
 use ts_rs::TS;
 
-pub const MATERIAL_COUNT: usize = 5;
+pub const MATERIAL_COUNT: usize = 7;
 pub const MATERIAL_IDS: [&str; MATERIAL_COUNT] = [
     "impact_hammer",
     "mercenary_blade",
     "poisoned_dagger",
     "zander_1",
+    "zander_2",
     "varuckan_soulknife",
+    "tristan_1",
 ];
 pub const MATERIAL_NAMES: [&str; MATERIAL_COUNT] = [
     "Impact Hammer",
     "Mercenary's Blade",
     "Poisoned Dagger",
     "Zander, Prepared Scout",
+    "Zander, Deft Executor",
     "Varuckan Soulknife",
+    "Tristan, Underhanded",
 ];
 const MAT_HAMMER: usize = 0;
 const MAT_BLADE: usize = 1;
 const MAT_DAGGER: usize = 2;
 const MAT_ZANDER: usize = 3;
-const MAT_SOULKNIFE: usize = 4;
+const MAT_ZANDER_2: usize = 4;
+const MAT_SOULKNIFE: usize = 5;
+const MAT_TRISTAN: usize = 6;
 
 #[derive(Clone, Debug)]
 pub struct LineCardStats {
@@ -66,8 +72,17 @@ impl LineCardStats {
     ) {
         let before_damage = before.damage;
         match action {
-            Action::PlayAlly { card, .. } => {
+            Action::PlayAlly { card, flagrant_level, .. } => {
                 self.plays[card.index()] += 1;
+                if let Some(mat) = flagrant_level {
+                    if mat == crate::model::MAT_ZANDER {
+                        self.material_plays[MAT_ZANDER] += 1;
+                    } else if mat == crate::model::MAT_ZANDER_2 {
+                        self.material_plays[MAT_ZANDER_2] += 1;
+                    } else if mat == crate::model::MAT_TRISTAN {
+                        self.material_plays[MAT_TRISTAN] += 1;
+                    }
+                }
                 self.attribute_play_bundle(card, events, before_damage);
             }
             Action::PlayItem { card } => {
@@ -99,8 +114,12 @@ impl LineCardStats {
                 self.material_plays[MAT_DAGGER] += 1;
                 self.record_draws_in_events(events);
             }
-            Action::MaterializeZanderMemory | Action::MaterializeZanderFloat(_) => {
+            Action::MaterializeZanderMemory { .. } => {
                 self.material_plays[MAT_ZANDER] += 1;
+                self.record_draws_in_events(events);
+            }
+            Action::MaterializeTristanMemory { .. } | Action::TristanRecollect => {
+                self.material_plays[MAT_TRISTAN] += 1;
                 self.record_draws_in_events(events);
             }
             Action::MaterializeSoulknife => {
@@ -228,9 +247,13 @@ impl LineCardStats {
 
     fn record_draw_event(&mut self, event: &LineEvent) {
         if let Some(card) = event.drawn.and_then(card_from_id) {
-            if card != Card::Brick {
-                self.drawn[card.index()] += 1;
-            }
+            self.record_opening_draw(card);
+        }
+    }
+
+    pub fn record_opening_draw(&mut self, card: Card) {
+        if card != Card::Brick {
+            self.drawn[card.index()] += 1;
         }
     }
 
@@ -372,6 +395,7 @@ pub struct DeckStatAccumulator {
     line: LineCardStats,
     /// Per-sample damage attributed (summed) for damage_when_seen.
     damage_when_seen_sum: [u32; CARD_COUNT],
+    materials_mask: u8,
 }
 
 impl Default for DeckStatAccumulator {
@@ -384,18 +408,24 @@ impl Default for DeckStatAccumulator {
             seen: [0; CARD_COUNT],
             line: LineCardStats::default(),
             damage_when_seen_sum: [0; CARD_COUNT],
+            materials_mask: crate::model::ALL_MATERIALS,
         }
     }
 }
 
 impl DeckStatAccumulator {
     pub fn with_deck(deck: &[Card]) -> Self {
+        Self::with_deck_and_materials(deck, crate::model::ALL_MATERIALS)
+    }
+
+    pub fn with_deck_and_materials(deck: &[Card], materials_mask: u8) -> Self {
         let mut copies = [0_u8; CARD_COUNT];
         for &card in deck {
             copies[card.index()] = copies[card.index()].saturating_add(1);
         }
         Self {
             copies,
+            materials_mask,
             ..Self::default()
         }
     }
@@ -483,6 +513,10 @@ impl DeckStatAccumulator {
             .collect::<Vec<_>>();
 
         for index in 0..MATERIAL_COUNT {
+            let material_bit = 1_u8 << index;
+            if self.materials_mask & material_bit == 0 {
+                continue;
+            }
             let plays = self.line.material_plays[index];
             let damage = self.line.material_damage[index];
             rows.push(CardStat {

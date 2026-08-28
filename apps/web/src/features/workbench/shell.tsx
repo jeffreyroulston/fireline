@@ -19,13 +19,16 @@ import {
   countLegalDecklists,
   deckAttemptPercent,
   listToCounts,
+  materialDeckCounts,
   parseDecklist,
+  parseMaterialDecklist,
   type CardId,
   type DeckCounts,
   type SimType,
   type SolveResult,
 } from "@/lib/engine";
 import { hydrateCardCatalogFromApi } from "@/lib/api/catalog";
+import { DEFAULT_BUDGET } from "@/lib/budget";
 import {
   fetchWorkerVersion,
   solve as apiSolve,
@@ -47,6 +50,17 @@ import {
   scheduleDeckSave,
   type SavedDeck,
 } from "@/lib/decks";
+import {
+  createMaterialDeckRemote,
+  DEFAULT_MATERIAL_DECK_TEXT,
+  deleteMaterialDeckRemote,
+  formatMaterialDeckDeleteError,
+  loadMaterialDecksFromApi,
+  nextMaterialDeckName,
+  normalizeMaterialDeckName,
+  renameMaterialDeckRemote,
+  type SavedMaterialDeck,
+} from "@/lib/material-decks";
 import { DRILL_3_HAND } from "@/lib/fixtures/drills";
 import { DeckEditor, DeckResults } from "./panels/deck-solver";
 import { DecksManage } from "./panels/decks-manage";
@@ -106,6 +120,7 @@ export default function FizaWorkbench({
   const [rollouts, setRollouts] = useState(12);
   const [lineResult, setLineResult] = useState<SolveResult | null>(null);
   const [decks, setDecks] = useState<SavedDeck[]>(deckCache.decks);
+  const [materialDecks, setMaterialDecks] = useState<SavedMaterialDeck[]>([]);
   const [decksHydrated, setDecksHydrated] = useState(deckCache.hydrated);
   const [catalogEpoch, setCatalogEpoch] = useState(0);
   const [workerVersion, setWorkerVersion] = useState<WorkerVersion | null>(
@@ -113,6 +128,8 @@ export default function FizaWorkbench({
   );
   const [isRenamingDeck, setIsRenamingDeck] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
+  const [isRenamingMaterialDeck, setIsRenamingMaterialDeck] = useState(false);
+  const [materialRenameDraft, setMaterialRenameDraft] = useState("");
   const [samples, setSamples] = useState(8);
   const [cutBudgets, setCutBudgets] = useState<
     Partial<Record<CardId, number>>
@@ -151,6 +168,16 @@ export default function FizaWorkbench({
   const activeDeck =
     decks.find((deck) => deck.id === activeDeckId) ?? decks[0] ?? null;
   const deckText = activeDeck?.text ?? "";
+  const activeMaterialDeck =
+    materialDecks.find((deck) => deck.id === activeDeck?.materialDeckId) ??
+    materialDecks.find((deck) => deck.isSystem) ??
+    null;
+  const activeMaterialCounts = useMemo(() => {
+    if (!activeMaterialDeck) {
+      return materialDeckCounts(parseMaterialDecklist(DEFAULT_MATERIAL_DECK_TEXT));
+    }
+    return materialDeckCounts(parseMaterialDecklist(activeMaterialDeck.text));
+  }, [activeMaterialDeck]);
   const deferredDeckText = useDeferredValue(deckText);
   const runParam = searchParams.get("run");
 
@@ -203,14 +230,16 @@ export default function FizaWorkbench({
           current in CARDS ? current : (PLAYABLE_CARD_IDS[0] ?? current),
         );
         setCatalogEpoch((epoch) => epoch + 1);
-        const [store, version] = await Promise.all([
+        const [store, materialStore, version] = await Promise.all([
           loadDecksFromApi(),
+          loadMaterialDecksFromApi(),
           fetchWorkerVersion().catch(() => null),
         ]);
         if (cancelled) {
           return;
         }
         setDecks(store.decks);
+        setMaterialDecks(materialStore);
         setCachedDecks(store.decks);
         setDecksHydrated(true);
         if (version) {
@@ -251,7 +280,9 @@ export default function FizaWorkbench({
       const qs = searchParams.toString();
       router.replace(workbenchHref(tab, resolved, qs || undefined));
     }
-  }, [decksHydrated, decks, routeDeckId, tab, router, searchParams]);
+    // Only redirect when the route deck is missing/invalid — not on query-only changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- searchParams read for initial redirect qs only
+  }, [decksHydrated, decks, routeDeckId, tab, router]);
 
   useEffect(() => {
     if (!decksHydrated || !activeDeckId) {
@@ -332,6 +363,87 @@ export default function FizaWorkbench({
     });
   }, [activeDeck, decksHydrated]);
 
+  function updateActiveDeckMaterialDeck(materialDeckId: string) {
+    if (!activeDeck || isDeckCardlistLocked(activeDeck)) {
+      return;
+    }
+    setDecks((current) =>
+      current.map((deck) =>
+        deck.id === activeDeck.id ? { ...deck, materialDeckId } : deck,
+      ),
+    );
+  }
+
+  async function createNewMaterialDeck(name: string, text: string) {
+    try {
+      const deck = await createMaterialDeckRemote(name, text);
+      setMaterialDecks((current) => [deck, ...current]);
+      updateActiveDeckMaterialDeck(deck.id);
+      setError("");
+      setIsRenamingMaterialDeck(false);
+      return deck;
+    } catch (createError) {
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Could not create the material deck.",
+      );
+      return null;
+    }
+  }
+
+  function startRenamingMaterialDeck() {
+    if (!activeMaterialDeck) {
+      return;
+    }
+    setMaterialRenameDraft(activeMaterialDeck.name);
+    setIsRenamingMaterialDeck(true);
+  }
+
+  async function commitMaterialDeckRename() {
+    if (!activeMaterialDeck) {
+      return;
+    }
+    const name = normalizeMaterialDeckName(materialRenameDraft);
+    try {
+      const saved = await renameMaterialDeckRemote(activeMaterialDeck.id, name);
+      setMaterialDecks((current) =>
+        current.map((deck) => (deck.id === saved.id ? saved : deck)),
+      );
+      setIsRenamingMaterialDeck(false);
+      setError("");
+    } catch (renameError) {
+      setError(
+        renameError instanceof Error
+          ? renameError.message
+          : "Could not rename the material deck.",
+      );
+    }
+  }
+
+  function cancelMaterialDeckRename() {
+    setIsRenamingMaterialDeck(false);
+    setMaterialRenameDraft("");
+  }
+
+  async function deleteActiveMaterialDeck(deck: SavedMaterialDeck) {
+    try {
+      await deleteMaterialDeckRemote(deck.id);
+      const remaining = materialDecks.filter((row) => row.id !== deck.id);
+      setMaterialDecks(remaining);
+      if (activeDeck?.materialDeckId === deck.id) {
+        const fallback =
+          remaining.find((row) => row.isSystem) ?? remaining[0] ?? null;
+        if (fallback) {
+          updateActiveDeckMaterialDeck(fallback.id);
+        }
+      }
+      setError("");
+    } catch (deleteError) {
+      setError(formatMaterialDeckDeleteError(deleteError));
+    }
+  }
+
   function updateActiveDeckText(text: string) {
     if (!activeDeck || isDeckCardlistLocked(activeDeck)) {
       return;
@@ -350,7 +462,12 @@ export default function FizaWorkbench({
         current.map((deck) => {
           const match = remote.find((row) => row.id === deck.id);
           return match
-            ? { ...deck, runCount: match.runCount, deckHash: match.deckHash }
+            ? {
+                ...deck,
+                runCount: match.runCount,
+                deckHash: match.deckHash,
+                materialDeckId: match.materialDeckId,
+              }
             : deck;
         }),
       );
@@ -368,10 +485,15 @@ export default function FizaWorkbench({
     navigateToDeck(deckId);
   }
 
+  function openRatioRun(runId: string, deckId: string) {
+    router.push(workbenchHref("ratios", deckId, `run=${runId}`));
+  }
+
   async function saveRatioDecklist(
     counts: DeckCounts,
     score: number,
     rank: number,
+    deckName?: string,
   ) {
     const lines = Object.entries(counts)
       .filter(([, count]) => count > 0)
@@ -386,7 +508,7 @@ export default function FizaWorkbench({
     const text = `${lines.join("\n")}\n`;
     const name = nextDeckName(
       decks,
-      `${ratioCriteria?.baseDeckName ?? activeDeck?.name ?? "Deck"} · Ratio #${rank} · ${score.toFixed(2)}`,
+      `${deckName ?? ratioCriteria?.baseDeckName ?? activeDeck?.name ?? "Deck"} · Ratio #${rank} · ${score.toFixed(2)}`,
     );
     try {
       const deck = await createDeckRemote(name, text);
@@ -426,6 +548,7 @@ export default function FizaWorkbench({
       const deck = await createDeckRemote(
         nextDeckName(decks, `${activeDeck.name} copy`),
         activeDeck.text,
+        activeDeck.materialDeckId,
       );
       setDecks((current) => [...current, deck]);
       navigateToDeck(deck.id);
@@ -525,9 +648,11 @@ export default function FizaWorkbench({
         simType,
         rollouts,
         seed: solveSeed as unknown as bigint,
-        ...(deck ? { deck } : {}),
-        ...(remainingQueue !== undefined ? { queue: remainingQueue } : {}),
-      } as Parameters<typeof apiSolve>[0]);
+        materials: activeMaterialCounts,
+        deck: deck ?? {},
+        queue: remainingQueue ?? null,
+        budget: DEFAULT_BUDGET,
+      });
       startTransition(() => setLineResult(result as unknown as SolveResult));
     } catch (solveError) {
       setError(
@@ -584,6 +709,7 @@ export default function FizaWorkbench({
           simType,
           rollouts,
           seed: makeSeed() as unknown as bigint,
+          budget: DEFAULT_BUDGET,
         },
         initialProgress,
       );
@@ -709,6 +835,8 @@ export default function FizaWorkbench({
           decks: deckCount,
           metric,
           seed: makeSeed() as unknown as bigint,
+          materials: activeMaterialCounts,
+          budget: DEFAULT_BUDGET,
         },
         initialProgress,
       );
@@ -937,6 +1065,11 @@ export default function FizaWorkbench({
             unrecognizedLines={unrecognizedLines}
             isRenamingDeck={isRenamingDeck}
             renameDraft={renameDraft}
+            materialDecks={materialDecks}
+            activeMaterialDeck={activeMaterialDeck}
+            materialCards={parseMaterialDecklist(activeMaterialDeck?.text ?? DEFAULT_MATERIAL_DECK_TEXT)}
+            isRenamingMaterialDeck={isRenamingMaterialDeck}
+            materialRenameDraft={materialRenameDraft}
             onSwitchDeck={switchDeck}
             onCreateDeck={createNewDeck}
             onDuplicateDeck={duplicateActiveDeck}
@@ -946,6 +1079,13 @@ export default function FizaWorkbench({
             onCommitRename={commitDeckRename}
             onCancelRename={cancelDeckRename}
             onDeckTextChange={updateActiveDeckText}
+            onAssignMaterialDeck={updateActiveDeckMaterialDeck}
+            onCreateMaterialDeck={createNewMaterialDeck}
+            onStartMaterialRename={startRenamingMaterialDeck}
+            onDeleteMaterialDeck={deleteActiveMaterialDeck}
+            onMaterialRenameDraftChange={setMaterialRenameDraft}
+            onCommitMaterialRename={commitMaterialDeckRename}
+            onCancelMaterialRename={cancelMaterialDeckRename}
             decksLoading={!decksHydrated}
           />
         )}
@@ -1032,7 +1172,6 @@ export default function FizaWorkbench({
               busy={optimizeBusy}
               onRun={optimizeCurrentBounds}
               onCancel={cancelOptimizeJob}
-              progress={optimizeRun?.progress ?? null}
             />
             <RatioResults
               result={optimizeRun?.ratioResult ?? null}
@@ -1047,6 +1186,10 @@ export default function FizaWorkbench({
             routeDeckId={routeDeckId}
             refreshToken={historyEpoch}
             onSwitchDeck={switchDeck}
+            onSaveDecklist={(counts, score, rank, deckName) =>
+              saveRatioDecklist(counts, score, rank, deckName)
+            }
+            onOpenRatioRun={openRatioRun}
           />
         )}
 

@@ -14,6 +14,8 @@ pub const MAT_BLADE: u8 = 1 << 1;
 pub const MAT_DAGGER: u8 = 1 << 2;
 pub const MAT_ZANDER: u8 = 1 << 3;
 pub const MAT_SOULKNIFE: u8 = 1 << 4;
+pub const MAT_TRISTAN: u8 = 1 << 5;
+pub const MAT_ZANDER_2: u8 = 1 << 6;
 pub const ALL_MATERIALS: u8 = MAT_HAMMER | MAT_BLADE | MAT_DAGGER | MAT_ZANDER | MAT_SOULKNIFE;
 pub const DRAW_QUEUE_CAP: usize = 64;
 
@@ -92,6 +94,7 @@ pub enum Phase {
     #[default]
     Main,
     Materialize,
+    Agility,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -131,8 +134,8 @@ impl Weapon {
     }
 }
 
-/// Search board position. Memo keys hash/compare all fields except `damage`,
-/// `queue`, and `queue_len` (the draw queue is constant within one solve).
+/// Search board position. Memo keys hash/compare all fields except `damage`
+/// and the unconsumed draw-queue suffix (`queue[queue_pos..queue_len]`).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct State {
@@ -150,7 +153,11 @@ pub struct State {
     pub float_gy: u8,
     pub gy_total: u8,
     pub march_hare_gy: u8,
+    /// Per-card graveyard counts (for Zander level-2 returns and precise banish).
+    pub gy: [u8; CARD_COUNT],
     pub champion_level: u8,
+    /// Tristan, Underhanded has leveled (agility recollect + fast activations at end of turn).
+    pub tristan_leveled: bool,
     pub champion_awake: bool,
     pub champion_damaged: bool,
     pub prep: u8,
@@ -190,6 +197,16 @@ impl State {
     }
 
     pub fn with_queue(hand: &[Card], go_first: bool, max_turns: u8, queue: &[Card]) -> Self {
+        Self::with_queue_and_materials(hand, go_first, max_turns, queue, ALL_MATERIALS)
+    }
+
+    pub fn with_queue_and_materials(
+        hand: &[Card],
+        go_first: bool,
+        max_turns: u8,
+        queue: &[Card],
+        materials: u8,
+    ) -> Self {
         let mut counts = [0_u8; CARD_COUNT];
         for &card in hand {
             counts[card.index()] = counts[card.index()].saturating_add(1);
@@ -214,7 +231,9 @@ impl State {
             float_gy: 0,
             gy_total: 0,
             march_hare_gy: 0,
+            gy: [0; CARD_COUNT],
             champion_level: 0,
+            tristan_leveled: false,
             champion_awake: true,
             champion_damaged: false,
             prep: 0,
@@ -224,7 +243,7 @@ impl State {
             dagger: false,
             dagger_ready: false,
             amplify: false,
-            materials: ALL_MATERIALS,
+            materials,
             hot_cake: 0,
             go_first,
             queue_pos: 0,
@@ -247,7 +266,9 @@ impl State {
             && self.float_gy == other.float_gy
             && self.gy_total == other.gy_total
             && self.march_hare_gy == other.march_hare_gy
+            && self.gy == other.gy
             && self.champion_level == other.champion_level
+            && self.tristan_leveled == other.tristan_leveled
             && self.champion_awake == other.champion_awake
             && self.champion_damaged == other.champion_damaged
             && self.prep == other.prep
@@ -261,6 +282,23 @@ impl State {
             && self.hot_cake == other.hot_cake
             && self.go_first == other.go_first
             && self.queue_pos == other.queue_pos
+            && self.queue_suffix_eq(other)
+    }
+
+    fn queue_suffix_eq(&self, other: &Self) -> bool {
+        let pos = self.queue_pos as usize;
+        let len = self.queue_len as usize;
+        let other_pos = other.queue_pos as usize;
+        let other_len = other.queue_len as usize;
+        if len - pos != other_len - other_pos {
+            return false;
+        }
+        for index in 0..(len - pos) {
+            if self.queue[pos + index] != other.queue[pos + index] {
+                return false;
+            }
+        }
+        true
     }
 
     fn hash_memo_key<H: Hasher>(&self, state: &mut H) {
@@ -277,7 +315,9 @@ impl State {
         self.float_gy.hash(state);
         self.gy_total.hash(state);
         self.march_hare_gy.hash(state);
+        self.gy.hash(state);
         self.champion_level.hash(state);
+        self.tristan_leveled.hash(state);
         self.champion_awake.hash(state);
         self.champion_damaged.hash(state);
         self.prep.hash(state);
@@ -291,6 +331,11 @@ impl State {
         self.hot_cake.hash(state);
         self.go_first.hash(state);
         self.queue_pos.hash(state);
+        let pos = self.queue_pos as usize;
+        let len = self.queue_len as usize;
+        for index in pos..len {
+            self.queue[index].hash(state);
+        }
     }
 
     #[inline]
@@ -351,6 +396,7 @@ impl State {
     }
 
     pub fn send_to_gy(&mut self, card: Card) {
+        self.gy[card.index()] = self.gy[card.index()].saturating_add(1);
         self.gy_total = self.gy_total.saturating_add(1);
         if card.is_fire() {
             self.fire_gy = self.fire_gy.saturating_add(1);
@@ -363,24 +409,66 @@ impl State {
         }
     }
 
+    pub fn gy_count(self, card: Card) -> u8 {
+        self.gy[card.index()]
+    }
+
+    pub fn remove_one_from_gy(&mut self, card: Card) -> bool {
+        if self.gy[card.index()] == 0 {
+            return false;
+        }
+        self.gy[card.index()] -= 1;
+        self.gy_total = self.gy_total.saturating_sub(1);
+        if card.is_fire() {
+            self.fire_gy = self.fire_gy.saturating_sub(1);
+        }
+        if card.floating_memory() {
+            self.float_gy = self.float_gy.saturating_sub(1);
+        }
+        if card == Card::MarchHare {
+            self.march_hare_gy = self.march_hare_gy.saturating_sub(1);
+        }
+        true
+    }
+
     pub fn banish_fire_from_gy(&mut self, count: u8, prefer_march_hare: bool) -> u8 {
         let mut remaining = count.min(self.fire_gy);
-        let mut marched = 0;
+        let mut marched = 0_u8;
         if prefer_march_hare {
-            let use_march = remaining.min(self.march_hare_gy);
-            self.march_hare_gy -= use_march;
+            let use_march = remaining.min(self.gy[Card::MarchHare.index()]);
+            for _ in 0..use_march {
+                self.remove_one_from_gy(Card::MarchHare);
+            }
             marched = use_march;
-            remaining -= use_march;
-            self.fire_gy -= use_march;
-            self.gy_total = self.gy_total.saturating_sub(use_march);
+            remaining = remaining.saturating_sub(use_march);
         }
-        self.fire_gy = self.fire_gy.saturating_sub(remaining);
-        self.gy_total = self.gy_total.saturating_sub(remaining);
-        // Prefer not to desync march_hare_gy if we banished non-March fire while March remains.
-        if self.march_hare_gy > self.fire_gy {
-            self.march_hare_gy = self.fire_gy;
+        while remaining > 0 {
+            let Some(card) = ALL_CARDS
+                .iter()
+                .copied()
+                .find(|&card| card.is_fire() && self.gy[card.index()] > 0)
+            else {
+                break;
+            };
+            self.remove_one_from_gy(card);
+            remaining -= 1;
         }
         marched
+    }
+
+    /// Banish one floating-memory card from the graveyard (Zander memory cost).
+    pub fn banish_floating_memory_from_gy(&mut self) {
+        if self.float_gy == 0 {
+            return;
+        }
+        let Some(card) = ALL_CARDS
+            .iter()
+            .copied()
+            .find(|&card| card.floating_memory() && self.gy[card.index()] > 0)
+        else {
+            return;
+        };
+        self.remove_one_from_gy(card);
     }
 
     pub fn fire_hand_count(self) -> u8 {
@@ -634,6 +722,57 @@ impl State {
         self.draw_unknown()
     }
 
+    /// Move up to `count` cards from memory to hand (highest reserve cost first).
+    pub fn recollect_from_memory(&mut self, count: u8) -> Vec<Card> {
+        let mut moved = Vec::with_capacity(count as usize);
+        let mut remaining = count;
+        while remaining > 0 && self.memory_len > 0 {
+            let snapshot = *self;
+            let card = ALL_CARDS
+                .iter()
+                .copied()
+                .filter(|card| self.memory[card.index()] > 0)
+                .max_by_key(|&card| snapshot.payment_score(card));
+            if let Some(card) = card {
+                self.memory[card.index()] -= 1;
+                self.memory_len -= 1;
+                self.hand[card.index()] = self.hand[card.index()].saturating_add(1);
+                self.hand_len = self.hand_len.saturating_add(1);
+                moved.push(card);
+                remaining -= 1;
+            } else {
+                break;
+            }
+        }
+        moved
+    }
+
+    /// Champion level-1 memory cost: floating memory from GY first, else banish from memory.
+    /// Returns `true` when paid from the memory zone, `false` when paid via floating memory in GY.
+    pub fn pay_champion_memory_cost(&mut self) -> bool {
+        if self.float_gy > 0 {
+            self.banish_floating_memory_from_gy();
+            return false;
+        }
+        let snapshot = *self;
+        let card = ALL_CARDS
+            .iter()
+            .copied()
+            .filter(|card| self.memory[card.index()] > 0)
+            .max_by_key(|&card| snapshot.payment_score(card));
+        if let Some(card) = card {
+            self.memory[card.index()] -= 1;
+            self.memory_len -= 1;
+            return true;
+        }
+        false
+    }
+
+    /// Pays Zander level-1 memory cost: floating memory from GY first, else banish from memory.
+    pub fn pay_zander_memory_cost(&mut self) -> bool {
+        self.pay_champion_memory_cost()
+    }
+
     pub fn wake(&mut self) {
         self.champion_awake = true;
         self.champion_damaged = false;
@@ -650,7 +789,7 @@ impl State {
     }
 
     pub fn enemy_cull(&mut self, mut tape: Option<&mut crate::line_event::EventTape>) {
-        use crate::line_event::{EventFields, EventKind, TapePhase};
+        use crate::line_event::TapePhase;
         let mut index = 0;
         while index < self.ally_len as usize {
             let ally = self.allies[index];
@@ -658,14 +797,7 @@ impl State {
                 index += 1;
             } else if let Some(card) = self.remove_ally(index, true) {
                 if let Some(tape) = tape.as_deref_mut() {
-                    if card.on_death_damage() > 0 {
-                        tape.push(
-                            *self,
-                            TapePhase::EnemyMain,
-                            EventKind::OnDeath,
-                            EventFields::card(card),
-                        );
-                    }
+                    crate::line_event::push_ally_gy_death(self, card, TapePhase::EnemyMain, tape);
                 }
             }
         }
@@ -680,6 +812,110 @@ impl State {
             self.weapon = Weapon::None;
         }
     }
+
+    /// Cards at the top of the remaining draw queue (up to 2) before a Glimpse.
+    pub fn glimpse_peek(&self) -> Vec<Card> {
+        let pos = self.queue_pos as usize;
+        let len = self.queue_len as usize;
+        if pos >= len {
+            return Vec::new();
+        }
+        let glimpse_n = (len - pos).min(2);
+        self.queue[pos..pos + glimpse_n]
+            .iter()
+            .map(|&raw| ALL_CARDS[raw as usize])
+            .collect()
+    }
+
+    /// Number of distinct deck-tail orders after Glimpse min(2, remaining).
+    pub fn glimpse_layout_count(self) -> u8 {
+        Self::glimpse_tail_orders(self.queue, self.queue_pos as usize, self.queue_len as usize)
+            .len() as u8
+    }
+
+    /// Reorder `queue[queue_pos..queue_len]` per a Glimpse layout index.
+    pub fn apply_glimpse_layout(&mut self, layout: u8) {
+        let pos = self.queue_pos as usize;
+        let len = self.queue_len as usize;
+        if pos >= len {
+            return;
+        }
+        let orders = Self::glimpse_tail_orders(self.queue, pos, len);
+        let index = layout.min(orders.len().saturating_sub(1) as u8) as usize;
+        for (offset, &card) in orders[index].iter().enumerate() {
+            self.queue[pos + offset] = card;
+        }
+    }
+
+    fn glimpse_tail_orders(
+        queue: [u8; DRAW_QUEUE_CAP],
+        pos: usize,
+        len: usize,
+    ) -> Vec<Vec<u8>> {
+        let tail_len = len - pos;
+        if tail_len == 0 {
+            return vec![Vec::new()];
+        }
+        let glimpse_n = tail_len.min(2);
+        let glimpse: Vec<u8> = queue[pos..pos + glimpse_n].to_vec();
+        let middle: Vec<u8> = queue[pos + glimpse_n..len].to_vec();
+        let mut orders: Vec<Vec<u8>> = Vec::new();
+
+        fn push_unique(orders: &mut Vec<Vec<u8>>, tail: Vec<u8>) {
+            if !orders.iter().any(|existing| existing == &tail) {
+                orders.push(tail);
+            }
+        }
+
+        match glimpse_n {
+            1 => {
+                let c0 = glimpse[0];
+                push_unique(&mut orders, {
+                    let mut tail = vec![c0];
+                    tail.extend_from_slice(&middle);
+                    tail
+                });
+                push_unique(&mut orders, {
+                    let mut tail = middle.clone();
+                    tail.push(c0);
+                    tail
+                });
+            }
+            2 => {
+                let c0 = glimpse[0];
+                let c1 = glimpse[1];
+                push_unique(&mut orders, vec![c0, c1]);
+                push_unique(&mut orders, vec![c1, c0]);
+                push_unique(&mut orders, {
+                    let mut tail = vec![c0];
+                    tail.extend_from_slice(&middle);
+                    tail.push(c1);
+                    tail
+                });
+                push_unique(&mut orders, {
+                    let mut tail = vec![c1];
+                    tail.extend_from_slice(&middle);
+                    tail.push(c0);
+                    tail
+                });
+                push_unique(&mut orders, {
+                    let mut tail = middle.clone();
+                    tail.push(c0);
+                    tail.push(c1);
+                    tail
+                });
+                push_unique(&mut orders, {
+                    let mut tail = middle.clone();
+                    tail.push(c1);
+                    tail.push(c0);
+                    tail
+                });
+            }
+            _ => push_unique(&mut orders, queue[pos..len].to_vec()),
+        }
+
+        orders
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -688,8 +924,16 @@ pub enum Action {
     SkipMaterialize,
     MaterializeHammer,
     MaterializeDagger,
-    MaterializeZanderMemory,
-    MaterializeZanderFloat(u8),
+    MaterializeZanderMemory {
+        /// `Some(layout)` when oracle / Monte Carlo may reorder the deck tail via Glimpse 2.
+        glimpse_layout: Option<u8>,
+    },
+    MaterializeTristanMemory {
+        /// `Some(layout)` when oracle / Monte Carlo may reorder the deck tail via Glimpse 2.
+        glimpse_layout: Option<u8>,
+    },
+    TristanRecollect,
+    SkipAgility,
     MaterializeSoulknife,
     ActivateDagger,
     ActivateSadi(u8),
@@ -700,6 +944,11 @@ pub enum Action {
         kindle: u8,
         sacrifice: bool,
         hot_cake_sacrifice: bool,
+        /// Material-deck champion leveled via Flagrant Guide on enter
+        /// (`MAT_ZANDER`, `MAT_ZANDER_2`, or `MAT_TRISTAN`).
+        flagrant_level: Option<u8>,
+        /// Assassin action/attack returned from the graveyard when leveling to Deft Executor (−1 prep).
+        flagrant_gy_return: Option<Card>,
     },
     PlayItem {
         card: Card,
@@ -800,6 +1049,37 @@ pub struct SolveRequest {
     pub seed: u64,
     #[serde(default)]
     pub budget: Budget,
+    /// Material sideboard counts. Empty → all default materials.
+    #[serde(default)]
+    pub materials: BTreeMap<String, u8>,
+}
+
+/// Map persisted material ids to the engine material bitmask.
+pub fn resolve_materials_bitmask(counts: &BTreeMap<String, u8>) -> u8 {
+    if counts.is_empty() {
+        return ALL_MATERIALS;
+    }
+    let mut mask = 0_u8;
+    for (id, qty) in counts {
+        if *qty == 0 {
+            continue;
+        }
+        mask |= match id.as_str() {
+            "impact_hammer" => MAT_HAMMER,
+            "mercenary_blade" => MAT_BLADE,
+            "poisoned_dagger" => MAT_DAGGER,
+            "zander_1" => MAT_ZANDER,
+            "zander_2" => MAT_ZANDER_2,
+            "varuckan_soulknife" => MAT_SOULKNIFE,
+            "tristan_1" => MAT_TRISTAN,
+            _ => 0,
+        };
+    }
+    if mask == 0 {
+        ALL_MATERIALS
+    } else {
+        mask
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]

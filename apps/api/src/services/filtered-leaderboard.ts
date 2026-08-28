@@ -1,7 +1,21 @@
 import type { Kysely } from "kysely";
 import type { Database } from "../db/types.js";
 import { MATERIAL_CARD_IDS, isMaterialCardId } from "../db/card-seed.js";
+import {
+  computeAllHandImpacts,
+  evaluateSamplesFromRows,
+} from "../lib/hand-impact.js";
 import type { VersionTriple } from "../lib/version.js";
+
+function materialIdsFromRunBody(body: Record<string, unknown>): string[] {
+  const materials = body.materials as Record<string, number> | undefined;
+  if (!materials || Object.keys(materials).length === 0) {
+    return [...MATERIAL_CARD_IDS];
+  }
+  return Object.entries(materials)
+    .filter(([, qty]) => (qty ?? 0) > 0)
+    .map(([id]) => id);
+}
 
 export type DamageBounds = {
   gt?: number;
@@ -57,14 +71,13 @@ export async function cardLeaderboardFromSamples(
 ) {
   const runs = await db
     .selectFrom("runs")
-    .select(["id", "deck_counts", "samples"])
+    .select(["id", "deck_counts", "samples", "request_body"])
     .where("status", "=", "complete")
     .where("kind", "=", "evaluate")
     .where("deck_hash", "=", options.deckHash)
     .where("sim_type", "=", options.simType)
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
-    .where("card_digest", "=", options.version.cardDigest)
     .where("attribution_version", "=", options.attributionVersion)
     .orderBy("started_at", "asc")
     .execute();
@@ -124,6 +137,7 @@ export async function cardLeaderboardFromSamples(
     .where("sample_id", "in", sampleIds)
     .execute();
 
+  const runById = new Map(runs.map((run) => [run.id, run]));
   const deckCounts = (runs[0]?.deck_counts ?? {}) as Record<string, number>;
   type Acc = {
     copies: number;
@@ -156,9 +170,17 @@ export async function cardLeaderboardFromSamples(
       });
     }
   }
-  // Attribution 8+ always emits one row per material deck card.
+  // Attribution 8+ emits one row per active material deck card across pooled runs.
   if (options.attributionVersion >= 8) {
-    for (const cardId of MATERIAL_CARD_IDS) {
+    const materialIds = new Set<string>();
+    for (const run of runs) {
+      for (const cardId of materialIdsFromRunBody(
+        run.request_body as Record<string, unknown>,
+      )) {
+        materialIds.add(cardId);
+      }
+    }
+    for (const cardId of materialIds) {
       acc.set(cardId, { ...emptyAcc(), copies: 1 });
     }
   }
@@ -243,7 +265,11 @@ export async function cardLeaderboardFromSamples(
         row.damageWhenSeenSum += line.damage[cardId] ?? 0;
       }
     }
-    for (const cardId of MATERIAL_CARD_IDS) {
+    const run = runById.get(sample.run_id);
+    const materialIds = run
+      ? materialIdsFromRunBody(run.request_body as Record<string, unknown>)
+      : [...MATERIAL_CARD_IDS];
+    for (const cardId of materialIds) {
       const row = acc.get(cardId);
       if (!row) continue;
       row.opened += weight;
@@ -257,6 +283,16 @@ export async function cardLeaderboardFromSamples(
   }
 
   const names = new Map(options.cards.map((card) => [card.id, card.name]));
+  const handLiftByCard = computeAllHandImpacts(
+    evaluateSamplesFromRows(
+      samples.map((sample) => ({
+        cardIds: sample.card_ids as string[],
+        damage: sample.damage,
+        occurrenceCount: sample.occurrence_count,
+        deckCounts: deckCounts,
+      })),
+    ),
+  );
   const rows = [...acc.entries()].filter(([, row]) => row.copies > 0);
   const totalDamage = rows.reduce((sum, [, row]) => sum + row.damage, 0);
   const cards = rows.map(([cardId, row]) => {
@@ -277,6 +313,7 @@ export async function cardLeaderboardFromSamples(
       playWhenInHand: handAppearances > 0 ? row.plays / handAppearances : 0,
       damageWhenSeen: row.seen > 0 ? row.damageWhenSeenSum / row.seen : 0,
       damageShare: totalDamage > 0 ? row.damage / totalDamage : 0,
+      handLift: handLiftByCard.get(cardId)?.handLift ?? null,
     };
   });
   cards.sort((a, b) => {

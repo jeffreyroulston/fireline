@@ -21,12 +21,24 @@ export interface CardsTable {
   updated_at: Date;
 }
 
+export interface MaterialDecksTable {
+  id: string;
+  name: string;
+  text: string;
+  counts: Record<string, number>;
+  material_hash: string;
+  is_system: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface DecksTable {
   id: string;
   name: string;
   text: string;
   counts: Record<string, number>;
   deck_hash: string;
+  material_deck_id: string;
   created_at: Date;
   updated_at: Date;
 }
@@ -48,6 +60,7 @@ export interface RunsTable {
   root_seed: string | null;
   deck_hash: string | null;
   deck_id: string | null;
+  material_deck_id: string | null;
   deck_counts: Record<string, number>;
   go_first: boolean | null;
   max_turns: number | null;
@@ -142,6 +155,7 @@ export interface DeckCardsTable {
 
 export interface Database {
   cards: CardsTable;
+  material_decks: MaterialDecksTable;
   decks: DecksTable;
   deck_cards: DeckCardsTable;
   runs: RunsTable;

@@ -1281,6 +1281,10 @@ input {
   color: var(--ink);
 }
 
+.deck-material-section {
+  margin-top: 18px;
+}
+
 .deck-input textarea:read-only {
   opacity: 0.85;
   cursor: default;
@@ -2418,6 +2422,37 @@ input {
   align-items: start;
 }
 
+.history-ratio-analysis {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.history-ratio-panel > .section-heading {
+  margin-bottom: 12px;
+}
+
+.history-ratio-controls {
+  margin-bottom: 16px;
+}
+
+.history-ratio-kicker {
+  margin: 0 0 10px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.history-ratio-candidates {
+  margin-bottom: 22px;
+}
+
+.history-ratio-runs {
+  margin-top: 8px;
+}
+
 .history-pooled .stat-line {
   display: flex;
   justify-content: space-between;
@@ -2713,7 +2748,6 @@ input {
   min-width: 11px;
   background: linear-gradient(var(--ember), var(--ember-dark));
   transform-origin: bottom;
-  animation: bar-rise 450ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
 }
 
 .damage-bars.history-bars > button.is-card-in-hand:not(.is-selected) {

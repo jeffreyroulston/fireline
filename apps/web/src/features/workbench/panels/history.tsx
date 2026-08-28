@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { type SimType } from "@/lib/engine";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { type SimType, type DeckCounts } from "@/lib/engine";
 import {
   deleteRun,
   fetchCardLeaderboard,
@@ -22,8 +22,9 @@ import {
 } from "./card-leaderboard";
 import {
   PooledDamagePanel,
-  type PooledSampleBar,
 } from "./pooled-damage";
+import { limitRecentPooledBars, type PooledSampleBar } from "./pooled-damage-bars";
+import { RatioHistoryPanel } from "./ratio-history";
 import { SIM_TYPE_LABELS } from "../types";
 import { PanelTopline, SectionHeading } from "../ui";
 import type { DamageRange } from "../lib/damage-range";
@@ -31,7 +32,7 @@ import { historyQueryPatch, parseSimParam } from "../routes";
 import { useWorkbenchQuery } from "../use-workbench-query";
 
 function groupKey(group: VersionGroup): string {
-  return `${group.rulesVersion}:${group.samplerVersion}:${group.cardDigest}:${group.attributionVersion}`;
+  return `${group.rulesVersion}:${group.samplerVersion}:${group.attributionVersion}`;
 }
 
 function formatVersionShort(run: RunHistoryRow): string {
@@ -42,7 +43,7 @@ function formatVersionShort(run: RunHistoryRow): string {
 }
 
 function formatVersionLabel(group: VersionGroup): string {
-  return `r${group.rulesVersion} · s${group.samplerVersion} · digest ${group.cardDigest.slice(0, 8)} · a${group.attributionVersion ?? "?"}`;
+  return `r${group.rulesVersion} · s${group.samplerVersion} · a${group.attributionVersion ?? "?"}`;
 }
 
 function formatWhen(iso: string): string {
@@ -117,17 +118,18 @@ function sampleBarsFromPooled(
     return [];
   }
   if (pooled.runs && pooled.runs.length > 0) {
-    return pooled.runs.flatMap((run) =>
-      run.damages.map((damage, sampleIndex) => ({
-        key: `${run.id}-${sampleIndex}`,
+    return pooled.runs.flatMap((run) => {
+      const points =
+        run.samplePoints ??
+        (run.damages ?? []).map((damage, index) => ({ index, damage }));
+      return points.map(({ index, damage }) => ({
+        key: `${run.id}-${index}`,
         runId: run.id,
-        sampleIndex,
+        sampleIndex: index,
         damage,
-        label: run.startedAt
-          ? `${formatWhen(run.startedAt)} · hand ${sampleIndex + 1}: ${damage} damage`
-          : `Hand ${sampleIndex + 1}: ${damage} damage`,
-      })),
-    );
+        label: `Hand ${index + 1}: ${damage} damage`,
+      }));
+    });
   }
   return expandBuckets(pooled.distribution?.buckets ?? []).map(
     (damage, index) => ({
@@ -181,13 +183,23 @@ export function HistoryPanel({
   routeDeckId,
   refreshToken,
   onSwitchDeck,
+  onSaveDecklist,
+  onOpenRatioRun,
 }: {
   decks: SavedDeck[];
   routeDeckId?: string;
   refreshToken: number;
   onSwitchDeck: (deckId: string) => void;
+  onSaveDecklist?: (
+    counts: DeckCounts,
+    score: number,
+    rank: number,
+    deckName: string,
+  ) => void | Promise<void>;
+  onOpenRatioRun: (runId: string, deckId: string) => void;
 }) {
   const { searchParams, replaceQuery } = useWorkbenchQuery("history");
+  const versionGroupFromUrl = searchParams.get("vg");
   const [filterDeckId, setFilterDeckId] = useState<string | null>(
     routeDeckId ?? null,
   );
@@ -271,11 +283,22 @@ export function HistoryPanel({
     !!comparePooled?.distribution &&
     !!pooled?.distribution;
 
+  const simFromUrl = searchParams.get("sim");
+  const cardFromUrl = searchParams.get("card");
+
   useEffect(() => {
-    setSimType(parseSimParam(searchParams.get("sim")) ?? "fire_brick");
-    setSelectedGroupKey(searchParams.get("vg") ?? "");
-    setSelectedLeaderboardCard(searchParams.get("card"));
-  }, [searchParams]);
+    setSimType(parseSimParam(simFromUrl) ?? "fire_brick");
+  }, [simFromUrl]);
+
+  useEffect(() => {
+    if (versionGroupFromUrl) {
+      setSelectedGroupKey(versionGroupFromUrl);
+    }
+  }, [versionGroupFromUrl]);
+
+  useEffect(() => {
+    setSelectedLeaderboardCard(cardFromUrl);
+  }, [cardFromUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -324,12 +347,11 @@ export function HistoryPanel({
         if (!cancelled) {
           setGroups(nextGroups);
           setSelectedGroupKey((current) => {
-            const fromUrl = searchParams.get("vg");
             if (
-              fromUrl &&
-              nextGroups.some((group) => groupKey(group) === fromUrl)
+              versionGroupFromUrl &&
+              nextGroups.some((group) => groupKey(group) === versionGroupFromUrl)
             ) {
-              return fromUrl;
+              return versionGroupFromUrl;
             }
             if (current && nextGroups.some((group) => groupKey(group) === current)) {
               return current;
@@ -350,7 +372,7 @@ export function HistoryPanel({
     return () => {
       cancelled = true;
     };
-  }, [deckId, deckHash, simType, dataEpoch, searchParams]);
+  }, [deckId, deckHash, simType, dataEpoch]);
 
   useEffect(() => {
     if (!selectedGroupKey || !poolHash || !selectedGroup?.attributionVersion) {
@@ -364,34 +386,25 @@ export function HistoryPanel({
     setLoading(true);
     void (async () => {
       try {
-        const [poolResult, boardResult, highlightResult] = await Promise.all([
+        const [poolResult, boardResult] = await Promise.all([
           fetchPooledDamage({
             deckHash: poolHash,
             simType,
             rulesVersion: selectedGroup.rulesVersion,
             samplerVersion: selectedGroup.samplerVersion,
-            cardDigest: selectedGroup.cardDigest,
           }),
           fetchCardLeaderboard({
             deckHash: poolHash,
             simType,
             rulesVersion: selectedGroup.rulesVersion,
             samplerVersion: selectedGroup.samplerVersion,
-            cardDigest: selectedGroup.cardDigest,
             attributionVersion: selectedGroup.attributionVersion!,
-          }),
-          fetchPooledSampleHighlights({
-            deckHash: poolHash,
-            simType,
-            rulesVersion: selectedGroup.rulesVersion,
-            samplerVersion: selectedGroup.samplerVersion,
-            cardDigest: selectedGroup.cardDigest,
           }),
         ]);
         if (!cancelled) {
           setPooled(poolResult);
           setLeaderboard(boardResult);
-          setSampleHighlights(highlightResult);
+          setSampleHighlights(null);
           setError("");
         }
       } catch (loadError) {
@@ -412,6 +425,45 @@ export function HistoryPanel({
       cancelled = true;
     };
   }, [selectedGroupKey, poolHash, simType, selectedGroup, dataEpoch]);
+
+  useEffect(() => {
+    if (
+      !selectedLeaderboardCard ||
+      !poolHash ||
+      !selectedGroup?.attributionVersion
+    ) {
+      setSampleHighlights(null);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const highlightResult = await fetchPooledSampleHighlights({
+          deckHash: poolHash,
+          simType,
+          rulesVersion: selectedGroup.rulesVersion,
+          samplerVersion: selectedGroup.samplerVersion,
+        });
+        if (!cancelled) {
+          setSampleHighlights(highlightResult);
+        }
+      } catch {
+        if (!cancelled) {
+          setSampleHighlights(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedLeaderboardCard,
+    poolHash,
+    simType,
+    selectedGroup,
+    dataEpoch,
+  ]);
 
   useEffect(() => {
     if (!compareOpen || !compareDeckId) {
@@ -502,7 +554,6 @@ export function HistoryPanel({
           simType: compareSimType,
           rulesVersion: compareGroup.rulesVersion,
           samplerVersion: compareGroup.samplerVersion,
-          cardDigest: compareGroup.cardDigest,
         });
         if (!cancelled) {
           setComparePooled(result);
@@ -537,17 +588,38 @@ export function HistoryPanel({
     dataEpoch,
   ]);
 
-  const sampleBars = useMemo(() => sampleBarsFromPooled(pooled), [pooled]);
+  const { bars: sampleBars, total: sampleBarTotal } = useMemo(() => {
+    const allBars = sampleBarsFromPooled(pooled);
+    const total =
+      pooled?.distribution?.totalSamples ??
+      allBars.length;
+    return { ...limitRecentPooledBars(allBars), total };
+  }, [pooled]);
   const pooledSampleKey = pooled
     ? `${poolHash ?? ""}:${simType}:${selectedGroupKey}:${pooled.runCount}`
     : "";
+  const prevPooledSampleKeyRef = useRef(pooledSampleKey);
 
   useEffect(() => {
-    setSelectedLeaderboardCard(null);
-    if (searchParams.get("card")) {
-      replaceQuery((current) => historyQueryPatch(current, { card: null }));
+    const prev = prevPooledSampleKeyRef.current;
+    if (prev === pooledSampleKey) {
+      return;
     }
-  }, [pooledSampleKey, replaceQuery, searchParams]);
+    prevPooledSampleKeyRef.current = pooledSampleKey;
+
+    // First load after empty pool key: keep any card filter from the URL.
+    if (!prev) {
+      return;
+    }
+
+    setSelectedLeaderboardCard(null);
+    replaceQuery((current) => {
+      if (!current.get("card")) {
+        return current;
+      }
+      return historyQueryPatch(current, { card: null });
+    });
+  }, [pooledSampleKey, replaceQuery]);
 
   useEffect(() => {
     if (!appliedRange || !poolHash || !selectedGroup?.attributionVersion) {
@@ -565,7 +637,6 @@ export function HistoryPanel({
           simType,
           rulesVersion: selectedGroup.rulesVersion,
           samplerVersion: selectedGroup.samplerVersion,
-          cardDigest: selectedGroup.cardDigest,
           attributionVersion: selectedGroup.attributionVersion!,
           damageGte: appliedRange.gte,
           damageLte: appliedRange.lte,
@@ -868,6 +939,7 @@ export function HistoryPanel({
             baselineLegend={baselineLegend}
             compareLegend={compareLegend}
             bars={sampleBars}
+            totalSampleBars={sampleBarTotal}
             simType={simType}
             cardHighlights={barCardHighlights}
             resetKey={pooledSampleKey}
@@ -954,12 +1026,27 @@ export function HistoryPanel({
               onSelectedCardIdChange={(cardId) => {
                 setSelectedLeaderboardCard(cardId);
                 replaceQuery((current) =>
-                  historyQueryPatch(current, { card: cardId }),
+                  historyQueryPatch(current, {
+                    card: cardId,
+                    ...(selectedGroupKey && !current.get("vg")
+                      ? { vg: selectedGroupKey }
+                      : {}),
+                  }),
                 );
               }}
             />
           )}
         </div>
+      )}
+
+      {selectedDeck && (
+        <RatioHistoryPanel
+          deck={selectedDeck}
+          runs={runs}
+          refreshToken={dataEpoch}
+          onSaveDecklist={onSaveDecklist}
+          onOpenRun={onOpenRatioRun}
+        />
       )}
 
       {error && (

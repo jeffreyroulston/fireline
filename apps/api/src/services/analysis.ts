@@ -12,6 +12,11 @@ import {
   reconstructSampleHand,
 } from "../lib/sample-order.js";
 import { handHash } from "../lib/deck.js";
+import {
+  computeAllHandImpacts,
+  evaluateSamplesFromRows,
+  loadEvaluateSamples,
+} from "../lib/hand-impact.js";
 import { loadEventsBySampleId } from "../lib/load-sample-events.js";
 import type { VersionTriple } from "../lib/version.js";
 import { isMaterialCardId } from "../db/card-seed.js";
@@ -22,6 +27,7 @@ import {
 } from "./filtered-leaderboard.js";
 
 const COMPLETE = "complete" as const;
+const MAX_POOLED_SAMPLE_BARS = 200;
 
 export async function listVersionGroups(
   db: Kysely<Database>,
@@ -37,14 +43,12 @@ export async function listVersionGroups(
     .select([
       "rules_version as rulesVersion",
       "sampler_version as samplerVersion",
-      "card_digest as cardDigest",
       "attribution_version as attributionVersion",
       sql<number>`count(*)::int`.as("runCount"),
     ])
     .where("status", "=", COMPLETE)
     .where("rules_version", "is not", null)
-    .where("sampler_version", "is not", null)
-    .where("card_digest", "is not", null);
+    .where("sampler_version", "is not", null);
 
   if (options.kind) {
     query = query.where("kind", "=", options.kind);
@@ -59,12 +63,7 @@ export async function listVersionGroups(
   }
 
   return query
-    .groupBy([
-      "rules_version",
-      "sampler_version",
-      "card_digest",
-      "attribution_version",
-    ])
+    .groupBy(["rules_version", "sampler_version", "attribution_version"])
     .orderBy("runCount", "desc")
     .execute();
 }
@@ -96,7 +95,6 @@ export async function pooledDamageDistribution(
     .where("sim_type", "=", options.simType)
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
-    .where("card_digest", "=", options.version.cardDigest)
     .where("damage_histogram", "is not", null)
     .orderBy("started_at", "asc")
     .execute();
@@ -184,11 +182,80 @@ export async function pooledDamageDistribution(
   return {
     runCount: parsed.length,
     distribution,
-    runs: parsed.map((entry) => entry.sampleRun),
+    runs: trimRunsToRecentBarSamples(parsed.map((entry) => entry.sampleRun)),
     version: options.version,
     deckHash: options.deckHash,
     simType: options.simType,
   };
+}
+
+type PooledSampleRun = {
+  id: string;
+  startedAt: string;
+  samples: number | null;
+  meanDamage: number | null;
+  damages: number[];
+};
+
+function trimRunsToRecentBarSamples(runs: PooledSampleRun[]): Array<
+  Omit<PooledSampleRun, "damages"> & {
+    damages?: number[];
+    samplePoints?: Array<{ index: number; damage: number }>;
+  }
+> {
+  const flat: Array<{
+    runId: string;
+    sampleIndex: number;
+    damage: number;
+    meta: Omit<PooledSampleRun, "damages">;
+  }> = [];
+
+  for (const run of runs) {
+    const meta = {
+      id: run.id,
+      startedAt: run.startedAt,
+      samples: run.samples,
+      meanDamage: run.meanDamage,
+    };
+    for (let sampleIndex = 0; sampleIndex < run.damages.length; sampleIndex += 1) {
+      flat.push({
+        runId: run.id,
+        sampleIndex,
+        damage: run.damages[sampleIndex]!,
+        meta,
+      });
+    }
+  }
+
+  if (flat.length <= MAX_POOLED_SAMPLE_BARS) {
+    return runs;
+  }
+
+  const recent = flat.slice(-MAX_POOLED_SAMPLE_BARS);
+  const byRun = new Map<
+    string,
+  {
+    meta: Omit<PooledSampleRun, "damages">;
+    samplePoints: Array<{ index: number; damage: number }>;
+  }
+  >();
+
+  for (const entry of recent) {
+    let grouped = byRun.get(entry.runId);
+    if (!grouped) {
+      grouped = { meta: entry.meta, samplePoints: [] };
+      byRun.set(entry.runId, grouped);
+    }
+    grouped.samplePoints.push({
+      index: entry.sampleIndex,
+      damage: entry.damage,
+    });
+  }
+
+  return [...byRun.values()].map(({ meta, samplePoints }) => ({
+    ...meta,
+    samplePoints,
+  }));
 }
 
 export async function getPooledSample(
@@ -293,7 +360,6 @@ export async function pooledSampleHighlights(
     .where("sim_type", "=", options.simType)
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
-    .where("card_digest", "=", options.version.cardDigest)
     .orderBy("started_at", "asc")
     .execute();
 
@@ -465,7 +531,6 @@ export async function cardLeaderboard(
     .where("sim_type", "=", options.simType)
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
-    .where("card_digest", "=", options.version.cardDigest)
     .where("attribution_version", "=", options.attributionVersion)
     .executeTakeFirst();
 
@@ -490,7 +555,6 @@ export async function cardLeaderboard(
     .where("r.sim_type", "=", options.simType)
     .where("r.rules_version", "=", options.version.rulesVersion)
     .where("r.sampler_version", "=", options.version.samplerVersion)
-    .where("r.card_digest", "=", options.version.cardDigest)
     .where("r.attribution_version", "=", options.attributionVersion)
     .groupBy("cs.card_id")
     .orderBy(sql`sum(cs.damage) desc`)
@@ -505,13 +569,20 @@ export async function cardLeaderboard(
     .where("sim_type", "=", options.simType)
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
-    .where("card_digest", "=", options.version.cardDigest)
     .where("attribution_version", "=", options.attributionVersion)
     .executeTakeFirst();
 
   const totalSamples = sampleRow?.totalSamples ?? 0;
   const totalDamage = rows.reduce((sum, row) => sum + row.damage, 0);
   const runCount = runCountRow?.runCount ?? 0;
+
+  const evaluateSamples = await loadEvaluateSamples(db, {
+    deckHash: options.deckHash,
+    simType: options.simType,
+    version: options.version,
+    attributionVersion: options.attributionVersion,
+  });
+  const handLiftByCard = computeAllHandImpacts(evaluateSamples);
 
   return {
     runCount,
@@ -539,6 +610,7 @@ export async function cardLeaderboard(
         playWhenInHand: handAppearances > 0 ? row.plays / handAppearances : 0,
         damageWhenSeen: seen > 0 ? row.damageWhenSeenSum / seen : 0,
         damageShare: totalDamage > 0 ? row.damage / totalDamage : 0,
+        handLift: handLiftByCard.get(row.cardId)?.handLift ?? null,
       };
     }),
   };
@@ -546,9 +618,13 @@ export async function cardLeaderboard(
 
 export async function rankedCandidates(
   db: Kysely<Database>,
-  options: { version: VersionTriple },
+  options: {
+    version: VersionTriple;
+    deckId?: string;
+    deckHash?: string;
+  },
 ) {
-  const rows = await db
+  let query = db
     .selectFrom("run_candidates as c")
     .innerJoin("runs as r", "r.id", "c.run_id")
     .select([
@@ -562,8 +638,15 @@ export async function rankedCandidates(
     .where("r.status", "=", COMPLETE)
     .where("r.kind", "=", "optimize")
     .where("r.rules_version", "=", options.version.rulesVersion)
-    .where("r.sampler_version", "=", options.version.samplerVersion)
-    .where("r.card_digest", "=", options.version.cardDigest)
+    .where("r.sampler_version", "=", options.version.samplerVersion);
+
+  if (options.deckId) {
+    query = query.where("r.deck_id", "=", options.deckId);
+  } else if (options.deckHash) {
+    query = query.where("r.deck_hash", "=", options.deckHash);
+  }
+
+  const rows = await query
     .groupBy(["c.deck_hash", "c.counts"])
     .orderBy("wins", "desc")
     .orderBy("avgScore", "desc")

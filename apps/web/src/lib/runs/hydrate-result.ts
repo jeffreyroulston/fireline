@@ -43,15 +43,21 @@ export interface FetchRunResponse {
   candidates: RunCandidateRow[];
 }
 
-function cardStatFromRow(row: RunCardStatRow) {
+function cardStatFromRow(
+  row: RunCardStatRow,
+  samples: number,
+  totalDamage: number,
+) {
   const name = CARDS[row.card_id as CardId]?.name ?? row.card_id;
-  const openRate = row.opened;
-  const seeRate = row.seen;
-  const playRate = row.plays;
-  const playWhenInHand =
-    row.opened_copies + row.drawn > 0 ? row.plays / (row.opened_copies + row.drawn) : 0;
+  const sampleCount = Math.max(samples, 1);
+  const inHand = row.opened_copies + row.drawn;
+  const openRate = row.opened / sampleCount;
+  const seeRate = row.seen / sampleCount;
+  const playRate = row.plays / sampleCount;
+  const playWhenInHand = inHand > 0 ? row.plays / inHand : 0;
   const damageWhenSeen = row.seen > 0 ? row.damage_when_seen_sum / row.seen : 0;
   const damagePerPlay = row.plays > 0 ? row.damage / row.plays : 0;
+  const damageShare = totalDamage > 0 ? row.damage / totalDamage : 0;
   return {
     card: row.card_id,
     name,
@@ -70,7 +76,7 @@ function cardStatFromRow(row: RunCardStatRow) {
     playWhenInHand,
     damageWhenSeen,
     damagePerPlay,
-    damageShare: 0,
+    damageShare,
   };
 }
 
@@ -93,9 +99,11 @@ export function hydrateDeckResult(response: FetchRunResponse): DeckResult | null
       sampleId: sample.id,
     })),
   );
+  const sampleCount = run.samples ?? damages.length;
+  const totalDamage = cardStats.reduce((sum, row) => sum + row.damage, 0);
   return {
     simType: (run.sim_type as SimType | null) ?? undefined,
-    samples: run.samples ?? damages.length,
+    samples: sampleCount,
     damages,
     hands,
     mean: run.mean_damage ?? 0,
@@ -103,7 +111,9 @@ export function hydrateDeckResult(response: FetchRunResponse): DeckResult | null
     p90: run.p90_damage ?? 0,
     max: damages.length > 0 ? Math.max(...damages) : 0,
     min: damages.length > 0 ? Math.min(...damages) : 0,
-    cardStats: cardStats.map(cardStatFromRow),
+    cardStats: cardStats.map((row) =>
+      cardStatFromRow(row, sampleCount, totalDamage),
+    ),
   };
 }
 

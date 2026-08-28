@@ -93,23 +93,78 @@ export async function fetchDecks() {
   return response.json();
 }
 
-export async function createDeckOnApi(name: string, text: string) {
+export async function createDeckOnApi(
+  name: string,
+  text: string,
+  materialDeckId?: string,
+) {
   const response = await apiFetch("/decks", {
     method: "POST",
-    body: JSON.stringify({ name, text }),
+    body: JSON.stringify({ name, text, materialDeckId }),
   });
   return response.json();
 }
 
 export async function updateDeckOnApi(
   id: string,
-  patch: { name?: string; text?: string },
+  patch: { name?: string; text?: string; materialDeckId?: string },
 ) {
   const response = await apiFetch(`/decks/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      name: patch.name,
+      text: patch.text,
+      materialDeckId: patch.materialDeckId,
+    }),
+  });
+  return response.json();
+}
+
+export async function fetchMaterialDecks() {
+  const response = await apiFetch("/material-decks");
+  return response.json();
+}
+
+export async function createMaterialDeckOnApi(name: string, text: string) {
+  const response = await apiFetch("/material-decks", {
+    method: "POST",
+    body: JSON.stringify({ name, text }),
+  });
+  return response.json();
+}
+
+export async function updateMaterialDeckOnApi(
+  id: string,
+  patch: { name?: string },
+) {
+  const response = await apiFetch(`/material-decks/${id}`, {
     method: "PUT",
     body: JSON.stringify(patch),
   });
   return response.json();
+}
+
+export async function deleteMaterialDeckOnApi(id: string): Promise<void> {
+  const response = await fetch(`${API_PREFIX}/material-decks/${id}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    let parsed: { error?: string; linkedDecks?: Array<{ id: string; name: string; locked: boolean }> } = {};
+    try {
+      parsed = JSON.parse(body) as typeof parsed;
+    } catch {
+      // keep default
+    }
+    const error = new Error(
+      parsed.error ?? (body || `Request failed (${response.status})`),
+    ) as Error & {
+      linkedDecks?: Array<{ id: string; name: string; locked: boolean }>;
+    };
+    error.linkedDecks = parsed.linkedDecks;
+    throw error;
+  }
 }
 
 export async function deleteDeckOnApi(id: string): Promise<void> {
@@ -206,7 +261,6 @@ export interface RunHistoryRow {
 export interface VersionGroup {
   rulesVersion: number;
   samplerVersion: number;
-  cardDigest: string;
   attributionVersion: number | null;
   runCount: number;
 }
@@ -216,7 +270,8 @@ export interface PooledRunSamples {
   startedAt: string;
   samples: number | null;
   meanDamage: number | null;
-  damages: number[];
+  damages?: number[];
+  samplePoints?: Array<{ index: number; damage: number }>;
 }
 
 export interface PooledDamageResponse {
@@ -245,6 +300,7 @@ export interface CardLeaderboardResponse {
     playWhenInHand: number;
     damageWhenSeen: number;
     damageShare: number;
+    handLift: number | null;
   }>;
 }
 
@@ -263,6 +319,7 @@ export interface RankedCandidatesResponse {
   candidates: Array<{
     rank: number;
     deckHash: string;
+    counts: Record<string, number>;
     appearances: number;
     wins: number;
     avgScore: number;
@@ -316,7 +373,6 @@ export async function fetchPooledDamage(options: {
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
-  cardDigest: string;
 }) {
   const response = await apiFetch(
     `/analysis/pooled-damage${analysisQuery({
@@ -324,7 +380,6 @@ export async function fetchPooledDamage(options: {
       sim_type: options.simType,
       rules_version: options.rulesVersion,
       sampler_version: options.samplerVersion,
-      card_digest: options.cardDigest,
     })}`,
   );
   return response.json() as Promise<PooledDamageResponse>;
@@ -335,7 +390,6 @@ export async function fetchCardLeaderboard(options: {
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
-  cardDigest: string;
   attributionVersion: number;
   damageGt?: number;
   damageGte?: number;
@@ -348,7 +402,6 @@ export async function fetchCardLeaderboard(options: {
       sim_type: options.simType,
       rules_version: options.rulesVersion,
       sampler_version: options.samplerVersion,
-      card_digest: options.cardDigest,
       attribution_version: options.attributionVersion,
       damage_gt: options.damageGt,
       damage_gte: options.damageGte,
@@ -375,7 +428,6 @@ export async function fetchPooledSampleHighlights(options: {
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
-  cardDigest: string;
 }) {
   const response = await apiFetch(
     `/analysis/pooled-sample-highlights${analysisQuery({
@@ -383,7 +435,6 @@ export async function fetchPooledSampleHighlights(options: {
       sim_type: options.simType,
       rules_version: options.rulesVersion,
       sampler_version: options.samplerVersion,
-      card_digest: options.cardDigest,
     })}`,
   );
   return response.json() as Promise<PooledSampleHighlightsResponse>;
@@ -405,13 +456,15 @@ export async function fetchPooledSample(options: {
 export async function fetchRankedCandidates(options: {
   rulesVersion: number;
   samplerVersion: number;
-  cardDigest: string;
+  deckId?: string;
+  deckHash?: string;
 }) {
   const response = await apiFetch(
     `/analysis/candidates${analysisQuery({
       rules_version: options.rulesVersion,
       sampler_version: options.samplerVersion,
-      card_digest: options.cardDigest,
+      deck_id: options.deckId,
+      deck_hash: options.deckHash,
     })}`,
   );
   return response.json() as Promise<RankedCandidatesResponse>;
@@ -475,13 +528,11 @@ export type CardDatabaseResponse = {
   version: {
     rulesVersion: number;
     samplerVersion: number;
-    cardDigest: string;
   };
   attributionVersion: number;
   currentVersion: {
     rulesVersion: number;
     samplerVersion: number;
-    cardDigest: string;
   };
   currentAttributionVersion: number;
   totalRuns: number;
@@ -494,11 +545,9 @@ export async function fetchCardDatabase(options: {
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
-  cardDigest: string;
   attributionVersion: number;
   currentRulesVersion: number;
   currentSamplerVersion: number;
-  currentCardDigest: string;
   currentAttributionVersion: number;
   deckIds?: string[];
 }): Promise<CardDatabaseResponse> {
@@ -506,11 +555,9 @@ export async function fetchCardDatabase(options: {
     sim_type: options.simType,
     rules_version: String(options.rulesVersion),
     sampler_version: String(options.samplerVersion),
-    card_digest: options.cardDigest,
     attribution_version: String(options.attributionVersion),
     current_rules_version: String(options.currentRulesVersion),
     current_sampler_version: String(options.currentSamplerVersion),
-    current_card_digest: options.currentCardDigest,
     current_attribution_version: String(options.currentAttributionVersion),
   });
   for (const deckId of options.deckIds ?? []) {
@@ -544,7 +591,6 @@ export async function fetchCardDatabaseCardDecks(options: {
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
-  cardDigest: string;
   attributionVersion: number;
   deckIds?: string[];
 }): Promise<CardDatabaseCardDecksResponse> {
@@ -552,7 +598,6 @@ export async function fetchCardDatabaseCardDecks(options: {
     sim_type: options.simType,
     rules_version: String(options.rulesVersion),
     sampler_version: String(options.samplerVersion),
-    card_digest: options.cardDigest,
     attribution_version: String(options.attributionVersion),
   });
   for (const deckId of options.deckIds ?? []) {
@@ -584,7 +629,6 @@ export async function fetchCardDatabasePlayMatrix(options: {
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
-  cardDigest: string;
   attributionVersion: number;
   deckIds?: string[];
 }): Promise<CardPlayMatrixResponse> {
@@ -592,7 +636,6 @@ export async function fetchCardDatabasePlayMatrix(options: {
     sim_type: options.simType,
     rules_version: String(options.rulesVersion),
     sampler_version: String(options.samplerVersion),
-    card_digest: options.cardDigest,
     attribution_version: String(options.attributionVersion),
   });
   for (const deckId of options.deckIds ?? []) {
@@ -631,7 +674,6 @@ export async function fetchCardDatabasePairings(options: {
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
-  cardDigest: string;
   attributionVersion: number;
   deckIds?: string[];
 }): Promise<CardDatabasePairingsResponse> {
@@ -639,7 +681,6 @@ export async function fetchCardDatabasePairings(options: {
     sim_type: options.simType,
     rules_version: String(options.rulesVersion),
     sampler_version: String(options.samplerVersion),
-    card_digest: options.cardDigest,
     attribution_version: String(options.attributionVersion),
   });
   for (const deckId of options.deckIds ?? []) {

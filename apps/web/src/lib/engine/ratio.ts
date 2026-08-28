@@ -2,7 +2,7 @@ import type { CardId, OptimizeBounds } from "./types";
 import { PLAYABLE_CARD_IDS } from "./cards";
 
 /** Browser soft-cap for unique lists scored in one ratio run. */
-export const MAX_RATIO_DECK_ATTEMPTS = 500;
+export const MAX_RATIO_DECK_ATTEMPTS = 5000;
 
 /** Count legal decklists inside min/max bounds that sum to `deckSize`.
  *  Must stay aligned with Rust `count_legal_decks` in the engine crate. */

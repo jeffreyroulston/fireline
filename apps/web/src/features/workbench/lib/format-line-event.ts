@@ -85,6 +85,9 @@ export function formatLineEvent(
 
   switch (event.kind) {
     case "start":
+      if (event.drawn) {
+        return `Start of Game (draw ${short(event.drawn)})`;
+      }
       return "Start of Game";
     case "materializeHammer":
       return "Materialize Impact Hammer";
@@ -95,15 +98,42 @@ export function formatLineEvent(
     case "materializeBlade":
       return "Materialize Mercenary's Blade (prep)";
     case "floatForZander":
-      if (event.card) {
-        return `Mem Cost for Zander Lvl 1 (Float ${name(event.card)})`;
-      }
       if (event.fromMemory) {
         return "Mem Cost for Zander Lvl 1 (from Mem)";
       }
       return "Mem Cost for Zander Lvl 1 (Float from GY)";
     case "levelZander":
       return "Zander Lvl 1 Glimpse/Prep";
+    case "floatForZander2":
+      return event.fromMemory
+        ? "Mem Cost for Zander Lvl 2 (from Mem ×2)"
+        : "Mem Cost for Zander Lvl 2";
+    case "levelZander2":
+      return "Zander, Deft Executor (+2 prep)";
+    case "zanderGyReturn":
+      return `Zander return ${short(event.drawn)} from GY (−1 prep)`;
+    case "floatForTristan":
+      if (event.fromMemory) {
+        return "Mem Cost for Tristan Lvl 1 (from Mem)";
+      }
+      return "Mem Cost for Tristan Lvl 1 (Float from GY)";
+    case "levelTristan":
+      return "Tristan Lvl 1 Glimpse/Prep";
+    case "tristanRecollect": {
+      const parts: string[] = [];
+      if (event.card) parts.push(name(event.card));
+      if (event.drawn) parts.push(name(event.drawn));
+      if (event.discarded) parts.push(name(event.discarded));
+      if (parts.length === 0) return "Tristan Recollect (Agility 3)";
+      return `Tristan Recollect (Agility 3): ${parts.join(", ")}`;
+    }
+    case "glimpse": {
+      const parts: string[] = [];
+      if (event.card) parts.push(name(event.card));
+      if (event.drawn) parts.push(name(event.drawn));
+      if (parts.length === 0) return "Glimpse";
+      return `Glimpse ${parts.length} (${parts.join(", ")})`;
+    }
     case "materializeResolves":
       return "Materialization Resolves";
     case "play": {
@@ -177,7 +207,9 @@ export function formatLineEvent(
     case "sadiBounce":
       return "Sadi bounce for Prep";
     case "onDeath":
-      return `${name(event.card)} On Death`;
+      return event.drawn
+        ? `${name(event.card)} On Death draw (${short(event.drawn)})`
+        : `${name(event.card)} On Death`;
     case "uniqueDies":
       return `Unique: ${name(event.card)} dies`;
     case "sacrifice":
@@ -188,6 +220,8 @@ export function formatLineEvent(
         : `${name(event.card)} On-Enter damage`;
     case "onEnterDraw":
       return `Clumsy On-Enter draw (${short(event.drawn)})`;
+    case "onEnterLevel":
+      return `Flagrant Guide On-Enter level (self ${event.kindle ?? 6})`;
     case "immortalize":
       return "Immortalize the King";
     case "hotCakeSacrifice":

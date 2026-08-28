@@ -1,8 +1,23 @@
 import { sql, type Kysely } from "kysely";
 import type { Database } from "../db/types.js";
 import type { VersionTriple } from "../lib/version.js";
+import {
+  type CardHandImpact,
+  type EvaluateSample,
+  type WeightedDamage,
+  MIN_HAND_BUCKET_SAMPLES,
+  computeAllHandImpacts,
+  computeHandImpact,
+  deckCardSet,
+  loadEvaluateSamples,
+  openingHandSet,
+  weightedCount,
+  weightedMean,
+} from "../lib/hand-impact.js";
 import { isMaterialCardId } from "../db/card-seed.js";
 import { getCards, listDecksForCard, type CatalogCard } from "./card-catalog.js";
+
+export type { CardHandImpact } from "../lib/hand-impact.js";
 
 const COMPLETE = "complete" as const;
 
@@ -48,14 +63,6 @@ export type CardDatabaseDeckRow = {
   runCount: number;
   samples: number;
   damageWhenSeen: number | null;
-  withHandMean: number | null;
-  withoutHandMean: number | null;
-  handLift: number | null;
-  withHandSamples: number;
-  withoutHandSamples: number;
-};
-
-export type CardHandImpact = {
   withHandMean: number | null;
   withoutHandMean: number | null;
   handLift: number | null;
@@ -172,7 +179,6 @@ export async function cardDatabase(
     .where("r.sim_type", "=", options.simType)
     .where("r.rules_version", "=", options.currentVersion.rulesVersion)
     .where("r.sampler_version", "=", options.currentVersion.samplerVersion)
-    .where("r.card_digest", "=", options.currentVersion.cardDigest)
     .where("r.attribution_version", "=", options.currentAttributionVersion)
     .groupBy(["r.deck_id", "d.name"])
     .orderBy(sql`sum(coalesce(r.samples, 0))`, "desc")
@@ -224,7 +230,6 @@ export async function cardDatabase(
       .where("r.sim_type", "=", options.simType)
       .where("r.rules_version", "=", options.version.rulesVersion)
       .where("r.sampler_version", "=", options.version.samplerVersion)
-      .where("r.card_digest", "=", options.version.cardDigest)
       .where("r.attribution_version", "=", options.attributionVersion)
       .groupBy("cs.card_id");
 
@@ -269,7 +274,6 @@ export async function cardDatabase(
         eb.or([
           eb("r.rules_version", "<>", options.currentVersion.rulesVersion),
           eb("r.sampler_version", "<>", options.currentVersion.samplerVersion),
-          eb("r.card_digest", "<>", options.currentVersion.cardDigest),
           eb(
             "r.attribution_version",
             "<>",
@@ -294,7 +298,6 @@ export async function cardDatabase(
       .where("sim_type", "=", options.simType)
       .where("rules_version", "=", options.version.rulesVersion)
       .where("sampler_version", "=", options.version.samplerVersion)
-      .where("card_digest", "=", options.version.cardDigest)
       .where("attribution_version", "=", options.attributionVersion);
 
     let samplesQuery = db
@@ -306,7 +309,6 @@ export async function cardDatabase(
       .where("sim_type", "=", options.simType)
       .where("rules_version", "=", options.version.rulesVersion)
       .where("sampler_version", "=", options.version.samplerVersion)
-      .where("card_digest", "=", options.version.cardDigest)
       .where("attribution_version", "=", options.attributionVersion);
 
     if (deckIds && deckIds.length > 0) {
@@ -389,7 +391,6 @@ async function evaluateDecksForCard(
     .where("r.sim_type", "=", options.simType)
     .where("r.rules_version", "=", options.version.rulesVersion)
     .where("r.sampler_version", "=", options.version.samplerVersion)
-    .where("r.card_digest", "=", options.version.cardDigest)
     .where("r.attribution_version", "=", options.attributionVersion)
     .groupBy(["r.deck_id", "d.name"])
     .orderBy(sql`sum(coalesce(r.samples, 0))`, "desc");
@@ -481,6 +482,8 @@ const MATERIAL_PLAY_KINDS: Record<string, string[]> = {
   varuckan_soulknife: ["materializeSoulknife"],
   mercenary_blade: ["materializeBlade"],
   zander_1: ["floatForZander", "levelZander"],
+  zander_2: ["onEnterLevel", "levelZander2", "zanderGyReturn"],
+  tristan_1: ["floatForTristan", "levelTristan", "tristanRecollect"],
 };
 
 export type CardPlayMatrixCell = {
@@ -524,7 +527,6 @@ export async function cardDatabasePlayMatrix(
     .where("r.sim_type", "=", options.simType)
     .where("r.rules_version", "=", options.version.rulesVersion)
     .where("r.sampler_version", "=", options.version.samplerVersion)
-    .where("r.card_digest", "=", options.version.cardDigest)
     .where("r.attribution_version", "=", options.attributionVersion);
 
   if (options.deckIds && options.deckIds.length > 0) {
@@ -552,7 +554,6 @@ export async function cardDatabasePlayMatrix(
     .where("r.sim_type", "=", options.simType)
     .where("r.rules_version", "=", options.version.rulesVersion)
     .where("r.sampler_version", "=", options.version.samplerVersion)
-    .where("r.card_digest", "=", options.version.cardDigest)
     .where("r.attribution_version", "=", options.attributionVersion)
     .groupBy([
       sql`(e.payload->>'turn')::int`,
@@ -586,189 +587,6 @@ export async function cardDatabasePlayMatrix(
   }));
 
   return { totalPlays, totalSamples, cells };
-}
-
-const MIN_HAND_BUCKET_SAMPLES = 5;
-
-type WeightedDamage = { damage: number; weight: number };
-
-type EvaluateSample = {
-  hand: Set<string>;
-  damage: number;
-  weight: number;
-  deckCards: Set<string>;
-  deckId: string | null;
-};
-
-function deckCardSet(counts: Record<string, number>): Set<string> {
-  const set = new Set<string>();
-  for (const [cardId, copies] of Object.entries(counts)) {
-    if (typeof copies === "number" && copies > 0) {
-      set.add(cardId);
-    }
-  }
-  return set;
-}
-
-function weightedMean(entries: WeightedDamage[]): number | null {
-  if (entries.length === 0) {
-    return null;
-  }
-  let totalWeight = 0;
-  let totalDamage = 0;
-  for (const entry of entries) {
-    totalWeight += entry.weight;
-    totalDamage += entry.damage * entry.weight;
-  }
-  if (totalWeight <= 0) {
-    return null;
-  }
-  return totalDamage / totalWeight;
-}
-
-function weightedCount(entries: WeightedDamage[]): number {
-  return entries.reduce((sum, entry) => sum + entry.weight, 0);
-}
-
-function openingHandSet(cardIds: string[]): Set<string> {
-  return new Set(cardIds);
-}
-
-async function loadEvaluateSamples(
-  db: Kysely<Database>,
-  options: {
-    simType: string;
-    version: VersionTriple;
-    attributionVersion: number;
-    deckIds?: string[];
-  },
-): Promise<EvaluateSample[]> {
-  if (options.deckIds !== undefined && options.deckIds.length === 0) {
-    return [];
-  }
-
-  let query = db
-    .selectFrom("run_samples as rs")
-    .innerJoin("runs as r", "r.id", "rs.run_id")
-    .select([
-      "rs.card_ids as cardIds",
-      "rs.damage as damage",
-      "rs.occurrence_count as occurrenceCount",
-      "r.deck_counts as deckCounts",
-      "r.deck_id as deckId",
-    ])
-    .where("r.status", "=", COMPLETE)
-    .where("r.kind", "=", "evaluate")
-    .where("r.deck_id", "is not", null)
-    .where("r.sim_type", "=", options.simType)
-    .where("r.rules_version", "=", options.version.rulesVersion)
-    .where("r.sampler_version", "=", options.version.samplerVersion)
-    .where("r.card_digest", "=", options.version.cardDigest)
-    .where("r.attribution_version", "=", options.attributionVersion);
-
-  if (options.deckIds && options.deckIds.length > 0) {
-    query = query.where("r.deck_id", "in", options.deckIds);
-  }
-
-  const rows = await query.execute();
-  return rows.map((row) => ({
-    hand: openingHandSet(row.cardIds),
-    damage: row.damage,
-    weight: row.occurrenceCount,
-    deckCards: deckCardSet(row.deckCounts ?? {}),
-    deckId: row.deckId,
-  }));
-}
-
-function finalizeHandImpact(
-  withHand: WeightedDamage[],
-  withoutHand: WeightedDamage[],
-): CardHandImpact {
-  const withHandSamples = weightedCount(withHand);
-  const withoutHandSamples = weightedCount(withoutHand);
-  let withHandMean: number | null = null;
-  let withoutHandMean: number | null = null;
-  let handLift: number | null = null;
-
-  if (
-    withHandSamples >= MIN_HAND_BUCKET_SAMPLES &&
-    withoutHandSamples >= MIN_HAND_BUCKET_SAMPLES
-  ) {
-    withHandMean = weightedMean(withHand);
-    withoutHandMean = weightedMean(withoutHand);
-    if (withHandMean != null && withoutHandMean != null) {
-      handLift = withHandMean - withoutHandMean;
-    }
-  }
-
-  return {
-    withHandMean,
-    withoutHandMean,
-    handLift,
-    withHandSamples,
-    withoutHandSamples,
-  };
-}
-
-function computeHandImpact(
-  samples: EvaluateSample[],
-  cardId: string,
-  deckId?: string,
-): CardHandImpact {
-  const withHand: WeightedDamage[] = [];
-  const withoutHand: WeightedDamage[] = [];
-
-  for (const sample of samples) {
-    if (deckId != null && sample.deckId !== deckId) {
-      continue;
-    }
-    if (!sample.deckCards.has(cardId)) {
-      continue;
-    }
-    const entry = { damage: sample.damage, weight: sample.weight };
-    if (sample.hand.has(cardId)) {
-      withHand.push(entry);
-    } else {
-      withoutHand.push(entry);
-    }
-  }
-
-  return finalizeHandImpact(withHand, withoutHand);
-}
-
-function computeAllHandImpacts(
-  samples: EvaluateSample[],
-): Map<string, CardHandImpact> {
-  const withBuckets = new Map<string, WeightedDamage[]>();
-  const withoutBuckets = new Map<string, WeightedDamage[]>();
-
-  for (const sample of samples) {
-    const entry = { damage: sample.damage, weight: sample.weight };
-    for (const cardId of sample.deckCards) {
-      if (sample.hand.has(cardId)) {
-        const bucket = withBuckets.get(cardId) ?? [];
-        bucket.push(entry);
-        withBuckets.set(cardId, bucket);
-      } else {
-        const bucket = withoutBuckets.get(cardId) ?? [];
-        bucket.push(entry);
-        withoutBuckets.set(cardId, bucket);
-      }
-    }
-  }
-
-  const impacts = new Map<string, CardHandImpact>();
-  const cardIds = new Set([...withBuckets.keys(), ...withoutBuckets.keys()]);
-  for (const cardId of cardIds) {
-    impacts.set(
-      cardId,
-      finalizeHandImpact(
-        withBuckets.get(cardId) ?? [],
-        withoutBuckets.get(cardId) ?? [],
-      ),
-    );
-  }
-  return impacts;
 }
 
 export type CardDatabasePairingRow = {
@@ -834,7 +652,6 @@ export async function cardDatabasePairings(
     .where("r.sim_type", "=", options.simType)
     .where("r.rules_version", "=", options.version.rulesVersion)
     .where("r.sampler_version", "=", options.version.samplerVersion)
-    .where("r.card_digest", "=", options.version.cardDigest)
     .where("r.attribution_version", "=", options.attributionVersion);
 
   if (options.deckIds && options.deckIds.length > 0) {
@@ -862,6 +679,8 @@ export async function cardDatabasePairings(
   }));
 
   const selectedId = options.cardId;
+  const handImpacts = computeAllHandImpacts(samples);
+  const selectedHandLift = handImpacts.get(selectedId)?.handLift ?? null;
   const partners = new Set<string>();
   for (const sample of samples) {
     for (const cardId of sample.hand) {
@@ -910,14 +729,24 @@ export async function cardDatabasePairings(
       continue;
     }
 
+    const partnerHandLift = handImpacts.get(partnerId)?.handLift ?? null;
+    let pairsWithMeDelta = bothMean - selectedWithoutPartnerMean;
+    let dependsOnMeDelta = bothMean - partnerWithoutSelectedMean;
+    if (partnerHandLift != null) {
+      pairsWithMeDelta -= partnerHandLift;
+    }
+    if (selectedHandLift != null) {
+      dependsOnMeDelta -= selectedHandLift;
+    }
+
     rows.push({
       cardId: partnerId,
       name: nameById.get(partnerId) ?? partnerId,
       bothMean,
       selectedWithoutPartnerMean,
       partnerWithoutSelectedMean,
-      pairsWithMeDelta: bothMean - selectedWithoutPartnerMean,
-      dependsOnMeDelta: bothMean - partnerWithoutSelectedMean,
+      pairsWithMeDelta,
+      dependsOnMeDelta,
       bothCount: weightedCount(both),
       selectedWithoutPartnerCount: weightedCount(selectedWithoutPartner),
       partnerWithoutSelectedCount: weightedCount(partnerWithoutSelected),

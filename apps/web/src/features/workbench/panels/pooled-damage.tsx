@@ -196,6 +196,7 @@ export function PooledDamagePanel({
   baselineLegend,
   compareLegend,
   bars,
+  totalSampleBars,
   simType,
   cardHighlights,
   liveHands,
@@ -212,6 +213,7 @@ export function PooledDamagePanel({
   baselineLegend?: string;
   compareLegend?: string;
   bars: PooledSampleBar[];
+  totalSampleBars?: number;
   simType: SimType;
   cardHighlights?: Record<string, BarCardHighlight>;
   liveHands?: SampleHand[];
@@ -443,6 +445,7 @@ export function PooledDamagePanel({
         {!comparing && (
           <PooledDamageBarChart
             bars={bars}
+            totalSamples={totalSampleBars}
             sampleMax={sampleMax}
             selectedKey={selectedKey}
             onSelectedKeyChange={setSelectedKey}

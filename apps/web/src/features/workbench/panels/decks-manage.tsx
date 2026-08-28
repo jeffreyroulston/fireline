@@ -5,11 +5,17 @@ import type { SavedDeck } from "@/lib/decks";
 import { isDeckCardlistLocked } from "@/lib/decks";
 import {
   CARDS,
-  DEFAULT_MATERIALS,
   MATERIAL_NAMES,
   MIN_VALID_DECK_SIZE,
+  analyzeMaterialDecklist,
   isMaterialId,
 } from "@/lib/engine";
+import type { SavedMaterialDeck } from "@/lib/material-decks";
+import {
+  DEFAULT_MATERIAL_DECK_TEXT,
+  isMaterialDeckDeletable,
+  nextMaterialDeckName,
+} from "@/lib/material-decks";
 import type { CardDef, CardId, MaterialId } from "@/lib/engine/types";
 import {
   useCallback,
@@ -271,36 +277,38 @@ function DeckCardFace({ id, qty }: { id: CardId | MaterialId; qty: number }) {
   );
 }
 
-function DeckCardGrid({ cards }: { cards: CardId[] }) {
+function MainDeckCardGrid({ cards }: { cards: CardId[] }) {
   const entries = tallyCards(cards);
+  if (entries.length === 0) return null;
 
   return (
-    <>
-      {entries.length > 0 && (
-        <div className="deck-card-panel">
-          <SectionHeading
-            title="CARD LIST"
-            meta={<strong>{entries.length} unique</strong>}
-          />
-          <div className="deck-card-grid" aria-label="Deck card images">
-            {entries.map(({ id, qty }) => (
-              <DeckCardFace key={id} id={id} qty={qty} />
-            ))}
-          </div>
-        </div>
-      )}
-      <div className="deck-card-panel">
-        <SectionHeading
-          title="MATERIAL DECK"
-          meta={<strong>{DEFAULT_MATERIALS.length} cards</strong>}
-        />
-        <div className="deck-card-grid" aria-label="Material deck card images">
-          {DEFAULT_MATERIALS.map((id) => (
-            <DeckCardFace key={id} id={id} qty={1} />
-          ))}
-        </div>
+    <div className="deck-card-panel">
+      <SectionHeading
+        title="CARD LIST"
+        meta={<strong>{entries.length} unique</strong>}
+      />
+      <div className="deck-card-grid" aria-label="Deck card images">
+        {entries.map(({ id, qty }) => (
+          <DeckCardFace key={id} id={id} qty={qty} />
+        ))}
       </div>
-    </>
+    </div>
+  );
+}
+
+function MaterialDeckCardGrid({ materialCards }: { materialCards: MaterialId[] }) {
+  return (
+    <div className="deck-card-panel">
+      <SectionHeading
+        title="MATERIAL DECK"
+        meta={<strong>{materialCards.length} cards</strong>}
+      />
+      <div className="deck-card-grid" aria-label="Material deck card images">
+        {materialCards.map((id) => (
+          <DeckCardFace key={id} id={id} qty={1} />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -313,6 +321,11 @@ export function DecksManage({
   unrecognizedLines,
   isRenamingDeck,
   renameDraft,
+  materialDecks,
+  activeMaterialDeck,
+  materialCards,
+  isRenamingMaterialDeck,
+  materialRenameDraft,
   onSwitchDeck,
   onCreateDeck,
   onDuplicateDeck,
@@ -322,6 +335,13 @@ export function DecksManage({
   onCommitRename,
   onCancelRename,
   onDeckTextChange,
+  onAssignMaterialDeck,
+  onCreateMaterialDeck,
+  onStartMaterialRename,
+  onDeleteMaterialDeck,
+  onMaterialRenameDraftChange,
+  onCommitMaterialRename,
+  onCancelMaterialRename,
   decksLoading = false,
 }: {
   decks: SavedDeck[];
@@ -332,6 +352,11 @@ export function DecksManage({
   unrecognizedLines: string[];
   isRenamingDeck: boolean;
   renameDraft: string;
+  materialDecks: SavedMaterialDeck[];
+  activeMaterialDeck: SavedMaterialDeck | null;
+  materialCards: MaterialId[];
+  isRenamingMaterialDeck: boolean;
+  materialRenameDraft: string;
   onSwitchDeck: (deckId: string) => void;
   onCreateDeck: () => void;
   onDuplicateDeck: () => void;
@@ -341,9 +366,25 @@ export function DecksManage({
   onCommitRename: () => void;
   onCancelRename: () => void;
   onDeckTextChange: (text: string) => void;
+  onAssignMaterialDeck: (materialDeckId: string) => void;
+  onCreateMaterialDeck: (name: string, text: string) => Promise<SavedMaterialDeck | null>;
+  onStartMaterialRename: () => void;
+  onDeleteMaterialDeck: (deck: SavedMaterialDeck) => void;
+  onMaterialRenameDraftChange: (value: string) => void;
+  onCommitMaterialRename: () => void;
+  onCancelMaterialRename: () => void;
   decksLoading?: boolean;
 }) {
   const locked = activeDeck ? isDeckCardlistLocked(activeDeck) : false;
+  const [materialDraftMode, setMaterialDraftMode] = useState<
+    null | "create" | "duplicate"
+  >(null);
+  const [materialDraftName, setMaterialDraftName] = useState("");
+  const [materialDraftText, setMaterialDraftText] = useState(
+    DEFAULT_MATERIAL_DECK_TEXT,
+  );
+
+  const materialDraftAnalysis = analyzeMaterialDecklist(materialDraftText);
   const underSize = recognizedDeckCount < MIN_VALID_DECK_SIZE;
   const issues: string[] = [];
   if (underSize) {
@@ -353,6 +394,16 @@ export function DecksManage({
   }
   for (const line of unrecognizedLines) {
     issues.push(`Unrecognized card: ${line}`);
+  }
+
+  async function saveMaterialDraft() {
+    const saved = await onCreateMaterialDeck(
+      materialDraftName.trim() || nextMaterialDeckName(materialDecks),
+      materialDraftText,
+    );
+    if (saved) {
+      setMaterialDraftMode(null);
+    }
   }
 
   return (
@@ -472,7 +523,165 @@ export function DecksManage({
             </ul>
           </div>
         )}
-        <DeckCardGrid cards={deckCards} />
+
+        <MainDeckCardGrid cards={deckCards} />
+
+        {!locked && (
+          <div className="deck-material-section">
+            <SectionHeading
+              title="MATERIAL DECKS"
+              meta={<strong>{`${materialCards.length} active`}</strong>}
+            />
+            <div className="deck-toolbar">
+              <label className="deck-picker">
+                Material deck for this list
+                <select
+                  value={
+                    activeMaterialDeck?.id ?? activeDeck?.materialDeckId ?? ""
+                  }
+                  onChange={(event) => onAssignMaterialDeck(event.target.value)}
+                  disabled={materialDecks.length === 0}
+                >
+                  {materialDecks.map((deck) => (
+                    <option key={deck.id} value={deck.id}>
+                      {deck.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="deck-toolbar-actions">
+                <button
+                  className="secondary-action"
+                  type="button"
+                  onClick={() => {
+                    setMaterialDraftMode("create");
+                    setMaterialDraftName(nextMaterialDeckName(materialDecks));
+                    setMaterialDraftText(DEFAULT_MATERIAL_DECK_TEXT);
+                  }}
+                >
+                  New material deck
+                </button>
+                <button
+                  className="text-action"
+                  type="button"
+                  disabled={!activeMaterialDeck}
+                  onClick={() => {
+                    if (!activeMaterialDeck) return;
+                    setMaterialDraftMode("duplicate");
+                    setMaterialDraftName(
+                      nextMaterialDeckName(
+                        materialDecks,
+                        `${activeMaterialDeck.name} copy`,
+                      ),
+                    );
+                    setMaterialDraftText(activeMaterialDeck.text);
+                  }}
+                >
+                  Duplicate
+                </button>
+                <button
+                  className="text-action"
+                  type="button"
+                  disabled={!activeMaterialDeck}
+                  onClick={onStartMaterialRename}
+                >
+                  Rename
+                </button>
+                <button
+                  className="text-action is-danger"
+                  type="button"
+                  disabled={
+                    !activeMaterialDeck ||
+                    !isMaterialDeckDeletable(activeMaterialDeck)
+                  }
+                  onClick={() => {
+                    if (activeMaterialDeck) {
+                      onDeleteMaterialDeck(activeMaterialDeck);
+                    }
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+            {isRenamingMaterialDeck && activeMaterialDeck && (
+              <form
+                className="deck-rename-row"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  onCommitMaterialRename();
+                }}
+              >
+                <label>
+                  Material deck name
+                  <input
+                    autoFocus
+                    value={materialRenameDraft}
+                    onChange={(event) =>
+                      onMaterialRenameDraftChange(event.target.value)
+                    }
+                  />
+                </label>
+                <button className="secondary-action" type="submit">
+                  Save name
+                </button>
+                <button
+                  className="text-action"
+                  type="button"
+                  onClick={onCancelMaterialRename}
+                >
+                  Cancel
+                </button>
+              </form>
+            )}
+            {materialDraftMode && (
+              <div className="deck-input">
+                <label>
+                  Material deck name
+                  <input
+                    value={materialDraftName}
+                    onChange={(event) => setMaterialDraftName(event.target.value)}
+                  />
+                </label>
+                <label>
+                  One material card per line, with quantity
+                  <textarea
+                    value={materialDraftText}
+                    onChange={(event) => setMaterialDraftText(event.target.value)}
+                    spellCheck={false}
+                  />
+                </label>
+                {materialDraftAnalysis.issues.length > 0 && (
+                  <div className="deck-issues" role="alert">
+                    <ul>
+                      {materialDraftAnalysis.issues.map((issue, index) => (
+                        <li key={`${issue}-${index}`}>{issue}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div className="deck-toolbar-actions">
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    disabled={materialDraftAnalysis.recognizedCount === 0}
+                    onClick={() => void saveMaterialDraft()}
+                  >
+                    Save material deck
+                  </button>
+                  <button
+                    className="text-action"
+                    type="button"
+                    onClick={() => setMaterialDraftMode(null)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        <MaterialDeckCardGrid materialCards={materialCards} />
       </div>
     </div>
   );

@@ -21,7 +21,9 @@ pub enum ActionOp {
     MaterializeHammer,
     MaterializeDagger,
     MaterializeZanderMemory,
-    MaterializeZanderFloat,
+    MaterializeTristanMemory,
+    TristanRecollect,
+    SkipAgility,
     MaterializeSoulknife,
     ActivateDagger,
     ActivateSadi,
@@ -43,8 +45,10 @@ impl ActionOp {
             Action::SkipMaterialize => Self::SkipMaterialize,
             Action::MaterializeHammer => Self::MaterializeHammer,
             Action::MaterializeDagger => Self::MaterializeDagger,
-            Action::MaterializeZanderMemory => Self::MaterializeZanderMemory,
-            Action::MaterializeZanderFloat(_) => Self::MaterializeZanderFloat,
+            Action::MaterializeZanderMemory { .. } => Self::MaterializeZanderMemory,
+            Action::MaterializeTristanMemory { .. } => Self::MaterializeTristanMemory,
+            Action::TristanRecollect => Self::TristanRecollect,
+            Action::SkipAgility => Self::SkipAgility,
             Action::MaterializeSoulknife => Self::MaterializeSoulknife,
             Action::ActivateDagger => Self::ActivateDagger,
             Action::ActivateSadi(_) => Self::ActivateSadi,
@@ -68,7 +72,9 @@ impl ActionOp {
             Self::MaterializeHammer => "materializeHammer",
             Self::MaterializeDagger => "materializeDagger",
             Self::MaterializeZanderMemory => "materializeZanderMemory",
-            Self::MaterializeZanderFloat => "materializeZanderFloat",
+            Self::MaterializeTristanMemory => "materializeTristanMemory",
+            Self::TristanRecollect => "tristanRecollect",
+            Self::SkipAgility => "skipAgility",
             Self::MaterializeSoulknife => "materializeSoulknife",
             Self::ActivateDagger => "activateDagger",
             Self::ActivateSadi => "activateSadi",
@@ -99,7 +105,14 @@ pub enum EventKind {
     MaterializeSoulknife,
     MaterializeBlade,
     FloatForZander,
+    FloatForZander2,
     LevelZander,
+    LevelZander2,
+    ZanderGyReturn,
+    FloatForTristan,
+    LevelTristan,
+    TristanRecollect,
+    Glimpse,
     MaterializeResolves,
     Play,
     ActivateDagger,
@@ -109,6 +122,7 @@ pub enum EventKind {
     Sacrifice,
     OnEnterDamage,
     OnEnterDraw,
+    OnEnterLevel,
     Immortalize,
     HotCakeSacrifice,
     ChefBuff,
@@ -136,7 +150,14 @@ impl EventKind {
             Self::MaterializeSoulknife => "materializeSoulknife",
             Self::MaterializeBlade => "materializeBlade",
             Self::FloatForZander => "floatForZander",
+            Self::FloatForZander2 => "floatForZander2",
             Self::LevelZander => "levelZander",
+            Self::LevelZander2 => "levelZander2",
+            Self::ZanderGyReturn => "zanderGyReturn",
+            Self::FloatForTristan => "floatForTristan",
+            Self::LevelTristan => "levelTristan",
+            Self::TristanRecollect => "tristanRecollect",
+            Self::Glimpse => "glimpse",
             Self::MaterializeResolves => "materializeResolves",
             Self::Play => "play",
             Self::ActivateDagger => "activateDagger",
@@ -146,6 +167,7 @@ impl EventKind {
             Self::Sacrifice => "sacrifice",
             Self::OnEnterDamage => "onEnterDamage",
             Self::OnEnterDraw => "onEnterDraw",
+            Self::OnEnterLevel => "onEnterLevel",
             Self::Immortalize => "immortalize",
             Self::HotCakeSacrifice => "hotCakeSacrifice",
             Self::ChefBuff => "chefBuff",
@@ -270,7 +292,7 @@ pub struct LineEvent {
     /// Rending Flames doubled, etc.
     #[serde(default, skip_serializing_if = "is_false")]
     pub doubled: bool,
-    /// Zander float paid from memory (vs GY) when no ally card is floated.
+    /// Zander memory cost paid from the memory zone (vs floating memory in GY).
     #[serde(default, skip_serializing_if = "is_false")]
     pub from_memory: bool,
     /// GY-threshold / human-class style flags for formatter.
@@ -428,14 +450,33 @@ impl EventTape {
         }
     }
 
-    pub fn push_start(&mut self, state: State) {
+    pub fn push_start(&mut self, state: State, opening_draw: Option<Card>) {
         self.op = ActionOp::Start;
         self.action_index = 0;
-        self.push(
-            state,
-            TapePhase::Main,
-            EventKind::Start,
-            EventFields::default(),
+        let fields = match opening_draw {
+            Some(drawn) => EventFields::default().with_drawn(drawn),
+            None => EventFields::default(),
+        };
+        self.push(state, TapePhase::Main, EventKind::Start, fields);
+    }
+}
+
+/// Record On Death effects after an ally is sent to the graveyard.
+pub fn push_ally_gy_death(
+    state: &mut State,
+    card: Card,
+    phase: TapePhase,
+    tape: &mut EventTape,
+) {
+    if card.on_death_damage() > 0 {
+        tape.push(*state, phase, EventKind::OnDeath, EventFields::card(card));
+    } else if card.on_death_draw() {
+        let drawn = state.draw_unknown();
+        tape.push(
+            *state,
+            phase,
+            EventKind::OnDeath,
+            EventFields::card(card).with_drawn(drawn),
         );
     }
 }
@@ -574,7 +615,13 @@ pub fn format_line_event(event: &LineEvent) -> String {
     };
 
     let mut label = match event.kind {
-        EventKind::Start => "Start of Game".to_string(),
+        EventKind::Start => {
+            if let Some(drawn) = event.drawn {
+                format!("Start of Game (draw {})", short(Some(drawn)))
+            } else {
+                "Start of Game".to_string()
+            }
+        }
         EventKind::MaterializeHammer => "Materialize Impact Hammer".to_string(),
         EventKind::MaterializeDagger => "Materialize Poisoned Dagger".to_string(),
         EventKind::MaterializeSoulknife => {
@@ -582,15 +629,65 @@ pub fn format_line_event(event: &LineEvent) -> String {
         }
         EventKind::MaterializeBlade => "Materialize Mercenary's Blade (prep)".to_string(),
         EventKind::FloatForZander => {
-            if let Some(card) = event.card {
-                format!("Mem Cost for Zander Lvl 1 (Float {})", name(Some(card)))
-            } else if event.from_memory {
+            if event.from_memory {
                 "Mem Cost for Zander Lvl 1 (from Mem)".to_string()
             } else {
                 "Mem Cost for Zander Lvl 1 (Float from GY)".to_string()
             }
         }
         EventKind::LevelZander => "Zander Lvl 1 Glimpse/Prep".to_string(),
+        EventKind::FloatForZander2 => {
+            if event.from_memory {
+                "Mem Cost for Zander Lvl 2 (from Mem ×2)".to_string()
+            } else {
+                "Mem Cost for Zander Lvl 2".to_string()
+            }
+        }
+        EventKind::LevelZander2 => "Zander, Deft Executor (+2 prep)".to_string(),
+        EventKind::ZanderGyReturn => format!(
+            "Zander return {} from GY (−1 prep)",
+            short(event.drawn)
+        ),
+        EventKind::FloatForTristan => {
+            if event.from_memory {
+                "Mem Cost for Tristan Lvl 1 (from Mem)".to_string()
+            } else {
+                "Mem Cost for Tristan Lvl 1 (Float from GY)".to_string()
+            }
+        }
+        EventKind::LevelTristan => "Tristan Lvl 1 Glimpse/Prep".to_string(),
+        EventKind::TristanRecollect => {
+            let mut parts = Vec::new();
+            if let Some(id) = event.card {
+                parts.push(short(Some(id)));
+            }
+            if let Some(id) = event.drawn {
+                parts.push(short(Some(id)));
+            }
+            if let Some(id) = event.discarded {
+                parts.push(short(Some(id)));
+            }
+            if parts.is_empty() {
+                "Tristan Recollect (Agility 3)".to_string()
+            } else {
+                format!("Tristan Recollect (Agility 3): {}", parts.join(", "))
+            }
+        }
+        EventKind::Glimpse => {
+            let n = usize::from(event.card.is_some()) + usize::from(event.drawn.is_some());
+            let mut parts = Vec::new();
+            if let Some(id) = event.card {
+                parts.push(short(Some(id)));
+            }
+            if let Some(id) = event.drawn {
+                parts.push(short(Some(id)));
+            }
+            if n == 0 {
+                "Glimpse".to_string()
+            } else {
+                format!("Glimpse {} ({})", n, parts.join(", "))
+            }
+        }
         EventKind::MaterializeResolves => "Materialization Resolves".to_string(),
         EventKind::Play => {
             let card_name = name(event.card);
@@ -686,7 +783,17 @@ pub fn format_line_event(event: &LineEvent) -> String {
         }
         EventKind::ActivateDagger => "Activate Poisoned Dagger".to_string(),
         EventKind::SadiBounce => "Sadi bounce for Prep".to_string(),
-        EventKind::OnDeath => format!("{} On Death", name(event.card)),
+        EventKind::OnDeath => {
+            if event.drawn.is_some() {
+                format!(
+                    "{} On Death draw ({})",
+                    name(event.card),
+                    short(event.drawn)
+                )
+            } else {
+                format!("{} On Death", name(event.card))
+            }
+        }
         EventKind::UniqueDies => format!("Unique: {} dies", name(event.card)),
         EventKind::Sacrifice => "Peppered Chef sacrifice".to_string(),
         EventKind::OnEnterDamage => {
@@ -698,6 +805,12 @@ pub fn format_line_event(event: &LineEvent) -> String {
         }
         EventKind::OnEnterDraw => {
             format!("Clumsy On-Enter draw ({})", short(event.drawn))
+        }
+        EventKind::OnEnterLevel => {
+            let self_dmg = event.kindle.unwrap_or(6);
+            format!(
+                "Flagrant Guide On-Enter level (self {self_dmg})",
+            )
         }
         EventKind::Immortalize => "Immortalize the King".to_string(),
         EventKind::HotCakeSacrifice => "Hot Cake sacrifice (+3 next attack)".to_string(),

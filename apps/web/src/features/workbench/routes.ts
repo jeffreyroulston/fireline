@@ -21,7 +21,7 @@ export const QUERY_KEYS_BY_TAB: Record<Tab, readonly string[]> = {
   deck: ["run"],
   ratios: ["run"],
   cards: ["sim", "kind", "card", "deck"],
-  history: ["sim", "vg", "card"],
+  history: ["sim", "vg", "ovg", "card"],
   info: [],
 };
 
@@ -123,6 +123,7 @@ export function historyQueryPatch(
   patch: {
     sim?: SimType;
     vg?: string;
+    ovg?: string;
     card?: string | null;
   },
 ): URLSearchParams {
@@ -141,6 +142,14 @@ export function historyQueryPatch(
       next.set("vg", patch.vg);
     } else {
       next.delete("vg");
+    }
+  }
+
+  if (patch.ovg !== undefined) {
+    if (patch.ovg) {
+      next.set("ovg", patch.ovg);
+    } else {
+      next.delete("ovg");
     }
   }
 

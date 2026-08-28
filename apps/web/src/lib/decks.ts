@@ -10,6 +10,7 @@ export interface SavedDeck {
   name: string;
   text: string;
   deckHash: string;
+  materialDeckId: string;
   /** Count of runs linked via `runs.deck_id` — cardlist locked when > 0. */
   runCount: number;
 }
@@ -54,6 +55,7 @@ interface ApiDeckRow {
   name: string;
   text: string;
   deck_hash: string;
+  material_deck_id?: string;
   run_count?: number;
 }
 
@@ -69,6 +71,7 @@ function rowToSavedDeck(row: ApiDeckRow): SavedDeck {
     name: normalizeDeckName(row.name),
     text: row.text,
     deckHash: row.deck_hash,
+    materialDeckId: row.material_deck_id ?? "",
     runCount: Number(row.run_count ?? 0),
   };
 }
@@ -212,7 +215,11 @@ export function scheduleDeckSave(
     saveTimers.delete(deck.id);
     const patch = isDeckCardlistLocked(deck)
       ? { name: deck.name }
-      : { name: deck.name, text: deck.text };
+      : {
+          name: deck.name,
+          text: deck.text,
+          materialDeckId: deck.materialDeckId || undefined,
+        };
     void updateDeckOnApi(deck.id, patch)
       .then((row) => {
         onSaved?.(rowToSavedDeck(row as ApiDeckRow));
@@ -229,8 +236,9 @@ export function scheduleDeckSave(
 export async function createDeckRemote(
   name: string,
   text = "",
+  materialDeckId?: string,
 ): Promise<SavedDeck> {
-  const row = (await createDeckOnApi(name, text)) as ApiDeckRow;
+  const row = (await createDeckOnApi(name, text, materialDeckId)) as ApiDeckRow;
   return rowToSavedDeck(row);
 }
 

@@ -18,6 +18,20 @@ export interface PooledSampleBar {
   inspectable?: boolean;
 }
 
+/** Max individual sample bars to render in pooled/history charts. */
+export const MAX_POOLED_SAMPLE_BARS = 200;
+
+export function limitRecentPooledBars(
+  bars: PooledSampleBar[],
+  limit = MAX_POOLED_SAMPLE_BARS,
+): { bars: PooledSampleBar[]; total: number } {
+  const total = bars.length;
+  if (total <= limit) {
+    return { bars, total };
+  }
+  return { bars: bars.slice(-limit), total };
+}
+
 export function usePooledSampleSelection(
   runId: string | null,
   sampleIndex: number | null,
@@ -78,6 +92,7 @@ export function usePooledSampleSelection(
 
 export function PooledDamageBarChart({
   bars,
+  totalSamples,
   sampleMax,
   selectedKey,
   onSelectedKeyChange,
@@ -85,6 +100,7 @@ export function PooledDamageBarChart({
   dimmedKeys,
 }: {
   bars: PooledSampleBar[];
+  totalSamples?: number;
   sampleMax: number;
   selectedKey: string | null;
   onSelectedKeyChange: (key: string | null) => void;
@@ -119,6 +135,9 @@ export function PooledDamageBarChart({
         />
       </div>
       <p className="sim-hint history-bars-hint">
+        {totalSamples != null && totalSamples > bars.length
+          ? `Showing ${bars.length.toLocaleString()} most recent of ${totalSamples.toLocaleString()} samples. `
+          : ""}
         Click a bar to inspect the optimal line for that opening hand.
       </p>
     </div>

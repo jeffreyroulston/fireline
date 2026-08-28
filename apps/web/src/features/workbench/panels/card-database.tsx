@@ -36,11 +36,11 @@ import { useWorkbenchQuery } from "../use-workbench-query";
 const KIND_FILTERS = ["ally", "attack", "action", "item"] as const;
 
 function groupKey(group: VersionGroup): string {
-  return `${group.rulesVersion}:${group.samplerVersion}:${group.cardDigest}:${group.attributionVersion}`;
+  return `${group.rulesVersion}:${group.samplerVersion}:${group.attributionVersion}`;
 }
 
 function formatGroup(group: VersionGroup): string {
-  return `r${group.rulesVersion} · s${group.samplerVersion} · digest ${group.cardDigest.slice(0, 8)} · a${group.attributionVersion ?? "?"}`;
+  return `r${group.rulesVersion} · s${group.samplerVersion} · a${group.attributionVersion ?? "?"}`;
 }
 
 function formatPct(value: number): string {
@@ -727,7 +727,6 @@ export function CardDatabasePanel({
       return {
         rulesVersion: workerVersion.rules,
         samplerVersion: workerVersion.sampler,
-        cardDigest: String(workerVersion.cardDigest),
         attributionVersion: workerVersion.attribution,
       };
     }
@@ -736,7 +735,6 @@ export function CardDatabasePanel({
     return {
       rulesVersion: latest.rulesVersion,
       samplerVersion: latest.samplerVersion,
-      cardDigest: latest.cardDigest,
       attributionVersion: latest.attributionVersion ?? 0,
     };
   }, [workerVersion, versionGroups]);
@@ -824,7 +822,7 @@ export function CardDatabasePanel({
 
   useEffect(() => {
     if (!currentEngine) return;
-    const currentKey = `${currentEngine.rulesVersion}:${currentEngine.samplerVersion}:${currentEngine.cardDigest}:${currentEngine.attributionVersion}`;
+    const currentKey = `${currentEngine.rulesVersion}:${currentEngine.samplerVersion}:${currentEngine.attributionVersion}`;
     setDetailGroupKey((prev) => {
       if (prev && versionGroups.some((g) => groupKey(g) === prev)) return prev;
       if (versionGroups.some((g) => groupKey(g) === currentKey)) return currentKey;
@@ -843,11 +841,9 @@ export function CardDatabasePanel({
           simType,
           rulesVersion: currentEngine.rulesVersion,
           samplerVersion: currentEngine.samplerVersion,
-          cardDigest: currentEngine.cardDigest,
           attributionVersion: currentEngine.attributionVersion,
           currentRulesVersion: currentEngine.rulesVersion,
           currentSamplerVersion: currentEngine.samplerVersion,
-          currentCardDigest: currentEngine.cardDigest,
           currentAttributionVersion: currentEngine.attributionVersion,
           deckIds: includedDeckIds,
         });
@@ -886,7 +882,6 @@ export function CardDatabasePanel({
       ? {
           rulesVersion: group.rulesVersion,
           samplerVersion: group.samplerVersion,
-          cardDigest: group.cardDigest,
           attributionVersion:
             group.attributionVersion ?? currentEngine.attributionVersion,
         }
@@ -895,7 +890,6 @@ export function CardDatabasePanel({
     const isCurrent =
       version.rulesVersion === currentEngine.rulesVersion &&
       version.samplerVersion === currentEngine.samplerVersion &&
-      version.cardDigest === currentEngine.cardDigest &&
       version.attributionVersion === currentEngine.attributionVersion;
 
     let cancelled = false;
@@ -909,11 +903,9 @@ export function CardDatabasePanel({
             simType,
             rulesVersion: version.rulesVersion,
             samplerVersion: version.samplerVersion,
-            cardDigest: version.cardDigest,
             attributionVersion: version.attributionVersion,
             currentRulesVersion: currentEngine.rulesVersion,
             currentSamplerVersion: currentEngine.samplerVersion,
-            currentCardDigest: currentEngine.cardDigest,
             currentAttributionVersion: currentEngine.attributionVersion,
             deckIds: includedDeckIds,
           });
@@ -927,7 +919,6 @@ export function CardDatabasePanel({
             simType,
             rulesVersion: version.rulesVersion,
             samplerVersion: version.samplerVersion,
-            cardDigest: version.cardDigest,
             attributionVersion: version.attributionVersion,
             deckIds: includedDeckIds,
           }),
@@ -936,7 +927,6 @@ export function CardDatabasePanel({
             simType,
             rulesVersion: version.rulesVersion,
             samplerVersion: version.samplerVersion,
-            cardDigest: version.cardDigest,
             attributionVersion: version.attributionVersion,
             deckIds: includedDeckIds,
           }),
@@ -951,7 +941,6 @@ export function CardDatabasePanel({
                 simType,
                 rulesVersion: version.rulesVersion,
                 samplerVersion: version.samplerVersion,
-                cardDigest: version.cardDigest,
                 attributionVersion: version.attributionVersion,
                 deckIds: includedDeckIds,
               }),
@@ -1157,7 +1146,7 @@ export function CardDatabasePanel({
                 >
                   {currentEngine && (
                     <option
-                      value={`${currentEngine.rulesVersion}:${currentEngine.samplerVersion}:${currentEngine.cardDigest}:${currentEngine.attributionVersion}`}
+                      value={`${currentEngine.rulesVersion}:${currentEngine.samplerVersion}:${currentEngine.attributionVersion}`}
                     >
                       {workerVersion ? "Current engine" : "Latest data"} · r
                       {currentEngine.rulesVersion} · s
@@ -1170,7 +1159,7 @@ export function CardDatabasePanel({
                       if (!currentEngine) return true;
                       return (
                         groupKey(group) !==
-                        `${currentEngine.rulesVersion}:${currentEngine.samplerVersion}:${currentEngine.cardDigest}:${currentEngine.attributionVersion}`
+                        `${currentEngine.rulesVersion}:${currentEngine.samplerVersion}:${currentEngine.attributionVersion}`
                       );
                     })
                     .map((group) => (

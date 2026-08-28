@@ -341,6 +341,38 @@ export const CARDS: Record<string, CardDef> = {
     power: 1,
     life: 1,
   },
+  duchess_six_of_hearts: {
+    id: "duchess_six_of_hearts",
+    name: "Duchess, Six of Hearts",
+    short: "Duc6H",
+    kind: "ally",
+    cost: 6,
+    element: "fire",
+    power: 4,
+    life: 2,
+    unique: true,
+    kindle: 6,
+  },
+  wandering_glaivier: {
+    id: "wandering_glaivier",
+    name: "Wandering Glaivier",
+    short: "WGlaiv",
+    kind: "ally",
+    cost: 3,
+    element: "fire",
+    power: 2,
+    life: 1,
+  },
+  flagrant_guide: {
+    id: "flagrant_guide",
+    name: "Flagrant Guide",
+    short: "FGuid",
+    kind: "ally",
+    cost: 3,
+    element: "fire",
+    power: 1,
+    life: 3,
+  },
 };
 
 export let CARD_LIST: CardDef[] = Object.values(CARDS);
@@ -350,8 +382,20 @@ export const MATERIAL_NAMES: Record<MaterialId, string> = {
   mercenary_blade: "Mercenary's Blade",
   poisoned_dagger: "Poisoned Dagger",
   zander_1: "Zander, Prepared Scout",
+  zander_2: "Zander, Deft Executor",
   varuckan_soulknife: "Varuckan Soulknife",
+  tristan_1: "Tristan, Underhanded",
 };
+
+export const ALL_MATERIAL_IDS: MaterialId[] = [
+  "impact_hammer",
+  "mercenary_blade",
+  "poisoned_dagger",
+  "zander_1",
+  "zander_2",
+  "varuckan_soulknife",
+  "tristan_1",
+];
 
 export const DEFAULT_MATERIALS: MaterialId[] = [
   "impact_hammer",
@@ -362,7 +406,7 @@ export const DEFAULT_MATERIALS: MaterialId[] = [
 ];
 
 export function isMaterialId(id: string): id is MaterialId {
-  return (DEFAULT_MATERIALS as readonly string[]).includes(id);
+  return (ALL_MATERIAL_IDS as readonly string[]).includes(id);
 }
 
 export function isPlayableDeckCard(card: CardDef): boolean {
@@ -507,4 +551,125 @@ export function analyzeDecklist(text: string): DecklistAnalysis {
 
 export function parseDecklist(text: string): CardId[] {
   return analyzeDecklist(text).cards;
+}
+
+export type MaterialParseIssue =
+  | { kind: "unrecognized"; line: string }
+  | { kind: "not_material"; line: string; cardId: string }
+  | { kind: "too_many_copies"; line: string; cardId: string; qty: number }
+  | { kind: "empty" };
+
+function parseMaterialToken(token: string): MaterialId | null {
+  const raw = token.trim().toLowerCase();
+  if (!raw) return null;
+  const t = raw.replace(/[^a-z0-9]+/g, "_");
+  for (const card of CARD_LIST) {
+    if (card.kind !== "material") continue;
+    if (card.id === t || card.id.replace(/_/g, " ") === raw) {
+      return card.id as MaterialId;
+    }
+    if (
+      card.short.toLowerCase() === raw ||
+      card.name.toLowerCase() === raw ||
+      card.aliases?.some((alias) => alias === t)
+    ) {
+      return card.id as MaterialId;
+    }
+  }
+  for (const id of ALL_MATERIAL_IDS) {
+    const name = MATERIAL_NAMES[id];
+    if (
+      id === t ||
+      id.replace(/_/g, " ") === raw ||
+      name.toLowerCase() === raw ||
+      name.toLowerCase().replace(/[^a-z0-9]+/g, "_") === t
+    ) {
+      return id;
+    }
+  }
+  return null;
+}
+
+function parseNonMaterialToken(token: string): CardId | null {
+  const id = parseCardToken(token);
+  return id;
+}
+
+export function analyzeMaterialDecklist(text: string): {
+  cards: MaterialId[];
+  unrecognizedLines: string[];
+  issues: string[];
+  recognizedCount: number;
+} {
+  const cards: MaterialId[] = [];
+  const unrecognizedLines: string[] = [];
+  const issues: string[] = [];
+  const counts = new Map<MaterialId, number>();
+
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (isIgnorableDeckLine(trimmed)) {
+      continue;
+    }
+
+    let qty = 1;
+    let token = trimmed;
+    const countMatch =
+      trimmed.match(/^(\d+)\s*×\s*(.+)$/) ||
+      trimmed.match(/^(\d+)x\s*(.+)$/i) ||
+      trimmed.match(/^(\d+)\s+(.+)$/);
+    if (countMatch) {
+      qty = parseInt(countMatch[1], 10);
+      token = countMatch[2];
+    }
+
+    const materialId = parseMaterialToken(token);
+    if (materialId) {
+      if (qty > 1) {
+        issues.push(`Material decks allow at most 1 copy: ${trimmed}`);
+        continue;
+      }
+      const next = (counts.get(materialId) ?? 0) + qty;
+      if (next > 1) {
+        issues.push(`Material decks allow at most 1 copy: ${trimmed}`);
+        continue;
+      }
+      counts.set(materialId, next);
+      cards.push(materialId);
+      continue;
+    }
+
+    const other = parseNonMaterialToken(token);
+    if (other) {
+      issues.push(`Not a material card: ${trimmed}`);
+    } else {
+      unrecognizedLines.push(trimmed);
+      issues.push(`Unrecognized material: ${trimmed}`);
+    }
+  }
+
+  if (cards.length === 0 && issues.length === 0) {
+    issues.push("Material deck needs at least one recognized material card.");
+  }
+
+  return {
+    cards,
+    unrecognizedLines,
+    issues,
+    recognizedCount: cards.length,
+  };
+}
+
+export function parseMaterialDecklist(text: string): MaterialId[] {
+  return analyzeMaterialDecklist(text).cards;
+}
+
+export function materialDeckCounts(
+  cards: MaterialId[],
+): Record<MaterialId, number> {
+  const counts: Partial<Record<MaterialId, number>> = {};
+  for (const id of cards) {
+    counts[id] = 1;
+  }
+  return counts as Record<MaterialId, number>;
 }

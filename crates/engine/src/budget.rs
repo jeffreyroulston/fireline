@@ -23,10 +23,10 @@ impl Budget {
     pub const fn conservative() -> Self {
         Self {
             max_turns_min: 2,
-            max_turns_max: 3,
+            max_turns_max: 5,
             max_solve_rollouts: 48,
             max_eval_rollouts: 24,
-            max_optimize_decks: 500,
+            max_optimize_decks: 5000,
         }
     }
 }

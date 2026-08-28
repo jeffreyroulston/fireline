@@ -75,10 +75,6 @@ export function DeckEditor({
             loading={decksLoading}
           />
         </div>
-        <p className="deck-select-hint">
-          Manage and edit lists on the Decks tab. This tab only runs damage
-          samples.
-        </p>
         <div className="settings-row">
           <label>
             Opening hands
@@ -186,14 +182,17 @@ export function DeckResults({
                   combined: leaderboardFromCardStats(
                     result.cardStats,
                     result.samples * 2,
+                    { hands: result.hands, pass: "combined" },
                   ),
                   brick: leaderboardFromCardStats(
                     result.brickCardStats,
                     result.samples,
+                    { hands: result.hands, pass: "brick" },
                   ),
                   oracle: leaderboardFromCardStats(
                     result.oracleCardStats,
                     result.samples,
+                    { hands: result.hands, pass: "oracle" },
                   ),
                 },
               }
@@ -201,6 +200,7 @@ export function DeckResults({
                 leaderboard: leaderboardFromCardStats(
                   result.cardStats,
                   result.samples,
+                  { hands: result.hands },
                 ),
               })}
         />

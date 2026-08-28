@@ -5,7 +5,7 @@ use serde::{Serialize, Serializer};
 use ts_rs::TS;
 
 /// Manual bump when solver / model semantics change.
-pub const RULES_VERSION: u32 = 19;
+pub const RULES_VERSION: u32 = 29;
 /// Manual bump when RNG, shuffle, or seed derivation changes.
 pub const SAMPLER_VERSION: u32 = 1;
 /// Manual bump when stats attribution labels or parsing changes.
@@ -94,6 +94,8 @@ pub const fn compute_card_digest() -> u64 {
         hash = fnv1a_byte(hash, card.prepare());
         hash = fnv1a_byte(hash, card.imbue());
         hash = fnv1a_byte(hash, card.on_death_damage());
+        hash = fnv1a_bool(hash, card.on_death_draw());
+        hash = fnv1a_bool(hash, card.on_enter_level());
         index += 1;
     }
     hash
@@ -105,7 +107,7 @@ mod tests {
 
     #[test]
     fn card_digest_is_stable() {
-        assert_eq!(compute_card_digest(), 11_186_701_748_678_958_540);
+        assert_eq!(compute_card_digest(), 12_620_039_658_147_981_409);
     }
 
     #[test]
