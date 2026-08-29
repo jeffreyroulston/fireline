@@ -446,7 +446,7 @@ export function createApp(options: {
     const finishedRows = await options.db
       .selectFrom("runs")
       .selectAll()
-      .where("status", "=", "complete")
+      .where("status", "in", ["complete", "failed", "interrupted", "cancelled"])
       .where("kind", "in", ["evaluate", "optimize"])
       .orderBy("completed_at", "desc")
       .limit(8)

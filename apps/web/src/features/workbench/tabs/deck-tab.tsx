@@ -2,6 +2,7 @@
 
 import type { SimType } from "@/lib/engine";
 import type { SavedDeck } from "@/lib/decks";
+import { isUnsuccessfulTerminalStatus } from "@/lib/runs/types";
 import { DeckEditor, DeckResults } from "../panels/deck-damage";
 import type { SampleHand } from "../types";
 import type { UseShellSolverResult } from "../hooks/use-shell-solver";
@@ -51,6 +52,10 @@ export function DeckTab({
   onCancel,
   onSendToHandSolver,
 }: DeckTabProps) {
+  const evaluateFailed =
+    Boolean(evaluateRun) &&
+    isUnsuccessfulTerminalStatus(evaluateRun?.status ?? "");
+
   return (
     <>
       <DeckEditor
@@ -75,8 +80,10 @@ export function DeckTab({
         decksLoading={decksLoading}
       />
       <DeckResults
-        result={evaluateRun?.deckResult ?? null}
+        result={evaluateFailed ? null : (evaluateRun?.deckResult ?? null)}
         busy={evaluateBusy}
+        failed={evaluateFailed}
+        errorMessage={evaluateRun?.error ?? null}
         onSendToHandSolver={onSendToHandSolver}
       />
     </>

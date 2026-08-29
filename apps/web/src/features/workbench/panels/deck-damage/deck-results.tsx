@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils/cn";
+import { errorBannerClass } from "@/lib/utils/ui-classes";
 import {
   DamageReadout,
 } from "../../ui";
@@ -26,10 +27,14 @@ const resultRailClass = cn(
 export function DeckResults({
   result,
   busy,
+  failed = false,
+  errorMessage = null,
   onSendToHandSolver,
 }: {
   result: DeckResult | null;
   busy: boolean;
+  failed?: boolean;
+  errorMessage?: string | null;
   onSendToHandSolver: (sample: SampleHand) => void;
 }) {
   const [selectedLeaderboardCard, setSelectedLeaderboardCard] = useState<
@@ -48,6 +53,17 @@ export function DeckResults({
     () => buildBarHighlights(sampleHighlights, selectedLeaderboardCard),
     [sampleHighlights, selectedLeaderboardCard],
   );
+
+  if (failed && !busy) {
+    return (
+      <aside className={resultRailClass} aria-live="polite">
+        <DamageReadout label="EXPECTED DAMAGE" value="—" />
+        <p className={cn(errorBannerClass, "mt-4")} role="alert">
+          {errorMessage?.trim() || "Deck simulation failed."}
+        </p>
+      </aside>
+    );
+  }
 
   if (!result) {
     if (!busy) return null;
