@@ -36,7 +36,43 @@ This repo uses [pnpm](https://pnpm.io/) workspaces (`pnpm-workspace.yaml`). Enab
 
 ## Run with Docker Compose
 
-The production stack runs behind Caddy on port 80. The worker is internal-only; only the data API holds `DATABASE_URL`.
+The production stack runs behind Caddy on port 80. The worker is internal-only; only the data API holds `DATABASE_URL`. Images for `worker`, `api`, and `web` publish to GHCR on every push to `main`.
+
+### First-time setup (published images)
+
+1. Install [Docker Engine](https://docs.docker.com/engine/install/) or [Docker Desktop](https://docs.docker.com/desktop/) (Windows/macOS).
+2. Clone this repo (Compose needs `compose.yaml` and `docker/Caddyfile`).
+3. After the first successful [Publish images](.github/workflows/publish-images.yml) run, make the three GHCR packages public under the repo's Packages settings (`fireline-worker`, `fireline-api`, `fireline-web`), or `docker login ghcr.io` with a token that can read them.
+4. Start the stack:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+Open [http://localhost](http://localhost). Browser requests to `/api/*` go to the data API; everything else goes to the Next.js UI.
+
+### Update to latest `main`
+
+Pulls new images and restarts. Postgres data stays in the `pgdata` volume; API migrations run on startup.
+
+Linux / macOS:
+
+```bash
+./scripts/update.sh
+```
+
+Windows (PowerShell):
+
+```powershell
+.\scripts\update.ps1
+```
+
+From this repo with Node installed: `pnpm update:stack`.
+
+Pin a SHA tag instead of `latest` with `FIRELINE_IMAGE_TAG=abc1234` (short commit from the workflow).
+
+### Build from source (optional)
 
 ```bash
 # Optional: stamp engine builds with the current git revision
@@ -45,11 +81,10 @@ export GIT_SHA="$(git rev-parse --short HEAD)"
 docker compose up --build
 ```
 
-Open [http://localhost](http://localhost). Browser requests to `/api/*` go to the data API; everything else goes to the Next.js UI.
-
 Useful overrides:
 
 - `FIRELINE_PORT=8080` — bind the proxy to a different host port
+- `FIRELINE_IMAGE_TAG=latest` — GHCR tag for worker/api/web (default `latest`)
 - `WORKER_CONCURRENCY` / `API_CONCURRENCY` — cap how many simulations run at once (both default to `1` in Docker Compose; local dev defaults to `API_CONCURRENCY=1`, `WORKER_CONCURRENCY=2`)
 - `RAYON_NUM_THREADS` — cap Rayon hand parallelism inside the compute worker (defaults to all logical CPUs)
 
