@@ -508,12 +508,7 @@ impl EventTape {
 }
 
 /// Record On Death effects after an ally is sent to the graveyard.
-pub fn push_ally_gy_death(
-    state: &mut State,
-    card: Card,
-    phase: TapePhase,
-    tape: &mut EventTape,
-) {
+pub fn push_ally_gy_death(state: &mut State, card: Card, phase: TapePhase, tape: &mut EventTape) {
     if card.on_death_damage() > 0 {
         tape.push(*state, phase, EventKind::OnDeath, EventFields::card(card));
     } else if card.on_death_draw() {
@@ -700,10 +695,9 @@ pub fn format_line_event(event: &LineEvent) -> String {
             }
         }
         EventKind::LevelZander2 => "Zander, Deft Executor (+2 prep)".to_string(),
-        EventKind::ZanderGyReturn => format!(
-            "Zander return {} from GY (−1 prep)",
-            short(event.drawn)
-        ),
+        EventKind::ZanderGyReturn => {
+            format!("Zander return {} from GY (−1 prep)", short(event.drawn))
+        }
         EventKind::FloatForTristan => {
             if event.from_memory {
                 "Mem Cost for Tristan Lvl 1 (from Mem)".to_string()
@@ -872,9 +866,7 @@ pub fn format_line_event(event: &LineEvent) -> String {
         }
         EventKind::OnEnterLevel => {
             let self_dmg = event.kindle.unwrap_or(6);
-            format!(
-                "Flagrant Guide On-Enter level (self {self_dmg})",
-            )
+            format!("Flagrant Guide On-Enter level (self {self_dmg})",)
         }
         EventKind::Immortalize => "Immortalize the King".to_string(),
         EventKind::HotCakeSacrifice => "Hot Cake sacrifice (+3 next attack)".to_string(),

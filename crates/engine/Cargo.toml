@@ -25,3 +25,6 @@ ts = ["dep:ts-rs"]
 [[bench]]
 name = "solver"
 harness = false
+
+[lints]
+workspace = true

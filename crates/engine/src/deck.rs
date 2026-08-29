@@ -1,7 +1,10 @@
 use crate::{
     cards::{CARD_COUNT, Card},
     line_event::LineEvent,
-    model::{DamageDistribution, EffectiveRequest, SimType, SolveRequest, TwoPassResult, resolve_materials_bitmask},
+    model::{
+        DamageDistribution, EffectiveRequest, SimType, SolveRequest, TwoPassResult,
+        resolve_materials_bitmask,
+    },
     solver::solve_with_progress,
     version::ENGINE_VERSION,
 };
@@ -1278,4 +1281,3 @@ mod tests {
         assert_eq!(hand_threads_with(SimType::FireBrick, 8, None), 8);
     }
 }
-

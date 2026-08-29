@@ -7,6 +7,12 @@ edition = "2024"
 license = "MIT"
 version = "0.1.0"
 
+# CI denies all warnings; keep the perf group and this nursery lint audible
+# in local builds so issues surface before CI does.
+[workspace.lints.clippy]
+perf = "warn"
+redundant_clone = "warn"
+
 [profile.release]
 opt-level = 3
 lto = "fat"

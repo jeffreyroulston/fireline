@@ -1856,13 +1856,23 @@ fn level_tristan(state: &mut State, tape: &mut EventTape, phase: TapePhase) {
     state.tristan_leveled = true;
     state.champion_level = 1;
     state.prep = state.prep.saturating_add(1);
-    tape.push(*state, phase, EventKind::LevelTristan, EventFields::default());
+    tape.push(
+        *state,
+        phase,
+        EventKind::LevelTristan,
+        EventFields::default(),
+    );
 }
 
 fn level_zander(state: &mut State, tape: &mut EventTape, phase: TapePhase) {
     state.champion_level = 1;
     state.prep = state.prep.saturating_add(1);
-    tape.push(*state, phase, EventKind::LevelZander, EventFields::default());
+    tape.push(
+        *state,
+        phase,
+        EventKind::LevelZander,
+        EventFields::default(),
+    );
 }
 
 fn level_zander2(
@@ -1873,7 +1883,12 @@ fn level_zander2(
 ) {
     state.champion_level = 2;
     state.prep = state.prep.saturating_add(2);
-    tape.push(*state, phase, EventKind::LevelZander2, EventFields::default());
+    tape.push(
+        *state,
+        phase,
+        EventKind::LevelZander2,
+        EventFields::default(),
+    );
     if let Some(card) = gy_return {
         state.prep = state.prep.saturating_sub(1);
         state.remove_one_from_gy(card);
@@ -2060,7 +2075,10 @@ mod tests {
         assert!(state.glimpse_layout_count() >= 2);
         let mut reordered = state;
         reordered.apply_glimpse_layout(1);
-        assert_eq!(reordered.queue[reordered.queue_pos as usize], Card::IgnitedStab as u8);
+        assert_eq!(
+            reordered.queue[reordered.queue_pos as usize],
+            Card::IgnitedStab as u8
+        );
     }
 
     #[test]
@@ -2174,14 +2192,7 @@ mod tests {
             Card::RedHare,
             Card::PepperedChef,
         ];
-        let (pass, stats) = solve_pass(
-            &hand,
-            false,
-            2,
-            &[Card::IgnitedStab],
-            false,
-            ALL_MATERIALS,
-        );
+        let (pass, stats) = solve_pass(&hand, false, 2, &[Card::IgnitedStab], false, ALL_MATERIALS);
         assert_eq!(
             pass.events.first().and_then(|event| event.drawn.as_deref()),
             Some("ignited_stab"),
@@ -2776,7 +2787,9 @@ mod tests {
 
         let legal = actions(after_pass, false);
         assert!(
-            !legal.iter().any(|action| matches!(action, Action::TristanRecollect)),
+            !legal
+                .iter()
+                .any(|action| matches!(action, Action::TristanRecollect)),
             "recollect needs 3 memory cards: {legal:?}"
         );
         assert!(
@@ -3032,7 +3045,9 @@ mod tests {
         assert_eq!(after.prep, 1, "{steps:?}");
         assert_eq!(after.memory_len, 3, "{steps:?}");
         assert!(
-            !steps.iter().any(|step| step.kind.as_str() == "floatForZander"),
+            !steps
+                .iter()
+                .any(|step| step.kind.as_str() == "floatForZander"),
             "Flagrant Guide level should not pay memory: {steps:?}"
         );
         assert!(
@@ -3134,17 +3149,15 @@ mod tests {
             s.champion_level = 0;
             s
         };
-        assert!(
-            !actions(unleveled, false).iter().any(|action| {
-                matches!(
-                    action,
-                    Action::PlayAlly {
-                        flagrant_level: Some(MAT_ZANDER_2),
-                        ..
-                    }
-                )
-            })
-        );
+        assert!(!actions(unleveled, false).iter().any(|action| {
+            matches!(
+                action,
+                Action::PlayAlly {
+                    flagrant_level: Some(MAT_ZANDER_2),
+                    ..
+                }
+            )
+        }));
     }
 
     #[test]
@@ -3179,9 +3192,9 @@ mod tests {
         assert!(after.has(Card::IgnitedStab), "{steps:?}");
         assert_eq!(after.gy_count(Card::IgnitedStab), 0, "{steps:?}");
         assert!(
-            steps.iter().any(|step| {
-                format_line_event(step) == "Zander, Deft Executor (+2 prep)"
-            }),
+            steps
+                .iter()
+                .any(|step| { format_line_event(step) == "Zander, Deft Executor (+2 prep)" }),
             "{steps:?}"
         );
         assert!(
@@ -3213,9 +3226,9 @@ mod tests {
         assert_eq!(after.memory_len, 0);
         assert_eq!(after.phase, Phase::Main);
         assert!(
-            steps.iter().any(|step| {
-                format_line_event(step) == "Materialize Assassin's Ripper"
-            }),
+            steps
+                .iter()
+                .any(|step| { format_line_event(step) == "Materialize Assassin's Ripper" }),
             "{steps:?}"
         );
     }
@@ -3251,9 +3264,9 @@ mod tests {
         let (after, steps) = apply(state, Action::AttackWithWeapon(Weapon::AssassinsRipper));
         assert_eq!(after.damage, 3, "{steps:?}");
         assert!(
-            steps.iter().any(|step| {
-                format_line_event(step) == "Attack with Assassin's Ripper"
-            }),
+            steps
+                .iter()
+                .any(|step| { format_line_event(step) == "Attack with Assassin's Ripper" }),
             "{steps:?}"
         );
     }
@@ -3353,9 +3366,9 @@ mod tests {
         assert_eq!(after_blade.phase, Phase::Main);
         assert!(after_blade.has_weapon(Weapon::MercenaryBlade));
         assert!(
-            steps.iter().any(|step| {
-                format_line_event(step) == "Materialize Mercenary's Blade (prep)"
-            }),
+            steps
+                .iter()
+                .any(|step| { format_line_event(step) == "Materialize Mercenary's Blade (prep)" }),
             "{steps:?}"
         );
     }
@@ -3386,9 +3399,9 @@ mod tests {
         assert!(!after_mate.has_material(MAT_RING));
         assert_eq!(after_mate.phase, Phase::Main);
         assert!(
-            mate_steps.iter().any(|step| {
-                format_line_event(step) == "Materialize Grand Crusader's Ring"
-            }),
+            mate_steps
+                .iter()
+                .any(|step| { format_line_event(step) == "Materialize Grand Crusader's Ring" }),
             "{mate_steps:?}"
         );
 
@@ -4186,7 +4199,7 @@ mod tests {
 
     #[test]
     fn tristan_assassin_matches_zander_on_b1a069b5_hand() {
-        use crate::model::{resolve_materials_bitmask, ALL_MATERIALS};
+        use crate::model::{ALL_MATERIALS, resolve_materials_bitmask};
         use std::collections::BTreeMap;
 
         let hand = [
@@ -4224,4 +4237,3 @@ mod tests {
         );
     }
 }
-

@@ -78,7 +78,11 @@ impl LineCardStats {
     ) {
         let before_damage = before.damage;
         match action {
-            Action::PlayAlly { card, flagrant_level, .. } => {
+            Action::PlayAlly {
+                card,
+                flagrant_level,
+                ..
+            } => {
                 self.plays[card.index()] += 1;
                 if let Some(mat) = flagrant_level {
                     if mat == crate::model::MAT_ZANDER {
@@ -708,7 +712,12 @@ mod tests {
         let mut after = before;
         after.damage = 3;
         let mut stats = LineCardStats::default();
-        stats.record_action(Action::AttackWithWeapon(Weapon::ImpactHammer), before, after, &[]);
+        stats.record_action(
+            Action::AttackWithWeapon(Weapon::ImpactHammer),
+            before,
+            after,
+            &[],
+        );
         assert_eq!(stats.material_attacks[MAT_HAMMER], 1);
         assert_eq!(stats.material_damage[MAT_HAMMER], 3);
         let sparse = stats.to_sparse();

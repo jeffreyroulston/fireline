@@ -7,7 +7,8 @@ use axum::{
 };
 use ga_fire_engine::{
     Budget, DeckEvalRequest, DeckEvalResult, ENGINE_VERSION, EvalProgress, OptimizeProgress,
-    OptimizeRequest, OptimizeResult, SimType, SolveRequest, SolveResult, card_catalog, hand_threads,
+    OptimizeRequest, OptimizeResult, SimType, SolveRequest, SolveResult, card_catalog,
+    hand_threads,
 };
 use serde::Serialize;
 use std::{net::SocketAddr, ops::ControlFlow, sync::Arc};

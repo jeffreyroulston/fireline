@@ -1,8 +1,8 @@
 use crate::{
     deck::{
         DeckEvalRequest, DeckEvalResult, HistoryPoint, Metric, OptimizeProgress, OptimizeRequest,
-        OptimizeResult, RankedDeck, Strategy, Rng, consider_top, count_legal_decks,
-        counts_key, initial_counts, ranked_decks,
+        OptimizeResult, RankedDeck, Rng, Strategy, consider_top, count_legal_decks, counts_key,
+        initial_counts, ranked_decks,
     },
     model::{Bounds, EffectiveRequest, SimType},
     version::ENGINE_VERSION,
@@ -125,10 +125,7 @@ fn score_optimize_deck_full(
             samples,
             go_first: true,
             max_turns: 3,
-            seed: ctx
-                .request
-                .seed
-                .wrapping_add(u64::from(deck_number) * 131),
+            seed: ctx.request.seed.wrapping_add(u64::from(deck_number) * 131),
             sim_type: SimType::FireBrick,
             rollouts: 1,
             budget: ctx.request.budget,
@@ -453,11 +450,7 @@ fn repair_to_size(
     Ok(())
 }
 
-fn mutate(
-    counts: &mut BTreeMap<String, u8>,
-    bounds: &BTreeMap<String, Bounds>,
-    rng: &mut Rng,
-) {
+fn mutate(counts: &mut BTreeMap<String, u8>, bounds: &BTreeMap<String, Bounds>, rng: &mut Rng) {
     let neighbors = legal_neighbors(counts, bounds, NEIGHBOR_SAMPLE_CAP);
     if !neighbors.is_empty() {
         *counts = neighbors[rng.index(neighbors.len())].clone();
@@ -708,7 +701,7 @@ fn optimize_swap_sweep(
 mod tests {
     use super::*;
     use crate::budget::Budget;
-    use crate::deck::{optimize, SwapConfig};
+    use crate::deck::{SwapConfig, optimize};
 
     fn sample_bounds() -> BTreeMap<String, Bounds> {
         BTreeMap::from([

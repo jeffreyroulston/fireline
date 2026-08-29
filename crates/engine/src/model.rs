@@ -868,9 +868,7 @@ impl State {
     }
 
     pub fn has_weapon(self, weapon: Weapon) -> bool {
-        weapon
-            .slot()
-            .is_some_and(|slot| self.weapons[slot] > 0)
+        weapon.slot().is_some_and(|slot| self.weapons[slot] > 0)
     }
 
     pub fn any_weapon(self) -> bool {
@@ -878,10 +876,7 @@ impl State {
     }
 
     pub fn weapon_durability(self, weapon: Weapon) -> u8 {
-        weapon
-            .slot()
-            .map(|slot| self.weapons[slot])
-            .unwrap_or(0)
+        weapon.slot().map(|slot| self.weapons[slot]).unwrap_or(0)
     }
 
     pub fn weapon_power(self, weapon: Weapon) -> u8 {
@@ -929,11 +924,7 @@ impl State {
         }
     }
 
-    fn glimpse_tail_orders(
-        queue: [u8; DRAW_QUEUE_CAP],
-        pos: usize,
-        len: usize,
-    ) -> Vec<Vec<u8>> {
+    fn glimpse_tail_orders(queue: [u8; DRAW_QUEUE_CAP], pos: usize, len: usize) -> Vec<Vec<u8>> {
         let tail_len = len - pos;
         if tail_len == 0 {
             return vec![Vec::new()];
@@ -1167,11 +1158,7 @@ pub fn resolve_materials_bitmask(counts: &BTreeMap<String, u8>) -> u16 {
             _ => 0,
         };
     }
-    if mask == 0 {
-        ALL_MATERIALS
-    } else {
-        mask
-    }
+    if mask == 0 { ALL_MATERIALS } else { mask }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
