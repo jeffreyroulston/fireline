@@ -1,31 +1,20 @@
 import type { LineEvent, SolveRequest, SolveResult } from "@ga-fire/contracts";
+import {
+  analysisQuery,
+  prepareRequestBody,
+  readErrorMessage,
+  type ApiCardRow,
+  type WorkerVersion,
+} from "./shared";
+
+export type { ApiCardRow, WorkerVersion } from "./shared";
 
 const API_PREFIX = "/api";
 
-async function readErrorMessage(response: Response): Promise<string> {
-  const body = await response.text();
-  if (!body) {
-    return `Request failed (${response.status})`;
-  }
-  try {
-    const parsed = JSON.parse(body) as { error?: string; message?: string };
-    return parsed.error ?? parsed.message ?? body;
-  } catch {
-    return body;
-  }
-}
-
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
-  const body =
-    init?.body && typeof init.body === "string"
-      ? JSON.stringify(JSON.parse(init.body), (_key, value) =>
-          typeof value === "bigint" ? Number(value) : value,
-        )
-      : init?.body;
-
   const response = await fetch(`${API_PREFIX}${path}`, {
     ...init,
-    body,
+    body: prepareRequestBody(init),
     headers: {
       "Content-Type": "application/json",
       ...init?.headers,
@@ -37,41 +26,12 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   return response;
 }
 
-export type WorkerVersion = {
-  rules: number;
-  sampler: number;
-  attribution: number;
-  cardDigest: string;
-  build: string;
-};
-
 export async function fetchWorkerVersion(): Promise<WorkerVersion> {
   const response = await apiFetch("/version");
   return response.json();
 }
 
-export async function fetchCards(): Promise<
-  Array<{
-    id: string;
-    name: string;
-    short: string;
-    kind: string;
-    cost: number;
-    element: string;
-    power?: number | null;
-    life?: number | null;
-    stealth?: boolean;
-    unique?: boolean;
-    assassinPowerBonus?: number | null;
-    assassinStealth?: boolean;
-    automaton?: boolean;
-    fast?: boolean;
-    floatingMemory?: boolean;
-    kindle?: number | null;
-    prepare?: number | null;
-    aliases?: string[];
-  }>
-> {
+export async function fetchCards(): Promise<ApiCardRow[]> {
   const response = await apiFetch("/cards");
   return response.json();
 }
@@ -256,6 +216,7 @@ export interface RunHistoryRow {
   startedAt: string;
   completedAt: string | null;
   elapsedMs: number | null;
+  errorMessage: string | null;
 }
 
 export interface VersionGroup {
@@ -325,17 +286,6 @@ export interface RankedCandidatesResponse {
     avgScore: number;
     bestScore: number;
   }>;
-}
-
-function analysisQuery(params: Record<string, string | number | undefined>) {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== "") {
-      search.set(key, String(value));
-    }
-  }
-  const query = search.toString();
-  return query ? `?${query}` : "";
 }
 
 export async function fetchRunHistory(options?: {
@@ -541,18 +491,65 @@ export type CardDatabaseResponse = {
   cards: CardDatabaseCard[];
 };
 
+export type CardDatabaseSource = "evaluate" | "swap_sweep";
+
+export type CardDatabaseRunContributor = {
+  runId: string;
+  deckId: string;
+  deckName: string;
+  startedAt: string;
+  candidateCount: number;
+  samples: number;
+};
+
+export type CardDatabaseSwapSweepResponse = {
+  source: "swap_sweep";
+  totalRuns: number;
+  totalSamples: number;
+  contributors: CardDatabaseRunContributor[];
+  cards: CardDatabaseCard[];
+};
+
+export type SwapSweepCardRunRow = {
+  runId: string;
+  deckId: string;
+  deckName: string;
+  startedAt: string;
+  candidate: string | null;
+  scoreDelta: number | null;
+  handLift: number | null;
+  playRate: number | null;
+  openRate: number | null;
+  seeRate: number | null;
+  samples: number;
+};
+
 export async function fetchCardDatabase(options: {
-  simType: string;
-  rulesVersion: number;
-  samplerVersion: number;
-  attributionVersion: number;
-  currentRulesVersion: number;
-  currentSamplerVersion: number;
-  currentAttributionVersion: number;
+  source?: CardDatabaseSource;
+  simType?: string;
+  rulesVersion?: number;
+  samplerVersion?: number;
+  attributionVersion?: number;
+  currentRulesVersion?: number;
+  currentSamplerVersion?: number;
+  currentAttributionVersion?: number;
   deckIds?: string[];
-}): Promise<CardDatabaseResponse> {
+  runIds?: string[];
+}): Promise<CardDatabaseResponse | CardDatabaseSwapSweepResponse> {
+  const source = options.source ?? "evaluate";
+  if (source === "swap_sweep") {
+    const search = new URLSearchParams({ source: "swap_sweep" });
+    for (const runId of options.runIds ?? []) {
+      search.append("run_id", runId);
+    }
+    if (options.runIds !== undefined) {
+      search.set("run_filter", "1");
+    }
+    const response = await apiFetch(`/analysis/card-database?${search}`);
+    return response.json() as Promise<CardDatabaseSwapSweepResponse>;
+  }
   const search = new URLSearchParams({
-    sim_type: options.simType,
+    sim_type: options.simType!,
     rules_version: String(options.rulesVersion),
     sampler_version: String(options.samplerVersion),
     attribution_version: String(options.attributionVersion),
@@ -587,15 +584,35 @@ export type CardDatabaseCardDecksResponse = {
 };
 
 export async function fetchCardDatabaseCardDecks(options: {
+  source?: CardDatabaseSource;
   cardId: string;
-  simType: string;
-  rulesVersion: number;
-  samplerVersion: number;
-  attributionVersion: number;
+  simType?: string;
+  rulesVersion?: number;
+  samplerVersion?: number;
+  attributionVersion?: number;
   deckIds?: string[];
-}): Promise<CardDatabaseCardDecksResponse> {
+  runIds?: string[];
+}): Promise<
+  CardDatabaseCardDecksResponse | { runs: SwapSweepCardRunRow[] }
+> {
+  const source = options.source ?? "evaluate";
+  if (source === "swap_sweep") {
+    const search = new URLSearchParams({
+      source: "swap_sweep",
+    });
+    for (const runId of options.runIds ?? []) {
+      search.append("run_id", runId);
+    }
+    if (options.runIds !== undefined) {
+      search.set("run_filter", "1");
+    }
+    const response = await apiFetch(
+      `/analysis/card-database/${encodeURIComponent(options.cardId)}/decks?${search}`,
+    );
+    return response.json() as Promise<{ runs: SwapSweepCardRunRow[] }>;
+  }
   const search = new URLSearchParams({
-    sim_type: options.simType,
+    sim_type: options.simType!,
     rules_version: String(options.rulesVersion),
     sampler_version: String(options.samplerVersion),
     attribution_version: String(options.attributionVersion),

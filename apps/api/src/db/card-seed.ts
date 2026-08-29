@@ -500,6 +500,25 @@ export const MATERIAL_SEED: CardSeed[] = [
     unique: true,
     aliases: ["tristan"],
   },
+  {
+    id: "assassins_ripper",
+    name: "Assassin's Ripper",
+    short: "ARipp",
+    kind: "material",
+    cost: 0,
+    element: "norm",
+    aliases: ["assassins_ripper", "ripper"],
+  },
+  {
+    id: "grand_crusaders_ring",
+    name: "Grand Crusader's Ring",
+    short: "GCRin",
+    kind: "material",
+    cost: 0,
+    element: "norm",
+    unique: true,
+    aliases: ["grand_crusaders_ring", "crusaders_ring"],
+  },
 ];
 
 export const MATERIAL_CARD_IDS = MATERIAL_SEED.map((card) => card.id);

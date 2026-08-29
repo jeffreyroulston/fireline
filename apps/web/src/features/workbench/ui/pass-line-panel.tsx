@@ -2,6 +2,7 @@
 
 import type { LineEvent } from "@/lib/engine";
 import type { StepDiffInfo } from "../types";
+import { cn } from "@/lib/utils/cn";
 import { OptimalLine } from "./optimal-line";
 
 export function PassLinePanel({
@@ -25,12 +26,21 @@ export function PassLinePanel({
     stepDiff?.filter((entry) => entry.mark !== "same").length ?? 0;
 
   return (
-    <div className={`pass-panel ${oracle ? "is-oracle" : ""}`}>
-      <div className="pass-heading">
-        <span>{label.toUpperCase()}</span>
-        <strong>{damage}</strong>
+    <div>
+      <div className="mb-1.5 flex items-baseline justify-between gap-3">
+        <span className="font-mono text-[10px] tracking-[0.08em] text-muted uppercase">
+          {label.toUpperCase()}
+        </span>
+        <strong
+          className={cn(
+            "font-display text-[42px] leading-[0.9] text-primary",
+            oracle && "text-secondary",
+          )}
+        >
+          {damage}
+        </strong>
       </div>
-      {note && <p className="pass-note">{note}</p>}
+      {note && <p className="mb-3 text-[13px] text-muted">{note}</p>}
       <OptimalLine
         label={`${label.toUpperCase()} LINE`}
         events={events}
@@ -39,7 +49,10 @@ export function PassLinePanel({
         diffPerspective={oracle ? "oracle" : undefined}
         meta={
           diffCount > 0 && oracle ? (
-            <em className="tape-diff-count"> · {diffCount} diffs</em>
+            <em className="ml-1 not-italic font-semibold text-secondary-dark">
+              {" "}
+              · {diffCount} diffs
+            </em>
           ) : undefined
         }
       />

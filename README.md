@@ -7,11 +7,13 @@ Rust-powered FiZa max-damage line searcher and deck-ratio simulator for Grand Ar
 - Solves two- or three-turn Fire Assassin lines from a selected opening hand.
 - Logs damage, allies, FireGY, memory, and hand after each action.
 - Samples hands from a pasted decklist and reports mean, P50, P90, and range.
-- Hill-climbs card ratios inside user-supplied minimum and maximum bounds.
+- Ratio lab searches card ratios with four strategies: **Random sample** (uniform random legal lists), **Hill climb** (local ±1-swap optimization with restarts), **Genetic algorithm** (population crossover/mutation), and **Swap sweep** (fixed-ratio card substitution with per-candidate stats).
 
 The model follows the Mathematically Correct FiZa drill assumptions:
 
-- Unknown draws are unplayable fire bricks.
+- Unknown draws are unplayable fire bricks, except the guaranteed going-second
+  draw, which samples a real card from an attached maindeck and seed when one
+  is available.
 - The opponent kills non-stealth, non-immortal allies during its main phase.
   Assassin class stealth (e.g. Tweedledum) only counts after Zander has leveled.
 - FiZa-specific safe reductions include: Poisoned Dagger activates immediately when ready, Arthur attacks before other allies, and bulk ally attacks.

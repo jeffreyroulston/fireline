@@ -1,5 +1,19 @@
-import type { OptimizeProgress } from "@/lib/api/useRun";
 import type { DeckResult, RatioResult } from "@/features/workbench/types";
+
+export interface OptimizeProgress {
+  decksScored: number;
+  totalDecks: number;
+  legalDecks: number;
+  handsSimulated: number;
+  totalHands: number;
+  bestScore: number;
+  /** Monte Carlo: rollouts finished on the current hand. */
+  rolloutsDone?: number;
+  /** Monte Carlo: rollouts per opening hand. */
+  totalRollouts?: number;
+  /** Set once the worker has begun processing (not just queued locally). */
+  started?: boolean;
+}
 
 export type RunKind = "evaluate" | "optimize";
 

@@ -1,114 +1,27 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { type SimType } from "@/lib/engine";
-import type { SavedDeck } from "@/lib/decks";
-import { DamageReadout, DeckPicker, RunSettings, ActionBar, SectionHeading } from "../ui";
+import { cn } from "@/lib/utils/cn";
+import {
+  DamageReadout,
+} from "../../ui";
 import {
   buildBarHighlights,
   CardLeaderboardPanel,
   highlightsFromHands,
   leaderboardFromCardStats,
-} from "./card-leaderboard";
+} from "../card-leaderboard";
 import {
   distributionFromDeckResult,
   PooledDamagePanel,
   sampleBarsFromDeckResult,
-} from "./pooled-damage";
-import { SIM_TYPE_LABELS, type DeckResult, type SampleHand } from "../types";
-import type { OptimizeProgress } from "@/lib/api/useRun";
+} from "../pooled-damage";
+import { SIM_TYPE_LABELS, type DeckResult, type SampleHand } from "../../types";
 
-export function DeckEditor({
-  decks,
-  activeDeck,
-  recognizedDeckCount,
-  samples,
-  goFirst,
-  turns,
-  simType,
-  rollouts,
-  busy,
-  onSwitchDeck,
-  onSamplesChange,
-  onGoFirstChange,
-  onTurnsChange,
-  onSimTypeChange,
-  onRolloutsChange,
-  onEvaluate,
-  onCancel,
-  progress,
-  decksLoading = false,
-}: {
-  decks: SavedDeck[];
-  activeDeck: SavedDeck | null;
-  recognizedDeckCount: number;
-  samples: number;
-  goFirst: boolean;
-  turns: number;
-  simType: SimType;
-  rollouts: number;
-  busy: boolean;
-  onSwitchDeck: (deckId: string) => void;
-  onSamplesChange: (value: number) => void;
-  onGoFirstChange: (value: boolean) => void;
-  onTurnsChange: (value: number) => void;
-  onSimTypeChange: (value: SimType) => void;
-  onRolloutsChange: (value: number) => void;
-  onEvaluate: () => void;
-  onCancel: () => void;
-  progress?: OptimizeProgress | null;
-  decksLoading?: boolean;
-}) {
-  return (
-    <div className="mode-layout line-mode">
-      <div className="controls">
-        <SectionHeading
-          title="DECK DAMAGE"
-          meta={<strong>{recognizedDeckCount} recognized</strong>}
-        />
-        <div className="deck-toolbar">
-          <DeckPicker
-            label="Saved deck"
-            decks={decks}
-            value={activeDeck?.id ?? ""}
-            onChange={onSwitchDeck}
-            loading={decksLoading}
-          />
-        </div>
-        <div className="settings-row">
-          <label>
-            Opening hands
-            <input
-              type="number"
-              min={1}
-              max={50}
-              value={samples}
-              onChange={(event) => onSamplesChange(Number(event.target.value))}
-            />
-          </label>
-        </div>
-        <RunSettings
-          goFirst={goFirst}
-          turns={turns}
-          simType={simType}
-          rollouts={rollouts}
-          onFirstChange={onGoFirstChange}
-          onTurnsChange={onTurnsChange}
-          onSimTypeChange={onSimTypeChange}
-          onRolloutsChange={onRolloutsChange}
-        />
-        <ActionBar
-          label="Sample deck damage"
-          busy={busy}
-          onRun={onEvaluate}
-          onCancel={onCancel}
-          progress={progress}
-          monteCarloRollouts={simType === "monte_carlo" ? rollouts : undefined}
-        />
-      </div>
-    </div>
-  );
-}
+const resultRailClass = cn(
+  "min-w-0 border-t border-border mt-2 pt-7 pl-0",
+  "max-[900px]:border-t max-[900px]:border-l-0 max-[900px]:pt-7 max-[900px]:pl-0",
+);
 
 export function DeckResults({
   result,
@@ -140,7 +53,7 @@ export function DeckResults({
     if (!busy) return null;
 
     return (
-      <aside className="result-rail" aria-live="polite">
+      <aside className={resultRailClass} aria-live="polite">
         <DamageReadout label="EXPECTED DAMAGE" value="—" calculating />
       </aside>
     );
@@ -152,7 +65,7 @@ export function DeckResults({
   const bars = sampleBarsFromDeckResult(result);
 
   return (
-    <aside className="result-rail" aria-live="polite">
+    <aside className={resultRailClass} aria-live="polite">
       <PooledDamagePanel
         meta={
           <strong>

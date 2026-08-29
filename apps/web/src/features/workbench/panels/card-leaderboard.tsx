@@ -9,13 +9,61 @@ import {
 } from "@/lib/engine";
 import type { CardLeaderboardResponse } from "@/lib/api/client";
 import { InfoPopover } from "@/components/info-popover";
+import { cn, pillTabListClass, pillTabVariants } from "@/lib/utils";
 import { SectionHeading } from "../ui";
 import type { SampleHand } from "../types";
 import {
   computeHandLiftByCard,
   formatLift,
-  liftDeltaTone,
 } from "../lib/hand-lift";
+import { partnerDeltaClass } from "./card-database/shared";
+import {
+  historyPanelClass,
+  historyTableWrapClass,
+} from "./history/shared";
+
+const historyCopyColClass = "w-11 text-center font-mono text-xs text-muted";
+
+const leaderboardPassTabsClass = cn(pillTabListClass, "mb-3");
+
+function leaderboardPassTabClass(tabId: LeaderboardPass, active: boolean) {
+  return cn(
+    pillTabVariants({ active }),
+    active && tabId === "brick" && "text-primary-dark",
+    active && tabId === "oracle" && "text-secondary-dark",
+  );
+}
+
+const historyCardLegendClass =
+  "mb-3 flex flex-wrap gap-x-5 gap-y-4 font-mono text-[10px] tracking-[0.06em] text-muted uppercase [&_span]:inline-flex [&_span]:items-center [&_span]:gap-2 [&_.is-in-hand]:before:h-2.5 [&_.is-in-hand]:before:w-2.5 [&_.is-in-hand]:before:bg-gradient-to-b [&_.is-in-hand]:before:from-[#e8dcc8] [&_.is-in-hand]:before:to-[#b8a588] [&_.is-in-hand]:before:content-[''] [&_.is-played]:before:h-2.5 [&_.is-played]:before:w-2.5 [&_.is-played]:before:bg-gradient-to-b [&_.is-played]:before:from-[#8fd8ae] [&_.is-played]:before:to-[#3d9970] [&_.is-played]:before:content-['']";
+
+const historyLeaderboardTableWrapClass = cn(
+  historyTableWrapClass,
+  "overflow-visible",
+);
+
+const historyLeaderboardPanelClass = cn(
+  historyPanelClass,
+  "mt-[18px] pb-2",
+);
+
+const historyLeaderboardSelectableClass =
+  "[&_tbody_tr:not(.leaderboard-section-row)]:cursor-pointer [&_tbody_tr.is-selected_td]:bg-[color-mix(in_srgb,var(--color-primary)_14%,var(--color-surface-muted))]";
+
+const leaderboardSectionRowClass =
+  "[&_th]:bg-[color-mix(in_srgb,var(--color-surface-muted)_70%,transparent)] [&_th]:pt-4 [&_th]:font-display [&_th]:text-[13px] [&_th]:tracking-[0.08em] [&_th]:text-muted [&_th]:uppercase hover:[&_th]:bg-[color-mix(in_srgb,var(--color-surface-muted)_70%,transparent)]";
+
+const collapsibleInnerClass = "mx-4 mb-3";
+
+const collapsibleLeaderboardClass = cn(
+  "mt-[22px] border border-border bg-surface pb-2",
+  "[&>summary]:flex [&>summary]:cursor-pointer [&>summary]:list-none [&>summary]:items-baseline [&>summary]:justify-between [&>summary]:gap-3 [&>summary]:px-4 [&>summary]:py-3.5",
+  "[&>summary::-webkit-details-marker]:hidden",
+  "[&>summary_span]:font-mono [&>summary_span]:text-[11px] [&>summary_span]:tracking-[0.08em] [&>summary_span]:text-foreground [&>summary_span]:uppercase",
+  "[&>summary_small]:font-mono [&>summary_small]:text-[10px] [&>summary_small]:text-muted",
+  "[&>summary::after]:font-mono [&>summary::after]:text-muted [&>summary::after]:content-['+']",
+  "[&[open]>summary::after]:content-['−']",
+);
 
 function formatPct(value: number): string {
   return `${(value * 100).toFixed(0)}%`;
@@ -145,7 +193,7 @@ function LiftCell({ value }: { value: number | null }) {
     return "—";
   }
   return (
-    <span className={`card-db-partner-delta ${liftDeltaTone(value)}`}>
+    <span className={partnerDeltaClass(value)}>
       {formatLift(value)}
     </span>
   );
@@ -189,7 +237,7 @@ function LeaderboardBody({
                 : undefined
             }
           >
-            <td className="history-copy-col">{row.deckCopies}</td>
+            <td className={historyCopyColClass}>{row.deckCopies}</td>
             <td>{cardDisplayName(row.cardId)}</td>
             <td>{formatPct(row.seeRate)}</td>
             <td>{formatPct(row.playWhenInHand)}</td>
@@ -233,9 +281,11 @@ export function CardLeaderboardPanel({
   const deckCards = active.cards.filter((row) => !isMaterialId(row.cardId));
   const materialCards = active.cards.filter((row) => isMaterialId(row.cardId));
 
+  const innerMarginClass = collapsible ? collapsibleInnerClass : undefined;
+
   const tabs = twoPassLeaderboards != null && (
     <div
-      className="leaderboard-pass-tabs"
+      className={cn(leaderboardPassTabsClass, innerMarginClass)}
       role="tablist"
       aria-label="Card leaderboard pass"
     >
@@ -245,13 +295,7 @@ export function CardLeaderboardPanel({
           type="button"
           role="tab"
           aria-selected={pass === tab.id}
-          className={[
-            "leaderboard-pass-tab",
-            `is-${tab.id}`,
-            pass === tab.id ? "is-active" : undefined,
-          ]
-            .filter(Boolean)
-            .join(" ")}
+          className={leaderboardPassTabClass(tab.id, pass === tab.id)}
           onClick={() => setPass(tab.id)}
         >
           {tab.label}
@@ -264,7 +308,7 @@ export function CardLeaderboardPanel({
     <>
       {tabs}
       {selectable && selectedCardId && (
-        <div className="history-card-legend" aria-label="Bar highlight legend">
+        <div className={cn(historyCardLegendClass, innerMarginClass)} aria-label="Bar highlight legend">
           {isMaterialId(selectedCardId) ? (
             <>
               <span className="is-in-hand">On the material deck, unused</span>
@@ -278,11 +322,11 @@ export function CardLeaderboardPanel({
           )}
         </div>
       )}
-      <div className="history-table-wrap">
+      <div className={cn(historyLeaderboardTableWrapClass, innerMarginClass)}>
         <table>
           <thead>
             <tr>
-              <th className="history-copy-col">
+              <th className={historyCopyColClass}>
                 <InfoPopover label="#">
                   Copies of this card in the evaluated decklist.
                 </InfoPopover>
@@ -335,7 +379,7 @@ export function CardLeaderboardPanel({
           {materialCards.length > 0 && (
             <>
               <tbody>
-                <tr className="leaderboard-section-row">
+                <tr className={leaderboardSectionRowClass}>
                   <th colSpan={7} scope="colgroup">
                     Materials
                   </th>
@@ -357,13 +401,10 @@ export function CardLeaderboardPanel({
   if (collapsible) {
     return (
       <details
-        className={[
-          "card-stats",
-          "history-leaderboard",
-          selectable ? "is-selectable" : undefined,
-        ]
-          .filter(Boolean)
-          .join(" ")}
+        className={cn(
+          collapsibleLeaderboardClass,
+          selectable && historyLeaderboardSelectableClass,
+        )}
       >
         <summary>
           <span>Card leaderboard</span>
@@ -378,13 +419,10 @@ export function CardLeaderboardPanel({
 
   return (
     <section
-      className={[
-        "history-panel",
-        "history-leaderboard",
-        selectable ? "is-selectable" : undefined,
-      ]
-        .filter(Boolean)
-        .join(" ")}
+      className={cn(
+        historyLeaderboardPanelClass,
+        selectable && historyLeaderboardSelectableClass,
+      )}
     >
       <SectionHeading
         title="CARD LEADERBOARD"

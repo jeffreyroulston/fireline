@@ -1,7 +1,20 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { cn } from "@/lib/utils/cn";
 import { PanelTopline, SectionHeading } from "../ui";
+import {
+  infoCardBodyClass,
+  infoCardClass,
+  infoCardGrid3Class,
+  infoCardGridClass,
+  infoCardTitleClass,
+  infoCardWideClass,
+  infoListClass,
+  infoListItemClass,
+  infoModeClass,
+  infoSectionClass,
+} from "./info-classes";
 
 function InfoCard({
   title,
@@ -11,16 +24,16 @@ function InfoCard({
   children: ReactNode;
 }) {
   return (
-    <article className="info-card">
-      <h3>{title}</h3>
-      <div className="info-card-body">{children}</div>
+    <article className={infoCardClass}>
+      <h3 className={infoCardTitleClass}>{title}</h3>
+      <div className={infoCardBodyClass}>{children}</div>
     </article>
   );
 }
 
 export function InfoPanel() {
   return (
-    <div className="info-mode">
+    <div className={infoModeClass}>
       <PanelTopline
         variant="info"
         kicker="ABOUT FIRELINE"
@@ -31,9 +44,9 @@ export function InfoPanel() {
         ratio space under Mathematically Correct FiZa drill assumptions.
       </PanelTopline>
 
-      <section className="info-section">
+      <section className={infoSectionClass}>
         <SectionHeading title="WORKBENCH" />
-        <div className="info-card-grid">
+        <div className={infoCardGridClass}>
           <InfoCard title="Hand solver">
             Draw a random 7-card opening hand from a saved deck, or build one
             card by card, then search for a maximum-damage line over a 2–5 turn
@@ -65,13 +78,15 @@ export function InfoPanel() {
         </div>
       </section>
 
-      <section className="info-section">
+      <section className={infoSectionClass}>
         <SectionHeading title="SIMULATION TYPES" />
-        <div className="info-card-grid">
+        <div className={infoCardGridClass}>
           <InfoCard title="Fire brick (default)">
             Deterministic max-damage search. Every unknown draw is treated as an
-            unplayable Fire Brick — blank draws with no peek. Headline damage is
-            that brick-optimal line.
+            unplayable Fire Brick — blank draws with no peek — except the
+            guaranteed going-second draw, which samples a real card from an
+            attached maindeck and seed when one is available. Headline damage
+            is that brick-optimal line.
           </InfoCard>
           <InfoCard title="Monte Carlo — Sample">
             Needs a maindeck from the Decks tab. Shuffles the remaining deck for
@@ -95,12 +110,14 @@ export function InfoPanel() {
         </div>
       </section>
 
-      <section className="info-section">
+      <section className={infoSectionClass}>
         <SectionHeading title="SHARED SETTINGS" />
-        <div className="info-card-grid info-card-grid-3">
+        <div className={cn(infoCardGridClass, infoCardGrid3Class)}>
           <InfoCard title="Turn order">
             Going first or second. Going second draws one card at the start of
-            your first turn. On turn one while going first, champion and ally
+            your first turn — Fire brick pulls that draw from an attached
+            maindeck and seed when one is available, otherwise it stays a
+            Fire Brick. On turn one while going first, champion and ally
             attacks are blocked.
           </InfoCard>
           <InfoCard title="Turn horizon">
@@ -114,46 +131,48 @@ export function InfoPanel() {
         </div>
       </section>
 
-      <section className="info-section">
+      <section className={infoSectionClass}>
         <SectionHeading title="RULES AND ASSUMPTIONS" />
-        <article className="info-card info-card-wide">
-          <h3>What the model assumes</h3>
-          <ul className="info-list">
-            <li>
+        <article className={cn(infoCardClass, infoCardWideClass)}>
+          <h3 className={infoCardTitleClass}>What the model assumes</h3>
+          <ul className={infoListClass}>
+            <li className={infoListItemClass}>
               Unknown draws are unplayable fire bricks unless Monte Carlo, Oracle
-              only, or the two-pass oracle supplies a draw queue.
+              only, or the two-pass oracle supplies a draw queue. The exception is
+              the guaranteed going-second draw: Fire brick pulls a real card from
+              an attached maindeck and seed when one is available.
             </li>
-            <li>
+            <li className={infoListItemClass}>
               The opponent kills non-stealth, non-immortal allies during its main
               phase. Assassin class stealth (e.g. Tweedledum) only counts after
               Zander has leveled. Fast cards (e.g. Virgil, Demolition) can
               activate during
               materialize before recollect.
             </li>
-            <li>
+            <li className={infoListItemClass}>
               Playing a Unique ally while a copy is already on the board kills
               the existing copy (graveyard, including On Death).
             </li>
-            <li>
+            <li className={infoListItemClass}>
               Poisoned Dagger activates as soon as it is ready, so amplify
               applies to the rest of that turn.
             </li>
-            <li>Arthur always attacks before other allies.</li>
-            <li>Other ready allies attack together in one bulk step.</li>
-            <li>
+            <li className={infoListItemClass}>Arthur always attacks before other allies.</li>
+            <li className={infoListItemClass}>Other ready allies attack together in one bulk step.</li>
+            <li className={infoListItemClass}>
               An awake champion can attack by wielding an equipped weapon with no
               attack card (weapon power only). Attack cards still rest the
               champion; ally attacks do not.
             </li>
-            <li>
+            <li className={infoListItemClass}>
               This is not a full rules engine or opponent AI. The reductions
               above cut search space where they do not change max damage.
             </li>
-            <li>
+            <li className={infoListItemClass}>
               Champion is Zander; materials start as Impact Hammer, Mercenary’s
               Blade, Poisoned Dagger, and Zander, Varuckan Soulknife.
             </li>
-            <li>
+            <li className={infoListItemClass}>
               Deck damage opens with 7 cards from a shuffled list. Only cards in
               the supported FiZa catalog are recognized.
             </li>
@@ -161,10 +180,10 @@ export function InfoPanel() {
         </article>
       </section>
 
-      <section className="info-section">
+      <section className={infoSectionClass}>
         <SectionHeading title="ENGINE VERSION" />
-        <article className="info-card info-card-wide">
-          <h3>What the footer string means</h3>
+        <article className={cn(infoCardClass, infoCardWideClass)}>
+          <h3 className={infoCardTitleClass}>What the footer string means</h3>
           <p>
             Every simulation is stamped with an engine version. The workbench
             footer shows it as{" "}
@@ -173,27 +192,27 @@ export function InfoPanel() {
             version (rules, sampler, and attribution) so cross-run stats stay
             comparable after code changes.
           </p>
-          <ul className="info-list">
-            <li>
+          <ul className={infoListClass}>
+            <li className={infoListItemClass}>
               <strong>r (rules).</strong> Bumped manually when solver or model
               semantics change: combat rules, damage calculation, line search.
             </li>
-            <li>
+            <li className={infoListItemClass}>
               <strong>s (sampler).</strong> Bumped manually when RNG, shuffle, or
               seed derivation changes.
             </li>
-            <li>
+            <li className={infoListItemClass}>
               <strong>a (attribution).</strong> Bumped manually when stat
               attribution labels or parsing change. Card leaderboard aggregation
               requires a match; damage pooling uses r and s only.
             </li>
-            <li>
+            <li className={infoListItemClass}>
               <strong>digest.</strong> First eight digits of a hash over every
               card attribute that affects simulation. Shown in the footer only;
               card data changes do not split pooled History or card database
               stats.
             </li>
-            <li>
+            <li className={infoListItemClass}>
               <strong>build.</strong> Git commit SHA at compile time, or{" "}
               <code>dev</code> locally. Identifies the deployed binary only; not
               used for pooling.
@@ -207,22 +226,22 @@ export function InfoPanel() {
         </article>
       </section>
 
-      <section className="info-section">
+      <section className={infoSectionClass}>
         <SectionHeading title="READING RESULTS" />
-        <article className="info-card info-card-wide">
-          <h3>How to read the output</h3>
-          <ul className="info-list">
-            <li>
+        <article className={cn(infoCardClass, infoCardWideClass)}>
+          <h3 className={infoCardTitleClass}>How to read the output</h3>
+          <ul className={infoListClass}>
+            <li className={infoListItemClass}>
               Hand solver shows an optimal action line with damage, allies,
               memory, and hand after each step.
             </li>
-            <li>
+            <li className={infoListItemClass}>
               Deck damage charts sample hands; click a bar for that hand’s line.
               Monte Carlo bars show P50 with a min–max range; two-pass shows
               brick and oracle side by side. Oracle only uses the same single-bar
               chart as fire brick.
             </li>
-            <li>
+            <li className={infoListItemClass}>
               History pools only within one engine version so results stay
               comparable when the solver changes. Min and max damage grey out
               bars outside the band and rebuild the card board without changing

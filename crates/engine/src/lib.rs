@@ -3,6 +3,7 @@ pub mod cards;
 pub mod deck;
 pub mod line_event;
 pub mod model;
+pub mod optimize_strategies;
 pub mod solver;
 pub mod stats;
 pub mod version;
@@ -14,7 +15,7 @@ pub use budget::Budget;
 pub use cards::{CardDef, card_catalog};
 pub use deck::{
     DeckEvalRequest, DeckEvalResult, EvalProgress, OptimizeProgress, OptimizeRequest,
-    OptimizeResult, count_legal_decks, evaluate, evaluate_with_progress,
+    OptimizeResult, Strategy, SwapConfig, count_legal_decks, evaluate, evaluate_with_progress,
     evaluate_with_serial_progress, optimize, optimize_with_progress,
 };
 pub use line_event::{

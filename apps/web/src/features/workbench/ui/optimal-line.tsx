@@ -41,8 +41,8 @@ export function OptimalLine({
         ).length;
 
   return (
-    <div className="combat-tape">
-      <div className="tape-heading">
+    <div className="mt-6 border border-border bg-surface px-[18px] pt-[18px] pb-3 shadow-[0_1px_0_color-mix(in_srgb,var(--color-foreground)_4%,transparent)]">
+      <div className="mb-3 flex justify-between font-mono text-[11px] tracking-[0.08em] text-muted">
         <span>
           {label}
           {sampleId ? ` · ${sampleId}` : ""}
@@ -52,8 +52,8 @@ export function OptimalLine({
           {meta}
         </span>
       </div>
-      <label className="tape-search">
-        <span className="visually-hidden">Search line events</span>
+      <label className="mb-3 flex items-center gap-2.5">
+        <span className="sr-only">Search line events</span>
         <input
           type="search"
           value={query}
@@ -61,9 +61,13 @@ export function OptimalLine({
           placeholder="Search events…"
           autoComplete="off"
           spellCheck={false}
+          className="min-w-0 flex-1 border border-border bg-surface-muted px-2.5 py-2 text-foreground"
         />
         {trimmed.length > 0 && (
-          <span className="tape-search-count" aria-live="polite">
+          <span
+            className="shrink-0 font-mono text-[10px] tracking-[0.04em] text-muted uppercase"
+            aria-live="polite"
+          >
             {matchCount} match{matchCount === 1 ? "" : "es"}
           </span>
         )}

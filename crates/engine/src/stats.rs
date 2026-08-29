@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 #[cfg(feature = "ts")]
 use ts_rs::TS;
 
-pub const MATERIAL_COUNT: usize = 7;
+pub const MATERIAL_COUNT: usize = 9;
 pub const MATERIAL_IDS: [&str; MATERIAL_COUNT] = [
     "impact_hammer",
     "mercenary_blade",
@@ -18,6 +18,8 @@ pub const MATERIAL_IDS: [&str; MATERIAL_COUNT] = [
     "zander_2",
     "varuckan_soulknife",
     "tristan_1",
+    "assassins_ripper",
+    "grand_crusaders_ring",
 ];
 pub const MATERIAL_NAMES: [&str; MATERIAL_COUNT] = [
     "Impact Hammer",
@@ -27,6 +29,8 @@ pub const MATERIAL_NAMES: [&str; MATERIAL_COUNT] = [
     "Zander, Deft Executor",
     "Varuckan Soulknife",
     "Tristan, Underhanded",
+    "Assassin's Ripper",
+    "Grand Crusader's Ring",
 ];
 const MAT_HAMMER: usize = 0;
 const MAT_BLADE: usize = 1;
@@ -35,6 +39,8 @@ const MAT_ZANDER: usize = 3;
 const MAT_ZANDER_2: usize = 4;
 const MAT_SOULKNIFE: usize = 5;
 const MAT_TRISTAN: usize = 6;
+const MAT_RIPPER: usize = 7;
+const MAT_RING: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct LineCardStats {
@@ -95,7 +101,7 @@ impl LineCardStats {
                 self.damage[card.index()] += delta;
                 self.record_draws_in_events(events);
             }
-            Action::BlazingThrow => {
+            Action::BlazingThrow(_) => {
                 self.plays[Card::BlazingThrow.index()] += 1;
                 self.damage[Card::BlazingThrow.index()] +=
                     u32::from(after.damage.saturating_sub(before_damage));
@@ -126,6 +132,18 @@ impl LineCardStats {
                 self.material_plays[MAT_SOULKNIFE] += 1;
                 self.record_draws_in_events(events);
             }
+            Action::MaterializeRipper => {
+                self.material_plays[MAT_RIPPER] += 1;
+                self.record_draws_in_events(events);
+            }
+            Action::MaterializeRing => {
+                self.material_plays[MAT_RING] += 1;
+                self.record_draws_in_events(events);
+            }
+            Action::BanishCrusaderRing => {
+                self.material_plays[MAT_RING] += 1;
+                self.record_draws_in_events(events);
+            }
             Action::MercenaryBlade => {
                 self.material_plays[MAT_BLADE] += 1;
                 self.record_draws_in_events(events);
@@ -136,8 +154,8 @@ impl LineCardStats {
                     u32::from(after.damage.saturating_sub(before_damage));
                 self.record_draws_in_events(events);
             }
-            Action::AttackWithWeapon => {
-                if let Some(index) = material_index_from_weapon(before.weapon) {
+            Action::AttackWithWeapon(weapon) => {
+                if let Some(index) = material_index_from_weapon(weapon) {
                     self.material_attacks[index] += 1;
                     self.material_damage[index] +=
                         u32::from(after.damage.saturating_sub(before_damage));
@@ -395,7 +413,7 @@ pub struct DeckStatAccumulator {
     line: LineCardStats,
     /// Per-sample damage attributed (summed) for damage_when_seen.
     damage_when_seen_sum: [u32; CARD_COUNT],
-    materials_mask: u8,
+    materials_mask: u16,
 }
 
 impl Default for DeckStatAccumulator {
@@ -418,7 +436,7 @@ impl DeckStatAccumulator {
         Self::with_deck_and_materials(deck, crate::model::ALL_MATERIALS)
     }
 
-    pub fn with_deck_and_materials(deck: &[Card], materials_mask: u8) -> Self {
+    pub fn with_deck_and_materials(deck: &[Card], materials_mask: u16) -> Self {
         let mut copies = [0_u8; CARD_COUNT];
         for &card in deck {
             copies[card.index()] = copies[card.index()].saturating_add(1);
@@ -513,7 +531,7 @@ impl DeckStatAccumulator {
             .collect::<Vec<_>>();
 
         for index in 0..MATERIAL_COUNT {
-            let material_bit = 1_u8 << index;
+            let material_bit = 1_u16 << index;
             if self.materials_mask & material_bit == 0 {
                 continue;
             }
@@ -560,6 +578,7 @@ fn material_index_from_weapon(weapon: Weapon) -> Option<usize> {
         Weapon::ImpactHammer => Some(MAT_HAMMER),
         Weapon::MercenaryBlade => Some(MAT_BLADE),
         Weapon::VaruckanSoulknife => Some(MAT_SOULKNIFE),
+        Weapon::AssassinsRipper => Some(MAT_RIPPER),
         Weapon::None => None,
     }
 }
@@ -685,11 +704,11 @@ mod tests {
     #[test]
     fn records_weapon_attack_damage() {
         let mut before = State::new(&[Card::Arthur], true, 1);
-        before.weapon = Weapon::ImpactHammer;
+        before.equip_weapon(Weapon::ImpactHammer);
         let mut after = before;
         after.damage = 3;
         let mut stats = LineCardStats::default();
-        stats.record_action(Action::AttackWithWeapon, before, after, &[]);
+        stats.record_action(Action::AttackWithWeapon(Weapon::ImpactHammer), before, after, &[]);
         assert_eq!(stats.material_attacks[MAT_HAMMER], 1);
         assert_eq!(stats.material_damage[MAT_HAMMER], 3);
         let sparse = stats.to_sparse();

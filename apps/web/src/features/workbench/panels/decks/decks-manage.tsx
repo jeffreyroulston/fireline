@@ -1,14 +1,10 @@
 "use client";
 
-import { cardImageUrl } from "@/lib/card-images";
 import type { SavedDeck } from "@/lib/decks";
 import { isDeckCardlistLocked } from "@/lib/decks";
 import {
-  CARDS,
-  MATERIAL_NAMES,
   MIN_VALID_DECK_SIZE,
   analyzeMaterialDecklist,
-  isMaterialId,
 } from "@/lib/engine";
 import type { SavedMaterialDeck } from "@/lib/material-decks";
 import {
@@ -16,301 +12,31 @@ import {
   isMaterialDeckDeletable,
   nextMaterialDeckName,
 } from "@/lib/material-decks";
-import type { CardDef, CardId, MaterialId } from "@/lib/engine/types";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react";
-import { createPortal } from "react-dom";
-import { DeckPicker, SectionHeading } from "../ui";
+import type { CardId, MaterialId } from "@/lib/engine/types";
+import { useState } from "react";
+import { cn } from "@/lib/utils/cn";
+import { buttonVariants } from "@/lib/utils/variants";
+import { DeckPicker, SectionHeading } from "../../ui";
+import { MainDeckCardGrid, MaterialDeckCardGrid } from "./card-grids";
 
-const CARD_PREVIEW_DELAY_MS = 450;
-const CARD_PREVIEW_WIDTH = 312;
-const CARD_PREVIEW_MARGIN = 12;
+const toolbarClass =
+  "mt-[18px] flex items-end gap-3 max-[620px]:flex-col max-[620px]:items-stretch";
 
-function tallyCards(cards: CardId[]): { id: CardId; qty: number }[] {
-  const counts = new Map<CardId, number>();
-  for (const id of cards) {
-    counts.set(id, (counts.get(id) ?? 0) + 1);
-  }
-  return [...counts.entries()].map(([id, qty]) => ({ id, qty }));
-}
+const toolbarActionsClass =
+  "flex flex-wrap items-center gap-x-2.5 gap-y-1 max-[620px]:w-full";
 
-function cardTraitLines(card: CardDef): string[] {
-  const traits: string[] = [];
-  if (card.unique) traits.push("Unique");
-  if (card.stealth) traits.push("Stealth");
-  if (card.floatingMemory) traits.push("Floating Memory");
-  if (card.assassinPowerBonus) {
-    traits.push(`Assassin +${card.assassinPowerBonus} power`);
-  }
-  if (card.assassinStealth) traits.push("Assassin Stealth");
-  if (card.automaton) traits.push("Automaton");
-  if (card.fast) traits.push("Fast");
-  if (card.kindle) traits.push(`Kindle ${card.kindle}`);
-  if (card.prepare) traits.push(`Prepare ${card.prepare}`);
-  return traits;
-}
+const secondaryButtonClass = cn(
+  buttonVariants({ intent: "secondary" }),
+  "whitespace-nowrap max-[620px]:w-full",
+);
 
-function clampPreviewPosition(
-  anchor: DOMRect,
-  previewWidth: number,
-  previewHeight: number,
-): { top: number; left: number } {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const margin = CARD_PREVIEW_MARGIN;
-  const maxLeft = Math.max(margin, vw - previewWidth - margin);
-  const maxTop = Math.max(margin, vh - previewHeight - margin);
+const textButtonClass = buttonVariants({ intent: "text" });
 
-  const preferRight = vw - anchor.right >= previewWidth + margin * 2;
-  let left = preferRight
-    ? anchor.right + margin
-    : anchor.left - previewWidth - margin;
-  left = Math.min(Math.max(margin, left), maxLeft);
+const deckTextareaClass =
+  "min-h-[310px] resize-y p-4 font-mono text-xs leading-[1.8] normal-case read-only:cursor-default read-only:opacity-85";
 
-  let top = anchor.top;
-  top = Math.min(Math.max(margin, top), maxTop);
-
-  return { top, left };
-}
-
-function DeckCardPreview({
-  card,
-  qty,
-  src,
-  anchor,
-  onClose,
-}: {
-  card: CardDef;
-  qty: number;
-  src: string | null;
-  anchor: DOMRect;
-  onClose: () => void;
-}) {
-  const previewRef = useRef<HTMLDivElement>(null);
-  const [style, setStyle] = useState<CSSProperties>({
-    position: "fixed",
-    top: 0,
-    left: 0,
-    width: CARD_PREVIEW_WIDTH,
-    maxHeight: `calc(100vh - ${CARD_PREVIEW_MARGIN * 2}px)`,
-    visibility: "hidden",
-  });
-
-  function placePreview() {
-    const node = previewRef.current;
-    if (!node) return;
-    const { width, height } = node.getBoundingClientRect();
-    const { top, left } = clampPreviewPosition(
-      anchor,
-      width || CARD_PREVIEW_WIDTH,
-      height || 1,
-    );
-    setStyle({
-      position: "fixed",
-      top,
-      left,
-      width: CARD_PREVIEW_WIDTH,
-      maxHeight: `calc(100vh - ${CARD_PREVIEW_MARGIN * 2}px)`,
-      visibility: "visible",
-    });
-  }
-
-  useLayoutEffect(() => {
-    placePreview();
-  }, [anchor]);
-
-  useEffect(() => {
-    function reposition() {
-      placePreview();
-    }
-    function hide() {
-      onClose();
-    }
-    window.addEventListener("resize", reposition);
-    window.addEventListener("scroll", hide, true);
-    return () => {
-      window.removeEventListener("resize", reposition);
-      window.removeEventListener("scroll", hide, true);
-    };
-  }, [anchor, onClose]);
-
-  const traits = cardTraitLines(card);
-  const combat =
-    card.power != null || card.life != null
-      ? `${card.power ?? "—"} power / ${card.life ?? "—"} life`
-      : null;
-
-  return (
-    <div
-      ref={previewRef}
-      className="deck-card-preview"
-      role="tooltip"
-      style={style}
-    >
-      {src ? (
-        // eslint-disable-next-line @next/next/no-img-element -- remote GATCG art; no next/image domain config
-        <img src={src} alt="" onLoad={placePreview} />
-      ) : (
-        <div
-          className={`card-tile deck-card-preview-fallback${card.element === "fire" ? " is-fire" : ""}`}
-        >
-          <span>{card.element}</span>
-          <b>{card.name}</b>
-          <small>
-            {card.cost} · {card.kind}
-          </small>
-        </div>
-      )}
-      <div className="deck-card-preview-body">
-        <p className="deck-card-preview-qty">{qty}×</p>
-        <h3>{card.name}</h3>
-        <p>
-          {card.kind} · {card.element} · cost {card.cost}
-        </p>
-        {combat && <p>{combat}</p>}
-        {traits.length > 0 && (
-          <ul>
-            {traits.map((trait) => (
-              <li key={trait}>{trait}</li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function resolveDeckCard(id: CardId | MaterialId): CardDef | null {
-  const fromCatalog = CARDS[id];
-  if (fromCatalog) return fromCatalog;
-  if (!isMaterialId(id)) return null;
-  return {
-    id: id as CardId,
-    name: MATERIAL_NAMES[id],
-    short: MATERIAL_NAMES[id].slice(0, 5),
-    kind: "material",
-    cost: 0,
-    element: "norm",
-  };
-}
-
-function DeckCardFace({ id, qty }: { id: CardId | MaterialId; qty: number }) {
-  const card = resolveDeckCard(id);
-  const src = cardImageUrl(id);
-  const faceRef = useRef<HTMLElement>(null);
-  const timerRef = useRef<number | null>(null);
-  const [anchor, setAnchor] = useState<DOMRect | null>(null);
-
-  function clearTimer() {
-    if (timerRef.current != null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  }
-
-  const hidePreview = useCallback(() => {
-    clearTimer();
-    setAnchor(null);
-  }, []);
-
-  function showPreviewSoon() {
-    clearTimer();
-    timerRef.current = window.setTimeout(() => {
-      const el = faceRef.current;
-      if (!el) return;
-      setAnchor(el.getBoundingClientRect());
-    }, CARD_PREVIEW_DELAY_MS);
-  }
-
-  useEffect(() => () => clearTimer(), []);
-
-  if (!card) return null;
-
-  return (
-    <figure
-      ref={faceRef}
-      className="deck-card-face"
-      onMouseEnter={showPreviewSoon}
-      onMouseLeave={hidePreview}
-      onFocus={showPreviewSoon}
-      onBlur={hidePreview}
-      tabIndex={0}
-    >
-      {src ? (
-        // eslint-disable-next-line @next/next/no-img-element -- remote GATCG art; no next/image domain config
-        <img src={src} alt={card.name} loading="lazy" />
-      ) : (
-        <div
-          className={`card-tile deck-card-fallback${card.element === "fire" ? " is-fire" : ""}`}
-        >
-          <span>{card.element}</span>
-          <b>{card.name}</b>
-          <small>
-            {card.cost} · {card.kind}
-          </small>
-        </div>
-      )}
-      <figcaption>
-        <span className="deck-card-qty" aria-label={`Quantity ${qty}`}>
-          {qty}
-        </span>
-        <span className="deck-card-name">{card.name}</span>
-      </figcaption>
-      {anchor &&
-        createPortal(
-          <DeckCardPreview
-            card={card}
-            qty={qty}
-            src={src}
-            anchor={anchor}
-            onClose={hidePreview}
-          />,
-          document.body,
-        )}
-    </figure>
-  );
-}
-
-function MainDeckCardGrid({ cards }: { cards: CardId[] }) {
-  const entries = tallyCards(cards);
-  if (entries.length === 0) return null;
-
-  return (
-    <div className="deck-card-panel">
-      <SectionHeading
-        title="CARD LIST"
-        meta={<strong>{entries.length} unique</strong>}
-      />
-      <div className="deck-card-grid" aria-label="Deck card images">
-        {entries.map(({ id, qty }) => (
-          <DeckCardFace key={id} id={id} qty={qty} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function MaterialDeckCardGrid({ materialCards }: { materialCards: MaterialId[] }) {
-  return (
-    <div className="deck-card-panel">
-      <SectionHeading
-        title="MATERIAL DECK"
-        meta={<strong>{materialCards.length} cards</strong>}
-      />
-      <div className="deck-card-grid" aria-label="Material deck card images">
-        {materialCards.map((id) => (
-          <DeckCardFace key={id} id={id} qty={1} />
-        ))}
-      </div>
-    </div>
-  );
-}
+const deckIssuesListClass =
+  "m-0 list-none p-0 [&_li]:border-t [&_li]:border-primary-dark/20 [&_li]:py-1.5 [&_li]:text-[13px] [&_li]:leading-[1.45] [&_li]:text-primary-dark [&_li:first-child]:border-t-0 [&_li:first-child]:pt-0 [&_li:last-child]:pb-0";
 
 export function DecksManage({
   decks,
@@ -407,8 +133,8 @@ export function DecksManage({
   }
 
   return (
-    <div className="mode-layout line-mode">
-      <div className="controls">
+    <div className="flex flex-col gap-9">
+      <div className="min-w-0">
         <SectionHeading
           title="DECKS"
           meta={
@@ -418,7 +144,7 @@ export function DecksManage({
             </strong>
           }
         />
-        <div className="deck-toolbar">
+        <div className={toolbarClass}>
           <DeckPicker
             label="Saved deck"
             decks={decks}
@@ -429,16 +155,12 @@ export function DecksManage({
               `${deck.name}${isDeckCardlistLocked(deck) ? " · locked" : ""}`
             }
           />
-          <div className="deck-toolbar-actions">
-            <button
-              className="secondary-action"
-              type="button"
-              onClick={onCreateDeck}
-            >
+          <div className={toolbarActionsClass}>
+            <button className={secondaryButtonClass} type="button" onClick={onCreateDeck}>
               New deck
             </button>
             <button
-              className="text-action"
+              className={textButtonClass}
               type="button"
               onClick={onDuplicateDeck}
               disabled={!activeDeck}
@@ -446,7 +168,7 @@ export function DecksManage({
               Duplicate
             </button>
             <button
-              className="text-action"
+              className={textButtonClass}
               type="button"
               onClick={onStartRename}
               disabled={!activeDeck}
@@ -454,7 +176,7 @@ export function DecksManage({
               Rename
             </button>
             <button
-              className="text-action is-danger"
+              className={buttonVariants({ intent: "text", danger: true })}
               type="button"
               onClick={onDeleteDeck}
               disabled={!activeDeck}
@@ -465,13 +187,13 @@ export function DecksManage({
         </div>
         {isRenamingDeck && activeDeck && (
           <form
-            className="deck-rename-row"
+            className="mt-3.5 flex items-end gap-3 max-[620px]:flex-col max-[620px]:items-stretch"
             onSubmit={(event) => {
               event.preventDefault();
               onCommitRename();
             }}
           >
-            <label>
+            <label className="flex-1">
               Deck name
               <input
                 autoFocus
@@ -479,31 +201,33 @@ export function DecksManage({
                 onChange={(event) => onRenameDraftChange(event.target.value)}
               />
             </label>
-            <button className="secondary-action" type="submit">
+            <button className={secondaryButtonClass} type="submit">
               Save name
             </button>
-            <button
-              className="text-action"
-              type="button"
-              onClick={onCancelRename}
-            >
+            <button className={textButtonClass} type="button" onClick={onCancelRename}>
               Cancel
             </button>
           </form>
         )}
         {locked && (
-          <div className="deck-lock-note" role="status">
-            <strong>Cardlist locked</strong>
-            <p>
+          <div
+            className="my-3 mb-[18px] border border-primary-dark/45 border-l-4 border-l-primary bg-[color-mix(in_srgb,var(--color-primary)_12%,white)] px-3.5 py-3 text-[13px] leading-[1.45] text-primary-dark"
+            role="status"
+          >
+            <strong className="mb-1 block text-xs tracking-[0.04em] uppercase">
+              Cardlist locked
+            </strong>
+            <p className="m-0 text-foreground">
               This deck has simulations, so its list cannot be edited.
               Duplicate it to make changes.
             </p>
           </div>
         )}
         {!locked && (
-          <label className="deck-input">
+          <label className="mt-[18px] grid gap-[7px]">
             One card per line, with quantity
             <textarea
+              className={deckTextareaClass}
               value={deckText}
               onChange={(event) => onDeckTextChange(event.target.value)}
               spellCheck={false}
@@ -511,12 +235,16 @@ export function DecksManage({
           </label>
         )}
         {issues.length > 0 && (
-          <div className="deck-issues" role="alert">
+          <div
+            className="mt-[18px] border border-primary-dark/45 bg-[color-mix(in_srgb,var(--color-primary)_12%,white)] px-4 py-3.5"
+            role="alert"
+          >
             <SectionHeading
               title="ISSUES"
               meta={<strong>{issues.length}</strong>}
+              className="mb-2.5 text-primary-dark [&_strong]:text-primary-dark"
             />
-            <ul>
+            <ul className={deckIssuesListClass}>
               {issues.map((issue, index) => (
                 <li key={`${issue}-${index}`}>{issue}</li>
               ))}
@@ -527,13 +255,13 @@ export function DecksManage({
         <MainDeckCardGrid cards={deckCards} />
 
         {!locked && (
-          <div className="deck-material-section">
+          <div className="mt-[18px]">
             <SectionHeading
               title="MATERIAL DECKS"
               meta={<strong>{`${materialCards.length} active`}</strong>}
             />
-            <div className="deck-toolbar">
-              <label className="deck-picker">
+            <div className={toolbarClass}>
+              <label className="grid min-w-[180px] flex-1 gap-[7px]">
                 Material deck for this list
                 <select
                   value={
@@ -549,9 +277,9 @@ export function DecksManage({
                   ))}
                 </select>
               </label>
-              <div className="deck-toolbar-actions">
+              <div className={toolbarActionsClass}>
                 <button
-                  className="secondary-action"
+                  className={secondaryButtonClass}
                   type="button"
                   onClick={() => {
                     setMaterialDraftMode("create");
@@ -562,7 +290,7 @@ export function DecksManage({
                   New material deck
                 </button>
                 <button
-                  className="text-action"
+                  className={textButtonClass}
                   type="button"
                   disabled={!activeMaterialDeck}
                   onClick={() => {
@@ -580,7 +308,7 @@ export function DecksManage({
                   Duplicate
                 </button>
                 <button
-                  className="text-action"
+                  className={textButtonClass}
                   type="button"
                   disabled={!activeMaterialDeck}
                   onClick={onStartMaterialRename}
@@ -588,7 +316,7 @@ export function DecksManage({
                   Rename
                 </button>
                 <button
-                  className="text-action is-danger"
+                  className={buttonVariants({ intent: "text", danger: true })}
                   type="button"
                   disabled={
                     !activeMaterialDeck ||
@@ -606,13 +334,13 @@ export function DecksManage({
             </div>
             {isRenamingMaterialDeck && activeMaterialDeck && (
               <form
-                className="deck-rename-row"
+                className="mt-3.5 flex items-end gap-3 max-[620px]:flex-col max-[620px]:items-stretch"
                 onSubmit={(event) => {
                   event.preventDefault();
                   onCommitMaterialRename();
                 }}
               >
-                <label>
+                <label className="flex-1">
                   Material deck name
                   <input
                     autoFocus
@@ -622,11 +350,11 @@ export function DecksManage({
                     }
                   />
                 </label>
-                <button className="secondary-action" type="submit">
+                <button className={secondaryButtonClass} type="submit">
                   Save name
                 </button>
                 <button
-                  className="text-action"
+                  className={textButtonClass}
                   type="button"
                   onClick={onCancelMaterialRename}
                 >
@@ -635,7 +363,7 @@ export function DecksManage({
               </form>
             )}
             {materialDraftMode && (
-              <div className="deck-input">
+              <div className="mt-[18px] grid gap-[7px]">
                 <label>
                   Material deck name
                   <input
@@ -646,23 +374,27 @@ export function DecksManage({
                 <label>
                   One material card per line, with quantity
                   <textarea
+                    className={deckTextareaClass}
                     value={materialDraftText}
                     onChange={(event) => setMaterialDraftText(event.target.value)}
                     spellCheck={false}
                   />
                 </label>
                 {materialDraftAnalysis.issues.length > 0 && (
-                  <div className="deck-issues" role="alert">
-                    <ul>
+                  <div
+                    className="border border-primary-dark/45 bg-[color-mix(in_srgb,var(--color-primary)_12%,white)] px-4 py-3.5"
+                    role="alert"
+                  >
+                    <ul className={deckIssuesListClass}>
                       {materialDraftAnalysis.issues.map((issue, index) => (
                         <li key={`${issue}-${index}`}>{issue}</li>
                       ))}
                     </ul>
                   </div>
                 )}
-                <div className="deck-toolbar-actions">
+                <div className={toolbarActionsClass}>
                   <button
-                    className="secondary-action"
+                    className={secondaryButtonClass}
                     type="button"
                     disabled={materialDraftAnalysis.recognizedCount === 0}
                     onClick={() => void saveMaterialDraft()}
@@ -670,7 +402,7 @@ export function DecksManage({
                     Save material deck
                   </button>
                   <button
-                    className="text-action"
+                    className={textButtonClass}
                     type="button"
                     onClick={() => setMaterialDraftMode(null)}
                   >

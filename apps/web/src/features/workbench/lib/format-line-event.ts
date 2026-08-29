@@ -25,6 +25,8 @@ function weaponName(id: string | null | undefined): string {
       return "Mercenary's Blade";
     case "varuckan_soulknife":
       return "Varuckan Soulknife";
+    case "assassins_ripper":
+      return "Assassin's Ripper";
     default:
       return "No Weapon";
   }
@@ -95,6 +97,14 @@ export function formatLineEvent(
       return "Materialize Poisoned Dagger";
     case "materializeSoulknife":
       return "Materialize Varuckan Soulknife (banish 3 Fire)";
+    case "floatForRipper":
+      return event.fromMemory
+        ? "Mem Cost for Assassin's Ripper (from Mem)"
+        : "Mem Cost for Assassin's Ripper (Float from GY)";
+    case "materializeRipper":
+      return "Materialize Assassin's Ripper";
+    case "materializeRing":
+      return "Materialize Grand Crusader's Ring";
     case "materializeBlade":
       return "Materialize Mercenary's Blade (prep)";
     case "floatForZander":
@@ -204,6 +214,12 @@ export function formatLineEvent(
     }
     case "activateDagger":
       return "Activate Poisoned Dagger";
+    case "activateRipper":
+      return "Activate Assassin's Ripper (+2 power, REST)";
+    case "banishCrusaderRing":
+      return event.drawn
+        ? `Banish Grand Crusader's Ring (draw ${short(event.drawn)})`
+        : "Banish Grand Crusader's Ring (draw)";
     case "sadiBounce":
       return "Sadi bounce for Prep";
     case "onDeath":

@@ -5,7 +5,7 @@ use serde::{Serialize, Serializer};
 use ts_rs::TS;
 
 /// Manual bump when solver / model semantics change.
-pub const RULES_VERSION: u32 = 29;
+pub const RULES_VERSION: u32 = 35;
 /// Manual bump when RNG, shuffle, or seed derivation changes.
 pub const SAMPLER_VERSION: u32 = 1;
 /// Manual bump when stats attribution labels or parsing changes.

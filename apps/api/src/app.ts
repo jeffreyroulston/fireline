@@ -31,6 +31,10 @@ import {
   cardDatabasePairings,
   cardDatabasePlayMatrix,
 } from "./services/card-database.js";
+import {
+  cardDatabaseSwapSweep,
+  cardDatabaseSwapSweepCardRuns,
+} from "./services/card-database-swap-sweep.js";
 import { parseAttributionVersion, parseDamageBounds, parseVersionTriple } from "./lib/version.js";
 
 export function createApp(options: {
@@ -606,11 +610,22 @@ export function createApp(options: {
   });
 
   app.get("/analysis/card-database", async (c) => {
+    const params = new URL(c.req.url).searchParams;
+    const source = params.get("source") ?? "evaluate";
+
+    if (source === "swap_sweep") {
+      const runIdParams = params.getAll("run_id").filter(Boolean);
+      const runFilter = params.get("run_filter") === "1";
+      const result = await cardDatabaseSwapSweep(options.db, {
+        runIds: runFilter ? runIdParams : undefined,
+      });
+      return c.json(result);
+    }
+
     const simType = c.req.query("sim_type");
     if (!simType) {
       return c.json({ error: "sim_type is required" }, 400);
     }
-    const params = new URL(c.req.url).searchParams;
     const version = parseVersionTriple(params);
     if ("error" in version) {
       return c.json({ error: version.error }, 400);
@@ -657,11 +672,23 @@ export function createApp(options: {
   });
 
   app.get("/analysis/card-database/:cardId/decks", async (c) => {
+    const params = new URL(c.req.url).searchParams;
+    const source = params.get("source") ?? "evaluate";
+    const cardId = c.req.param("cardId");
+
+    if (source === "swap_sweep") {
+      const runIdParams = params.getAll("run_id").filter(Boolean);
+      const runFilter = params.get("run_filter") === "1";
+      const runs = await cardDatabaseSwapSweepCardRuns(options.db, cardId, {
+        runIds: runFilter ? runIdParams : undefined,
+      });
+      return c.json(runs);
+    }
+
     const simType = c.req.query("sim_type");
     if (!simType) {
       return c.json({ error: "sim_type is required" }, 400);
     }
-    const params = new URL(c.req.url).searchParams;
     const version = parseVersionTriple(params);
     if ("error" in version) {
       return c.json({ error: version.error }, 400);
@@ -673,7 +700,7 @@ export function createApp(options: {
     const deckIdParams = params.getAll("deck_id").filter(Boolean);
     const deckFilter = params.get("deck_filter") === "1";
     const decks = await cardDatabaseCardDecks(options.db, {
-      cardId: c.req.param("cardId"),
+      cardId,
       simType,
       version,
       attributionVersion,

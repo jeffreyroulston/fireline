@@ -9,14 +9,16 @@ use ts_rs::TS;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
-pub const MAT_HAMMER: u8 = 1 << 0;
-pub const MAT_BLADE: u8 = 1 << 1;
-pub const MAT_DAGGER: u8 = 1 << 2;
-pub const MAT_ZANDER: u8 = 1 << 3;
-pub const MAT_SOULKNIFE: u8 = 1 << 4;
-pub const MAT_TRISTAN: u8 = 1 << 5;
-pub const MAT_ZANDER_2: u8 = 1 << 6;
-pub const ALL_MATERIALS: u8 = MAT_HAMMER | MAT_BLADE | MAT_DAGGER | MAT_ZANDER | MAT_SOULKNIFE;
+pub const MAT_HAMMER: u16 = 1 << 0;
+pub const MAT_BLADE: u16 = 1 << 1;
+pub const MAT_DAGGER: u16 = 1 << 2;
+pub const MAT_ZANDER: u16 = 1 << 3;
+pub const MAT_SOULKNIFE: u16 = 1 << 4;
+pub const MAT_TRISTAN: u16 = 1 << 5;
+pub const MAT_ZANDER_2: u16 = 1 << 6;
+pub const MAT_RIPPER: u16 = 1 << 7;
+pub const MAT_RING: u16 = 1 << 8;
+pub const ALL_MATERIALS: u16 = MAT_HAMMER | MAT_BLADE | MAT_DAGGER | MAT_ZANDER | MAT_SOULKNIFE;
 pub const DRAW_QUEUE_CAP: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,6 +107,7 @@ pub enum Weapon {
     ImpactHammer,
     MercenaryBlade,
     VaruckanSoulknife,
+    AssassinsRipper,
 }
 
 impl Weapon {
@@ -114,6 +117,7 @@ impl Weapon {
             Self::ImpactHammer => "Impact Hammer",
             Self::MercenaryBlade => "Mercenary's Blade",
             Self::VaruckanSoulknife => "Varuckan Soulknife",
+            Self::AssassinsRipper => "Assassin's Ripper",
         }
     }
 
@@ -121,18 +125,50 @@ impl Weapon {
         match self {
             Self::None => 0,
             Self::ImpactHammer => 2,
-            Self::MercenaryBlade | Self::VaruckanSoulknife => 1,
+            Self::MercenaryBlade | Self::VaruckanSoulknife | Self::AssassinsRipper => 1,
         }
     }
 
     pub const fn durability(self) -> u8 {
         match self {
             Self::None => 0,
-            Self::ImpactHammer => 2,
+            Self::ImpactHammer | Self::AssassinsRipper => 2,
             Self::MercenaryBlade | Self::VaruckanSoulknife => 1,
         }
     }
+
+    pub const fn power_with_bonus(self, bonus: u8) -> u8 {
+        self.power().saturating_add(bonus)
+    }
+
+    pub const fn slot(self) -> Option<usize> {
+        match self {
+            Self::None => None,
+            Self::ImpactHammer => Some(0),
+            Self::MercenaryBlade => Some(1),
+            Self::VaruckanSoulknife => Some(2),
+            Self::AssassinsRipper => Some(3),
+        }
+    }
+
+    pub const fn from_slot(slot: usize) -> Self {
+        match slot {
+            0 => Self::ImpactHammer,
+            1 => Self::MercenaryBlade,
+            2 => Self::VaruckanSoulknife,
+            _ => Self::AssassinsRipper,
+        }
+    }
+
+    pub const EQUIPPABLE: [Self; 4] = [
+        Self::ImpactHammer,
+        Self::MercenaryBlade,
+        Self::VaruckanSoulknife,
+        Self::AssassinsRipper,
+    ];
 }
+
+pub const WEAPON_COUNT: usize = 4;
 
 /// Search board position. Memo keys hash/compare all fields except `damage`
 /// and the unconsumed draw-queue suffix (`queue[queue_pos..queue_len]`).
@@ -162,12 +198,16 @@ pub struct State {
     pub champion_damaged: bool,
     pub prep: u8,
     pub agility: u8,
-    pub weapon: Weapon,
-    pub weapon_durability: u8,
+    /// Durability per weapon type on field (0 = not equipped). [Hammer, Blade, Soulknife, Ripper].
+    pub weapons: [u8; WEAPON_COUNT],
+    /// Assassin's Ripper class bonus (+2 power until end of turn when attacking with Ripper).
+    pub weapon_power_bonus: u8,
     pub dagger: bool,
     pub dagger_ready: bool,
+    /// Grand Crusader's Ring materialized and on field (must banish from here, not the deck).
+    pub ring: bool,
     pub amplify: bool,
-    pub materials: u8,
+    pub materials: u16,
     /// Hot Cake items currently on the field.
     pub hot_cake: u8,
     pub go_first: bool,
@@ -205,7 +245,7 @@ impl State {
         go_first: bool,
         max_turns: u8,
         queue: &[Card],
-        materials: u8,
+        materials: u16,
     ) -> Self {
         let mut counts = [0_u8; CARD_COUNT];
         for &card in hand {
@@ -238,10 +278,11 @@ impl State {
             champion_damaged: false,
             prep: 0,
             agility: 0,
-            weapon: Weapon::None,
-            weapon_durability: 0,
+            weapons: [0; WEAPON_COUNT],
+            weapon_power_bonus: 0,
             dagger: false,
             dagger_ready: false,
+            ring: false,
             amplify: false,
             materials,
             hot_cake: 0,
@@ -273,10 +314,11 @@ impl State {
             && self.champion_damaged == other.champion_damaged
             && self.prep == other.prep
             && self.agility == other.agility
-            && self.weapon == other.weapon
-            && self.weapon_durability == other.weapon_durability
+            && self.weapons == other.weapons
+            && self.weapon_power_bonus == other.weapon_power_bonus
             && self.dagger == other.dagger
             && self.dagger_ready == other.dagger_ready
+            && self.ring == other.ring
             && self.amplify == other.amplify
             && self.materials == other.materials
             && self.hot_cake == other.hot_cake
@@ -322,10 +364,11 @@ impl State {
         self.champion_damaged.hash(state);
         self.prep.hash(state);
         self.agility.hash(state);
-        self.weapon.hash(state);
-        self.weapon_durability.hash(state);
+        self.weapons.hash(state);
+        self.weapon_power_bonus.hash(state);
         self.dagger.hash(state);
         self.dagger_ready.hash(state);
+        self.ring.hash(state);
         self.amplify.hash(state);
         self.materials.hash(state);
         self.hot_cake.hash(state);
@@ -360,12 +403,12 @@ impl State {
     }
 
     #[inline]
-    pub fn has_material(self, material: u8) -> bool {
+    pub fn has_material(self, material: u16) -> bool {
         self.materials & material != 0
     }
 
     #[inline]
-    pub fn remove_material(&mut self, material: u8) -> bool {
+    pub fn remove_material(&mut self, material: u16) -> bool {
         if !self.has_material(material) {
             return false;
         }
@@ -785,6 +828,7 @@ impl State {
             self.dagger_ready = true;
         }
         self.amplify = false;
+        self.weapon_power_bonus = 0;
         self.agility = 0;
     }
 
@@ -803,14 +847,52 @@ impl State {
         }
     }
 
-    pub fn consume_weapon(&mut self) {
-        if self.weapon == Weapon::None {
+    pub fn consume_weapon(&mut self, weapon: Weapon) {
+        let Some(slot) = weapon.slot() else {
             return;
+        };
+        self.weapons[slot] = self.weapons[slot].saturating_sub(1);
+    }
+
+    pub fn equip_weapon(&mut self, weapon: Weapon) {
+        let Some(slot) = weapon.slot() else {
+            return;
+        };
+        self.weapons[slot] = weapon.durability();
+    }
+
+    pub fn remove_weapon(&mut self, weapon: Weapon) {
+        if let Some(slot) = weapon.slot() {
+            self.weapons[slot] = 0;
         }
-        self.weapon_durability = self.weapon_durability.saturating_sub(1);
-        if self.weapon_durability == 0 {
-            self.weapon = Weapon::None;
-        }
+    }
+
+    pub fn has_weapon(self, weapon: Weapon) -> bool {
+        weapon
+            .slot()
+            .is_some_and(|slot| self.weapons[slot] > 0)
+    }
+
+    pub fn any_weapon(self) -> bool {
+        self.weapons.iter().any(|&durability| durability > 0)
+    }
+
+    pub fn weapon_durability(self, weapon: Weapon) -> u8 {
+        weapon
+            .slot()
+            .map(|slot| self.weapons[slot])
+            .unwrap_or(0)
+    }
+
+    pub fn weapon_power(self, weapon: Weapon) -> u8 {
+        let bonus = u8::from(weapon == Weapon::AssassinsRipper) * self.weapon_power_bonus;
+        weapon.power_with_bonus(bonus)
+    }
+
+    pub fn equipped_weapons(self) -> impl Iterator<Item = Weapon> {
+        (0..WEAPON_COUNT)
+            .filter(move |&slot| self.weapons[slot] > 0)
+            .map(Weapon::from_slot)
     }
 
     /// Cards at the top of the remaining draw queue (up to 2) before a Glimpse.
@@ -935,7 +1017,10 @@ pub enum Action {
     TristanRecollect,
     SkipAgility,
     MaterializeSoulknife,
+    MaterializeRipper,
+    MaterializeRing,
     ActivateDagger,
+    ActivateRipper,
     ActivateSadi(u8),
     AttackArthur(u8),
     AttackOthers,
@@ -946,7 +1031,7 @@ pub enum Action {
         hot_cake_sacrifice: bool,
         /// Material-deck champion leveled via Flagrant Guide on enter
         /// (`MAT_ZANDER`, `MAT_ZANDER_2`, or `MAT_TRISTAN`).
-        flagrant_level: Option<u8>,
+        flagrant_level: Option<u16>,
         /// Assassin action/attack returned from the graveyard when leveling to Deft Executor (−1 prep).
         flagrant_gy_return: Option<Card>,
     },
@@ -955,7 +1040,8 @@ pub enum Action {
     },
     PlayAttack {
         card: Card,
-        weapon: bool,
+        /// Which equipped weapon to wield, if any.
+        wield: Option<Weapon>,
         prepared: bool,
         doubled: bool,
         /// Automaton ally index for Command Automaton attacks.
@@ -969,10 +1055,11 @@ pub enum Action {
         /// When false, use normal reserve payment and imbue only if that payment is all Fire.
         imbue: bool,
     },
-    BlazingThrow,
+    BlazingThrow(Weapon),
     MercenaryBlade,
-    /// Champion declares an attack by wielding the equipped weapon (no attack card).
-    AttackWithWeapon,
+    BanishCrusaderRing,
+    /// Champion declares an attack by wielding one equipped weapon (no attack card).
+    AttackWithWeapon(Weapon),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -1018,6 +1105,9 @@ pub struct EffectiveRequest {
     pub deck_size: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decks: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
+    pub strategy: Option<&'static str>,
     pub budget: Budget,
 }
 
@@ -1055,11 +1145,11 @@ pub struct SolveRequest {
 }
 
 /// Map persisted material ids to the engine material bitmask.
-pub fn resolve_materials_bitmask(counts: &BTreeMap<String, u8>) -> u8 {
+pub fn resolve_materials_bitmask(counts: &BTreeMap<String, u8>) -> u16 {
     if counts.is_empty() {
         return ALL_MATERIALS;
     }
-    let mut mask = 0_u8;
+    let mut mask = 0_u16;
     for (id, qty) in counts {
         if *qty == 0 {
             continue;
@@ -1072,6 +1162,8 @@ pub fn resolve_materials_bitmask(counts: &BTreeMap<String, u8>) -> u8 {
             "zander_2" => MAT_ZANDER_2,
             "varuckan_soulknife" => MAT_SOULKNIFE,
             "tristan_1" => MAT_TRISTAN,
+            "assassins_ripper" => MAT_RIPPER,
+            "grand_crusaders_ring" => MAT_RING,
             _ => 0,
         };
     }

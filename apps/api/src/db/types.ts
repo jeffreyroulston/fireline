@@ -91,6 +91,7 @@ export interface RunsTable {
   damage_histogram: number[] | null;
   sample_damages: number[] | null;
   optimize_history: Array<{ iteration: number; score: number }> | null;
+  optimize_strategy: string | null;
   request_body: Record<string, unknown>;
 }
 
@@ -145,6 +146,9 @@ export interface RunCandidatesTable {
   score: number;
   counts: Record<string, number>;
   deck_hash: string;
+  candidate: string | null;
+  score_delta: number | null;
+  card_stats: Array<Record<string, unknown>> | null;
 }
 
 export interface DeckCardsTable {

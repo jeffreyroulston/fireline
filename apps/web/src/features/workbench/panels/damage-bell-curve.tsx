@@ -360,7 +360,7 @@ export function DamageBellCurve({
   ].filter((marker) => marker != null);
 
   return (
-    <div className="damage-bell-curve">
+    <div className="damage-bell-curve w-full max-w-[520px] pt-1">
       <ResponsiveContainer width="100%" height={POOLED_CHART_TOTAL_HEIGHT}>
         <AreaChart data={data} margin={CHART_MARGIN}>
           <defs>

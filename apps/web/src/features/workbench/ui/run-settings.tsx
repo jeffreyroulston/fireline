@@ -1,6 +1,8 @@
 "use client";
 
 import type { SimType } from "@/lib/engine";
+import { cn } from "@/lib/utils/cn";
+import { settingsRowClass } from "@/lib/utils/ui-classes";
 import { SectionHeading } from "./section-heading";
 
 export function RunSettings({
@@ -27,9 +29,9 @@ export function RunSettings({
   onRolloutsChange: (value: number) => void;
 }) {
   return (
-    <div className="settings-stack">
-      <SectionHeading title="CALCULATION SETTINGS" />
-      <div className="settings-row">
+    <div className="mt-7 grid gap-0 border-t border-border pt-5">
+      <SectionHeading className="mb-0" title="CALCULATION SETTINGS" />
+      <div className={cn(settingsRowClass, "mt-3.5")}>
         <label>
           Turn order
           <select
@@ -53,7 +55,7 @@ export function RunSettings({
           </select>
         </label>
       </div>
-      <div className="settings-row">
+      <div className={cn(settingsRowClass, "mt-3.5")}>
         <label>
           Simulation type
           <select
@@ -84,12 +86,12 @@ export function RunSettings({
         )}
       </div>
       {seed != null && (
-        <p className="seed-readout">
+        <p className="mt-3 font-mono text-[11px] tracking-[0.06em] text-muted [&_strong]:font-medium [&_strong]:text-foreground">
           Seed <strong>{seed}</strong>
         </p>
       )}
       {simType !== "fire_brick" && (
-        <p className="sim-hint">
+        <p className="mt-2 text-xs leading-[1.4] text-muted">
           {orderedPile
             ? "Two-pass and Oracle draw the remaining shuffled pile in order. Monte Carlo still reshuffles that leftover for each rollout."
             : "Uses the maindeck from the Decks tab so unknown draws can be sampled."}

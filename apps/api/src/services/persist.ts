@@ -45,6 +45,7 @@ function effectiveRunFields(effective: EffectiveRequest) {
     deck_size: effective.deckSize ?? null,
     decks_requested: effective.decks ?? null,
     deck_hash: deckHash(normalizeCounts(effective.deck ?? {})),
+    optimize_strategy: effective.strategy ?? null,
     ...effectiveVersionFields(effective),
   };
 }
@@ -271,6 +272,12 @@ export async function persistOptimizeResult(
           score: candidate.score,
           counts: toJsonb(normalizeCounts(candidate.counts)),
           deck_hash: deckHash(normalizeCounts(candidate.counts)),
+          candidate: candidate.candidate ?? null,
+          score_delta: candidate.scoreDelta ?? null,
+          card_stats:
+            candidate.cardStats && candidate.cardStats.length > 0
+              ? toJsonb(candidate.cardStats)
+              : null,
         })
         .execute();
     }

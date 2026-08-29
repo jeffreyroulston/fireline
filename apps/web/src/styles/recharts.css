@@ -1,0 +1,22 @@
+/* Recharts bell-curve overrides — imported after @theme in globals.css */
+
+.history-pooled-charts {
+  --pooled-chart-plot-height: 252px;
+  --pooled-chart-tick-height: 21px;
+  --pooled-chart-total-height: 273px;
+}
+
+.history-pooled-charts .damage-bell-curve .recharts-cartesian-axis-line {
+  stroke: var(--color-foreground);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.damage-bell-curve .recharts-cartesian-grid-horizontal line,
+.damage-bell-curve .recharts-cartesian-grid-vertical line {
+  stroke: transparent;
+}
+
+.damage-bell-curve .recharts-reference-line-line {
+  shape-rendering: crispEdges;
+}

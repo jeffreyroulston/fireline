@@ -1,6 +1,7 @@
 "use client";
 
 import type { OptimizeProgress } from "@/lib/api/useRun";
+import { buttonVariants } from "@/lib/utils/variants";
 import { progressPercent } from "../lib/progress-percent";
 import { OptimizeProgressPanel } from "./optimize-progress-panel";
 
@@ -22,14 +23,23 @@ export function ActionBar({
   const percent = progressPercent(progress);
 
   return (
-    <div className="action-bar">
-      <div className="action-bar-controls">
-        <button className="primary-action" onClick={onRun} disabled={busy}>
+    <div className="mt-[22px] grid gap-3.5">
+      <div className="flex flex-wrap items-center gap-[15px]">
+        <button
+          className={buttonVariants({ intent: "primary" })}
+          onClick={onRun}
+          disabled={busy}
+        >
           {busy ? "Calculating…" : label}
-          <span aria-hidden>→</span>
+          <span aria-hidden className="text-xl text-primary">
+            →
+          </span>
         </button>
         {busy && (
-          <button className="text-action" onClick={onCancel}>
+          <button
+            className={buttonVariants({ intent: "text" })}
+            onClick={onCancel}
+          >
             Cancel
           </button>
         )}

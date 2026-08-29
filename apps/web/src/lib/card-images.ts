@@ -46,6 +46,8 @@ const CARD_IMAGE_PATHS: Partial<Record<CardId | MaterialId, string>> = {
   zander_1: "/cards/images/07vvmdvbku.jpg",
   zander_2: "/cards/images/xvzpkpasit.jpg",
   varuckan_soulknife: "/cards/images/jxhktrfo66.jpg",
+  assassins_ripper: "/cards/images/isxy5li23q.jpg",
+  grand_crusaders_ring: "/cards/images/ioxgugw9r9.jpg",
   tristan_1: "/cards/images/5dgq56cjg0.jpg",
 };
 

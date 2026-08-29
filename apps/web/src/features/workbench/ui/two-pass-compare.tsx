@@ -1,6 +1,7 @@
 "use client";
 
 import type { PassResult } from "@/lib/engine";
+import { cn } from "@/lib/utils/cn";
 import { PassLinePanel } from "./pass-line-panel";
 import { twoPassEventDiff } from "../lib/two-pass-event-diff";
 
@@ -21,9 +22,9 @@ export function TwoPassCompare({
   ).length;
 
   return (
-    <div className={`pass-stack ${compact ? "compact" : ""}`}>
+    <div className={cn("mt-7 grid gap-7", compact && "mt-5 gap-5")}>
       {oracleDiffCount > 0 && (
-        <p className="pass-diff-note">
+        <p className="m-0 text-[13px] leading-[1.45] text-muted">
           {oracleDiffCount} oracle event{oracleDiffCount === 1 ? "" : "s"} differ
           from fire brick — highlighted below
         </p>

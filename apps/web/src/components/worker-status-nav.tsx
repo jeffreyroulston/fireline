@@ -8,6 +8,9 @@ import type { Tab } from "@/features/workbench/types";
 import { useRunTracker } from "@/lib/runs/run-tracker";
 import type { TrackedRun, WorkerState } from "@/lib/runs/types";
 import { isLiveRunStatus } from "@/lib/runs/types";
+import { cn } from "@/lib/utils/cn";
+import { buttonVariants } from "@/lib/utils/variants";
+import { StatusBadge } from "@/components/status-badge";
 
 const KIND_LABELS = {
   evaluate: "Deck damage",
@@ -28,19 +31,6 @@ function statusLabel(workerState: WorkerState): string {
     return "Failed";
   }
   return "Busy";
-}
-
-function runStatusLabel(run: TrackedRun): string {
-  if (run.status === "queued") {
-    return "Queued";
-  }
-  if (run.status === "running") {
-    return "Running";
-  }
-  if (run.status === "complete") {
-    return "Complete";
-  }
-  return run.status;
 }
 
 function targetTabForRun(run: TrackedRun): Tab {
@@ -107,44 +97,64 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
   const hasQueueItems = queueItems.length > 0 || finishedRuns.length > 0;
 
   return (
-    <div className="worker-status-nav" ref={rootRef}>
+    <div className="relative" ref={rootRef}>
       <button
         type="button"
-        className={[
-          "worker-status-trigger",
-          workerStateReady && workerState === "idle" ? "is-idle" : "",
-          workerStateReady && workerState === "running" ? "is-running" : "",
-          workerStateReady && workerState === "finished" ? "is-finished" : "",
-          workerStateReady && workerState === "failed" ? "is-failed" : "",
-          workerStateReady && workerState === "offline" ? "is-offline" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
+        className={cn(
+          "flex min-w-[140px] cursor-pointer flex-col gap-0.5 border-0 bg-transparent py-1 text-right font-mono text-muted",
+          workerStateReady && workerState === "running" && "text-foreground",
+        )}
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={() => setOpen((current) => !current)}
       >
-        <span className="worker-status-kicker">Worker</span>
+        <span className="text-[9px] tracking-[0.12em] uppercase">Worker</span>
         {statusText ? (
-          <span className="worker-status-label">{statusText}</span>
+          <span
+            className={cn(
+              "text-[11px] uppercase",
+              workerStateReady &&
+                workerState === "idle" &&
+                "text-secondary",
+              workerStateReady &&
+                workerState === "running" &&
+                "text-primary",
+              workerStateReady &&
+                (workerState === "finished" || workerState === "failed") &&
+                "text-foreground",
+              workerStateReady &&
+                workerState === "offline" &&
+                "text-muted",
+            )}
+          >
+            {statusText}
+          </span>
         ) : null}
       </button>
       {open ? (
-        <div className="worker-status-panel" role="dialog" aria-label="Worker status">
+        <div
+          className="absolute top-[calc(100%+6px)] right-0 z-30 w-[min(320px,90vw)] border border-border bg-surface-muted px-4 py-3.5 shadow-[0_10px_28px_rgb(0_0_0_/_12%)]"
+          role="dialog"
+          aria-label="Worker status"
+        >
           {!workerStateReady ? (
-            <p className="worker-status-meta">Checking worker state…</p>
+            <p className="mb-2 font-mono text-[11px] text-muted">
+              Checking worker state…
+            </p>
           ) : workerState === "offline" ? (
             <>
-              <p className="worker-status-panel-title">Offline</p>
-              <p className="worker-status-meta">
+              <p className="m-0 font-display text-lg tracking-[0.04em] uppercase">
+                Offline
+              </p>
+              <p className="mb-2 font-mono text-[11px] text-muted">
                 The API cannot reach the simulation worker. Runs cannot start
                 until it is back.
               </p>
             </>
           ) : (
             <>
-              <div className="worker-status-panel-head">
-                <p className="worker-status-panel-title">
+              <div className="mb-1.5 flex items-start justify-between gap-3">
+                <p className="m-0 font-display text-lg tracking-[0.04em] uppercase">
                   {workerState === "running"
                     ? queueSummary
                     : statusLabel(workerState)}
@@ -152,7 +162,10 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
                 {hasQueueItems ? (
                   <button
                     type="button"
-                    className="text-action worker-queue-clear"
+                    className={cn(
+                      buttonVariants({ intent: "text" }),
+                      "mt-0.5 shrink-0",
+                    )}
                     onClick={() => {
                       void clearQueue();
                     }}
@@ -162,35 +175,40 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
                 ) : null}
               </div>
               {workerState === "running" ? (
-                <p className="worker-status-meta">
+                <p className="mb-2 font-mono text-[11px] text-muted">
                   {maxConcurrency} worker slot{maxConcurrency === 1 ? "" : "s"}{" "}
                   · {runningCount} active · {queuedCount} waiting
                 </p>
               ) : null}
 
               {queueItems.length > 0 ? (
-                <ul className="worker-queue-list">
+                <ul className="m-0 list-none p-0">
                   {queueItems.map((run) => {
                     const percent =
                       run.status === "running" && run.progress
                         ? handProgressPercent(run.progress)
                         : null;
                     return (
-                      <li className="worker-queue-item" key={run.id}>
-                        <div className="worker-queue-item-head">
+                      <li
+                        className="[&:not(:first-child)]:mt-2.5 [&:not(:first-child)]:border-t [&:not(:first-child)]:border-border [&:not(:first-child)]:pt-2.5"
+                        key={run.id}
+                      >
+                        <div className="mb-1 flex items-baseline justify-between gap-2.5 font-display text-[15px] tracking-[0.03em] uppercase">
                           <strong>{KIND_LABELS[run.kind]}</strong>
-                          <span>{runStatusLabel(run)}</span>
+                          <StatusBadge status={run.status} />
                         </div>
-                        <p className="worker-queue-item-meta">{run.deckName}</p>
+                        <p className="mb-1.5 font-mono text-[11px] text-muted">
+                          {run.deckName}
+                        </p>
                         {percent != null ? (
-                          <p className="worker-queue-item-progress">
+                          <p className="mb-1.5 font-mono text-[11px] text-muted">
                             {percent}% complete
                           </p>
                         ) : null}
-                        <div className="worker-queue-item-actions">
+                        <div className="flex flex-wrap gap-x-3.5 gap-y-2.5">
                           <button
                             type="button"
-                            className="text-action"
+                            className={buttonVariants({ intent: "text" })}
                             onClick={() => navigateToRun(run)}
                           >
                             Open
@@ -198,7 +216,7 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
                           {isLiveRunStatus(run.status) ? (
                             <button
                               type="button"
-                              className="text-action"
+                              className={buttonVariants({ intent: "text" })}
                               onClick={() => {
                                 void cancelRun(run.id);
                               }}
@@ -212,31 +230,40 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
                   })}
                 </ul>
               ) : workerState === "idle" ? (
-                <p className="worker-status-meta">No simulations in the queue.</p>
+                <p className="mb-2 font-mono text-[11px] text-muted">
+                  No simulations in the queue.
+                </p>
               ) : null}
 
               {finishedRuns.length > 0 ? (
                 <>
-                  <p className="worker-queue-section-label">Finished</p>
-                  <ul className="worker-queue-list">
+                  <p className="mt-3.5 mb-1.5 font-mono text-[10px] tracking-[0.1em] text-muted uppercase">
+                    Finished
+                  </p>
+                  <ul className="m-0 list-none p-0">
                     {finishedRuns.map((run) => (
-                      <li className="worker-queue-item" key={run.id}>
-                        <div className="worker-queue-item-head">
+                      <li
+                        className="[&:not(:first-child)]:mt-2.5 [&:not(:first-child)]:border-t [&:not(:first-child)]:border-border [&:not(:first-child)]:pt-2.5"
+                        key={run.id}
+                      >
+                        <div className="mb-1 flex items-baseline justify-between gap-2.5 font-display text-[15px] tracking-[0.03em] uppercase">
                           <strong>{KIND_LABELS[run.kind]}</strong>
-                          <span>Complete</span>
+                          <StatusBadge status="complete" />
                         </div>
-                        <p className="worker-queue-item-meta">{run.deckName}</p>
-                        <div className="worker-queue-item-actions">
+                        <p className="mb-1.5 font-mono text-[11px] text-muted">
+                          {run.deckName}
+                        </p>
+                        <div className="flex flex-wrap gap-x-3.5 gap-y-2.5">
                           <button
                             type="button"
-                            className="text-action"
+                            className={buttonVariants({ intent: "text" })}
                             onClick={() => navigateToRun(run)}
                           >
                             Open
                           </button>
                           <button
                             type="button"
-                            className="text-action"
+                            className={buttonVariants({ intent: "text" })}
                             onClick={() => {
                               dismissFinished(run.id);
                             }}

@@ -1,16 +1,18 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { SimType } from "@/lib/engine";
 import type { DeckResult, SampleHand } from "../types";
 import { LIVE_RUN_ID, type BarCardHighlight } from "./card-leaderboard";
-import { DamageBellCurve } from "./damage-bell-curve";
 import {
   PooledDamageBarChart,
   PooledSampleDetail,
   usePooledSampleSelection,
   type PooledSampleBar,
 } from "./pooled-damage-bars";
+import { cn } from "@/lib/utils/cn";
+import { statSpanClass } from "@/lib/utils/stat-classes";
 import { SectionHeading, StatLine } from "../ui";
 import {
   damageMatchesRange,
@@ -23,6 +25,31 @@ import {
   meanOf,
   percentileFromValues,
 } from "../lib/deck-stats";
+import {
+  historyBellPlotClass,
+  historyCompareLegendClass,
+  historyComparePairClass,
+  historyCompareStatLineClass,
+  historyDeltaClass,
+  historyDeltaToneClass,
+  historyPanelClass,
+  historyPooledChartsClass,
+  historyPooledChartsCompareClass,
+  historyPooledHeadingClass,
+  historyRangeClearClass,
+  historyRangeFieldsClass,
+  historyRangeFilterClass,
+  historyRangeHintClass,
+  historyRangeHintErrorClass,
+} from "./history/shared";
+
+const DamageBellCurve = dynamic(
+  () =>
+    import("./damage-bell-curve").then((module) => ({
+      default: module.DamageBellCurve,
+    })),
+  { ssr: false },
+);
 
 export type { PooledSampleBar };
 
@@ -49,10 +76,8 @@ function formatSigned(value: number, digits = 1): string {
   return digits === 0 ? "0" : (0).toFixed(digits);
 }
 
-function deltaTone(value: number): "is-hotter" | "is-cooler" | "" {
-  if (value > 0) return "is-hotter";
-  if (value < 0) return "is-cooler";
-  return "";
+function deltaToneClass(value: number) {
+  return historyDeltaToneClass(value);
 }
 
 export function distributionFromDeckResult(
@@ -94,50 +119,50 @@ function CompareStatLine({
   compare: PooledDistribution;
 }) {
   return (
-    <div className="stat-line history-compare-stats">
-      <span className="is-mean">
+    <div className={historyCompareStatLineClass}>
+      <span className={statSpanClass("mean")}>
         <small>MEAN</small>
-        <b className="history-compare-pair">
+        <b className={historyComparePairClass}>
           <em className="is-baseline">{baseline.mean.toFixed(1)}</em>
           <em className="is-compare">{compare.mean.toFixed(1)}</em>
         </b>
-        <i className={`history-delta ${deltaTone(compare.mean - baseline.mean)}`}>
+        <i className={cn(historyDeltaClass, deltaToneClass(compare.mean - baseline.mean))}>
           {formatSigned(compare.mean - baseline.mean, 1)}
         </i>
       </span>
-      <span className="is-p10">
+      <span className={statSpanClass("p10")}>
         <small>P10</small>
-        <b className="history-compare-pair">
+        <b className={historyComparePairClass}>
           <em className="is-baseline">{baseline.p10}</em>
           <em className="is-compare">{compare.p10}</em>
         </b>
-        <i className={`history-delta ${deltaTone(compare.p10 - baseline.p10)}`}>
+        <i className={cn(historyDeltaClass, deltaToneClass(compare.p10 - baseline.p10))}>
           {formatSigned(compare.p10 - baseline.p10, 0)}
         </i>
       </span>
-      <span className="is-p50">
+      <span className={statSpanClass("p50")}>
         <small>P50</small>
-        <b className="history-compare-pair">
+        <b className={historyComparePairClass}>
           <em className="is-baseline">{baseline.p50}</em>
           <em className="is-compare">{compare.p50}</em>
         </b>
-        <i className={`history-delta ${deltaTone(compare.p50 - baseline.p50)}`}>
+        <i className={cn(historyDeltaClass, deltaToneClass(compare.p50 - baseline.p50))}>
           {formatSigned(compare.p50 - baseline.p50, 0)}
         </i>
       </span>
-      <span className="is-p90">
+      <span className={statSpanClass("p90")}>
         <small>P90</small>
-        <b className="history-compare-pair">
+        <b className={historyComparePairClass}>
           <em className="is-baseline">{baseline.p90}</em>
           <em className="is-compare">{compare.p90}</em>
         </b>
-        <i className={`history-delta ${deltaTone(compare.p90 - baseline.p90)}`}>
+        <i className={cn(historyDeltaClass, deltaToneClass(compare.p90 - baseline.p90))}>
           {formatSigned(compare.p90 - baseline.p90, 0)}
         </i>
       </span>
-      <span className="is-range">
+      <span className={statSpanClass("range")}>
         <small>RANGE</small>
-        <b className="history-compare-pair">
+        <b className={historyComparePairClass}>
           <em className="is-baseline">
             {baseline.min}–{baseline.max}
           </em>
@@ -145,18 +170,18 @@ function CompareStatLine({
             {compare.min}–{compare.max}
           </em>
         </b>
-        <i className="history-delta history-delta-range">
-          <span className={deltaTone(compare.min - baseline.min)}>
+        <i className={cn(historyDeltaClass, "flex flex-wrap gap-x-3 gap-y-1.5")}>
+          <span className={deltaToneClass(compare.min - baseline.min)}>
             min {formatSigned(compare.min - baseline.min, 0)}
           </span>
-          <span className={deltaTone(compare.max - baseline.max)}>
+          <span className={deltaToneClass(compare.max - baseline.max)}>
             max {formatSigned(compare.max - baseline.max, 0)}
           </span>
         </i>
       </span>
-      <span className="is-influence">
+      <span className={statSpanClass("influence")}>
         <small>END INF</small>
-        <b className="history-compare-pair">
+        <b className={historyComparePairClass}>
           <em className="is-baseline">
             {formatOptionalStat(baseline.meanEndInfluence, 1)}
           </em>
@@ -165,14 +190,15 @@ function CompareStatLine({
           </em>
         </b>
         <i
-          className={`history-delta ${
+          className={cn(
+            historyDeltaClass,
             baseline.meanEndInfluence != null &&
-            compare.meanEndInfluence != null
-              ? deltaTone(
+              compare.meanEndInfluence != null
+              ? deltaToneClass(
                   compare.meanEndInfluence - baseline.meanEndInfluence,
                 )
-              : ""
-          }`}
+              : "",
+          )}
         >
           {baseline.meanEndInfluence != null &&
           compare.meanEndInfluence != null
@@ -301,9 +327,9 @@ export function PooledDamagePanel({
       : null;
 
   return (
-    <section className="history-panel history-pooled">
+    <section className={cn(historyPanelClass, "mb-[18px]")}>
       <SectionHeading
-        className="history-pooled-heading"
+        className={historyPooledHeadingClass}
         title={title}
         meta={meta}
       />
@@ -311,7 +337,7 @@ export function PooledDamagePanel({
       {comparing && compareDistribution ? (
         <>
           {(baselineLegend || compareLegend) && (
-            <div className="history-compare-legend" aria-hidden="true">
+            <div className={historyCompareLegendClass} aria-hidden="true">
               <span className="is-baseline">{baselineLegend}</span>
               <span className="is-compare">{compareLegend}</span>
             </div>
@@ -344,8 +370,8 @@ export function PooledDamagePanel({
         />
       )}
 
-      <div className="history-range-filter">
-        <div className="history-range-fields">
+      <div className={historyRangeFilterClass}>
+        <div className={historyRangeFieldsClass}>
           <label>
             Min
             <input
@@ -375,7 +401,7 @@ export function PooledDamagePanel({
           {(damageMinText !== "" || damageMaxText !== "") && (
             <button
               type="button"
-              className="text-action"
+              className={historyRangeClearClass}
               onClick={() => {
                 setDamageMinText("");
                 setDamageMaxText("");
@@ -388,11 +414,10 @@ export function PooledDamagePanel({
         {rangeHint && (
           <p
             id="pooled-range-hint"
-            className={
-              parsedRange.error
-                ? "history-range-hint is-error"
-                : "history-range-hint"
-            }
+            className={cn(
+              historyRangeHintClass,
+              parsedRange.error && historyRangeHintErrorClass,
+            )}
           >
             {rangeHint}
           </p>
@@ -400,9 +425,12 @@ export function PooledDamagePanel({
       </div>
 
       <div
-        className={`history-pooled-charts${comparing ? " is-compare" : ""}`}
+        className={cn(
+          historyPooledChartsClass,
+          comparing && historyPooledChartsCompareClass,
+        )}
       >
-        <div className="history-bell-plot">
+        <div className={historyBellPlotClass}>
           {comparing && compareDistribution ? (
             <DamageBellCurve
               series={[

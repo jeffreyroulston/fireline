@@ -7,6 +7,7 @@ mod export {
         cards::CardDef,
         deck::{
             DeckEvalRequest, DeckEvalResult, OptimizeProgress, OptimizeRequest, OptimizeResult,
+            Strategy, SwapConfig,
         },
         line_event::{ActionOp, AttackBonuses, EventKind, LineEvent, TapePhase},
         model::{Bounds, EffectiveRequest, SimType, SolveRequest, SolveResult},
@@ -27,6 +28,8 @@ mod export {
         DeckEvalRequest::export_all().expect("deck eval request");
         DeckEvalResult::export_all().expect("deck eval result");
         OptimizeRequest::export_all().expect("optimize request");
+        Strategy::export_all().expect("strategy");
+        SwapConfig::export_all().expect("swap config");
         OptimizeResult::export_all().expect("optimize result");
         OptimizeProgress::export_all().expect("optimize progress");
         CardStat::export_all().expect("card stat");

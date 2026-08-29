@@ -5,9 +5,10 @@ use crate::{
         push_ally_gy_death,
     },
     model::{
-        Action, DamageDistribution, EffectiveRequest, MAT_BLADE, MAT_DAGGER,
-        MAT_HAMMER, MAT_SOULKNIFE, MAT_TRISTAN, MAT_ZANDER, MAT_ZANDER_2, McRollout, PassResult, Phase, SimType,
-        SolveRequest, SolveResult, State, TwoPassResult, Weapon, resolve_materials_bitmask,
+        Action, DamageDistribution, EffectiveRequest, MAT_BLADE, MAT_DAGGER, MAT_HAMMER, MAT_RING,
+        MAT_RIPPER, MAT_SOULKNIFE, MAT_TRISTAN, MAT_ZANDER, MAT_ZANDER_2, McRollout, PassResult,
+        Phase, SimType, SolveRequest, SolveResult, State, TwoPassResult, Weapon,
+        resolve_materials_bitmask,
     },
     version::ENGINE_VERSION,
 };
@@ -163,7 +164,20 @@ pub fn solve_with_progress(
     let rollouts = request.rollouts.clamp(1, request.budget.max_solve_rollouts);
     let materials = resolve_materials_bitmask(&request.materials);
     let mut result = match request.sim_type {
-        SimType::FireBrick => solve_cards(&hand, request.go_first, max_turns, materials),
+        SimType::FireBrick => {
+            let opening_queue = if request.go_first {
+                Vec::new()
+            } else {
+                fire_brick_opening_queue(request, &hand)
+            };
+            solve_cards_with_queue(
+                &hand,
+                request.go_first,
+                max_turns,
+                materials,
+                &opening_queue,
+            )
+        }
         SimType::MonteCarlo => {
             let remaining = remaining_for_solve(request, &hand)?;
             solve_monte_carlo(
@@ -220,6 +234,7 @@ fn solve_effective(request: &SolveRequest, max_turns: u8, rollouts: u16) -> Effe
         bounds: BTreeMap::new(),
         deck_size: None,
         decks: None,
+        strategy: None,
         budget: request.budget,
     }
 }
@@ -243,13 +258,28 @@ fn hand_solve_effective(
         bounds: BTreeMap::new(),
         deck_size: None,
         decks: None,
+        strategy: None,
         budget,
     }
 }
 
-pub fn solve_cards(hand: &[Card], go_first: bool, max_turns: u8, materials: u8) -> SolveResult {
+pub fn solve_cards(hand: &[Card], go_first: bool, max_turns: u8, materials: u16) -> SolveResult {
+    solve_cards_with_queue(hand, go_first, max_turns, materials, &[])
+}
+
+/// Fire Brick has no attached maindeck by default, so unknown draws stay unplayable
+/// Fire Bricks. When a maindeck *is* known (e.g. the hand solver's Decks tab), the one
+/// guaranteed "going second" draw uses `queue` to get a real card instead; every draw
+/// after that still falls back to Fire Brick once the queue is exhausted.
+fn solve_cards_with_queue(
+    hand: &[Card],
+    go_first: bool,
+    max_turns: u8,
+    materials: u16,
+    queue: &[Card],
+) -> SolveResult {
     let started = Instant::now();
-    let (pass, line_stats) = solve_pass(hand, go_first, max_turns, &[], false, materials);
+    let (pass, line_stats) = solve_pass(hand, go_first, max_turns, queue, false, materials);
     SolveResult {
         sim_type: SimType::FireBrick,
         max_damage: pass.max_damage,
@@ -279,7 +309,7 @@ pub fn solve_pass(
     max_turns: u8,
     queue: &[Card],
     glimpse_enabled: bool,
-    materials: u8,
+    materials: u16,
 ) -> (PassResult, crate::stats::LineCardStats) {
     let mut initial = State::with_queue_and_materials(hand, go_first, max_turns, queue, materials);
     let opening_draw = if go_first {
@@ -312,7 +342,7 @@ pub fn solve_pass(
 fn summarize_line_stats(
     opening: &[Card],
     line: &crate::stats::LineCardStats,
-    materials: u8,
+    materials: u16,
 ) -> Vec<crate::stats::CardStat> {
     let mut acc = crate::stats::DeckStatAccumulator::with_deck_and_materials(opening, materials);
     acc.add_sample(opening, line);
@@ -326,7 +356,7 @@ fn solve_monte_carlo(
     max_turns: u8,
     rollouts: u16,
     seed: u64,
-    materials: u8,
+    materials: u16,
     mut on_rollout: impl FnMut(u16, u16) -> ControlFlow<()>,
 ) -> Result<SolveResult, String> {
     let started = Instant::now();
@@ -440,7 +470,7 @@ fn solve_two_pass(
     max_turns: u8,
     seed: u64,
     ordered: bool,
-    materials: u8,
+    materials: u16,
 ) -> SolveResult {
     let started = Instant::now();
     let (mut brick, brick_stats) = solve_pass(hand, go_first, max_turns, &[], false, materials);
@@ -482,7 +512,7 @@ fn solve_oracle_only(
     max_turns: u8,
     seed: u64,
     ordered: bool,
-    materials: u8,
+    materials: u16,
 ) -> SolveResult {
     let started = Instant::now();
     let queue = oracle_queue(remaining, seed, ordered);
@@ -508,6 +538,27 @@ fn solve_oracle_only(
             crate::budget::Budget::default(),
         ),
     }
+}
+
+/// Picks the real card for Fire Brick's guaranteed "going second" draw when the request
+/// has an explicit remaining-deck order or an attached maindeck and seed. Returns an
+/// empty queue (falling back to the usual Fire Brick placeholder) when neither is
+/// available, since Fire Brick doesn't require a deck.
+fn fire_brick_opening_queue(request: &SolveRequest, hand: &[Card]) -> Vec<Card> {
+    if let Some(ids) = &request.queue {
+        return ids
+            .first()
+            .and_then(|id| parse_card(id))
+            .into_iter()
+            .collect();
+    }
+    let Ok(mut remaining) = remaining_deck(&request.deck, hand) else {
+        return Vec::new();
+    };
+    let mut rng = Rng(request.seed);
+    shuffle_cards(&mut remaining, &mut rng);
+    remaining.truncate(1);
+    remaining
 }
 
 fn remaining_deck(deck: &BTreeMap<String, u8>, hand: &[Card]) -> Result<Vec<Card>, String> {
@@ -650,7 +701,7 @@ fn zander_gy_return_options(state: State) -> Vec<Card> {
         .collect()
 }
 
-fn flagrant_level_targets(state: State) -> [Option<u8>; 2] {
+fn flagrant_level_targets(state: State) -> [Option<u16>; 2] {
     let mut targets = [None; 2];
     let mut count = 0;
     if state.champion_level == 0 {
@@ -775,13 +826,18 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
 
     if state.phase == Phase::Materialize {
         let mut result = Vec::with_capacity(16);
-        if state.turn == 1 {
+        // Mercenary's Blade in Mate: champion must already be leveled.
+        if state.turn >= 1 {
             if state.has_material(MAT_HAMMER) {
                 result.push(Action::MaterializeHammer);
             }
-            if state.has_material(MAT_DAGGER) {
-                result.push(Action::MaterializeDagger);
+            if state.is_assassin() && state.prep > 0 && state.has_material(MAT_BLADE) {
+                result.push(Action::MercenaryBlade);
             }
+        }
+        // Solver reduction: Poisoned Dagger is always taken on the first Materialize window.
+        if state.turn == 1 && state.has_material(MAT_DAGGER) {
+            result.push(Action::MaterializeDagger);
         }
         if state.turn >= 1 && state.champion_level == 0 && state.has_material(MAT_ZANDER) {
             if state.memory_len > 0 || state.float_gy > 0 {
@@ -814,6 +870,16 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
                     });
                 }
             }
+        }
+        if state.turn >= 1
+            && state.is_assassin()
+            && state.has_material(MAT_RIPPER)
+            && (state.memory_len > 0 || state.float_gy > 0)
+        {
+            result.push(Action::MaterializeRipper);
+        }
+        if state.turn >= 1 && state.has_material(MAT_RING) {
+            result.push(Action::MaterializeRing);
         }
         // Fast activations before recollect (e.g. Virgil, Demolition).
         push_fast_plays(state, &mut result);
@@ -935,15 +1001,19 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
             if !state.has(card) || state.hand_len.saturating_sub(1) < card.cost() {
                 continue;
             }
-            let weapon_count = usize::from(state.weapon != Weapon::None) + 1;
-            let weapon_options = [true, false];
+            let mut wield_options = vec![None];
+            for weapon in Weapon::EQUIPPABLE {
+                if state.has_weapon(weapon) {
+                    wield_options.push(Some(weapon));
+                }
+            }
             let prep_options = card == Card::IgnitedStab && state.prep > 0 && state.is_assassin();
             let double = card == Card::RendingFlames && state.is_assassin() && state.fire_gy >= 2;
-            for &weapon in &weapon_options[..weapon_count] {
+            for wield in wield_options {
                 if prep_options {
                     result.push(Action::PlayAttack {
                         card,
-                        weapon,
+                        wield,
                         prepared: true,
                         doubled: false,
                         command_ally: None,
@@ -951,16 +1021,17 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
                 }
                 result.push(Action::PlayAttack {
                     card,
-                    weapon,
+                    wield,
                     prepared: false,
                     doubled: double,
                     command_ally: None,
                 });
             }
         }
-        // Weapon-only champion attack (no attack card required).
-        if state.weapon != Weapon::None {
-            result.push(Action::AttackWithWeapon);
+        for weapon in Weapon::EQUIPPABLE {
+            if state.has_weapon(weapon) {
+                result.push(Action::AttackWithWeapon(weapon));
+            }
         }
     }
 
@@ -976,7 +1047,7 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
             }
             result.push(Action::PlayAttack {
                 card: Card::UncannyRealization,
-                weapon: false,
+                wield: None,
                 prepared: false,
                 doubled: false,
                 command_ally: Some(index as u8),
@@ -987,20 +1058,31 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
     push_action_plays(state, &mut result);
 
     if state.has(Card::BlazingThrow)
-        && state.weapon != Weapon::None
+        && state.any_weapon()
         && state.hand_len >= 2
         && !(state.go_first && state.turn == 0)
     {
-        result.push(Action::BlazingThrow);
+        for weapon in Weapon::EQUIPPABLE {
+            if state.has_weapon(weapon) {
+                result.push(Action::BlazingThrow(weapon));
+            }
+        }
     }
-    if state.is_assassin() && state.prep > 0 && state.has_material(MAT_BLADE) {
+    // Main: prep-paid materialization; champion need not be leveled yet.
+    if state.prep > 0 && state.has_material(MAT_BLADE) {
         result.push(Action::MercenaryBlade);
     }
     if state.is_assassin()
-        && state.has_material(MAT_SOULKNIFE)
-        && state.fire_gy >= 3
-        && state.weapon == Weapon::None
+        && state.prep > 0
+        && state.has_weapon(Weapon::AssassinsRipper)
+        && state.champion_awake
     {
+        result.push(Action::ActivateRipper);
+    }
+    if state.ring {
+        result.push(Action::BanishCrusaderRing);
+    }
+    if state.is_assassin() && state.has_material(MAT_SOULKNIFE) && state.fire_gy >= 3 {
         result.push(Action::MaterializeSoulknife);
     }
     result.push(Action::Pass);
@@ -1029,8 +1111,7 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
         Action::SkipMaterialize => finish_materialization(&mut state, tape),
         Action::MaterializeHammer => {
             state.remove_material(MAT_HAMMER);
-            state.weapon = Weapon::ImpactHammer;
-            state.weapon_durability = state.weapon.durability();
+            state.equip_weapon(Weapon::ImpactHammer);
             tape.push(
                 state,
                 TapePhase::Materialize,
@@ -1146,14 +1227,47 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
         Action::MaterializeSoulknife => {
             state.remove_material(MAT_SOULKNIFE);
             state.banish_fire_from_gy(3, false);
-            state.weapon = Weapon::VaruckanSoulknife;
-            state.weapon_durability = state.weapon.durability();
+            state.equip_weapon(Weapon::VaruckanSoulknife);
             tape.push(
                 state,
                 TapePhase::Main,
                 EventKind::MaterializeSoulknife,
                 EventFields::default(),
             );
+        }
+        Action::MaterializeRipper => {
+            state.remove_material(MAT_RIPPER);
+            let from_memory = state.pay_champion_memory_cost();
+            let fields = if from_memory {
+                EventFields::default().from_memory()
+            } else {
+                EventFields::default()
+            };
+            tape.push(
+                state,
+                TapePhase::Materialize,
+                EventKind::FloatForRipper,
+                fields,
+            );
+            state.equip_weapon(Weapon::AssassinsRipper);
+            tape.push(
+                state,
+                TapePhase::Materialize,
+                EventKind::MaterializeRipper,
+                EventFields::default(),
+            );
+            finish_materialization(&mut state, tape);
+        }
+        Action::MaterializeRing => {
+            state.remove_material(MAT_RING);
+            state.ring = true;
+            tape.push(
+                state,
+                TapePhase::Materialize,
+                EventKind::MaterializeRing,
+                EventFields::default(),
+            );
+            finish_materialization(&mut state, tape);
         }
         Action::ActivateDagger => {
             state.dagger = false;
@@ -1166,6 +1280,29 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
                 EventKind::ActivateDagger,
                 EventFields::default(),
             );
+        }
+        Action::ActivateRipper => {
+            state.prep = state.prep.saturating_sub(1);
+            state.weapon_power_bonus = 2;
+            state.champion_awake = false;
+            tape.push(
+                state,
+                TapePhase::Main,
+                EventKind::ActivateRipper,
+                EventFields::default(),
+            );
+        }
+        Action::BanishCrusaderRing => {
+            if state.ring {
+                state.ring = false;
+                let drawn = state.draw_unknown();
+                tape.push(
+                    state,
+                    TapePhase::Main,
+                    EventKind::BanishCrusaderRing,
+                    EventFields::default().with_drawn(drawn),
+                );
+            }
         }
         Action::ActivateSadi(index) => {
             if state.pay_reserve(2) {
@@ -1210,14 +1347,14 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
         Action::PlayItem { card } => play_item(&mut state, card, tape),
         Action::PlayAttack {
             card,
-            weapon,
+            wield,
             prepared,
             doubled,
             command_ally,
         } => play_attack(
             &mut state,
             card,
-            weapon,
+            wield,
             prepared,
             doubled,
             command_ally,
@@ -1229,12 +1366,10 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
             prepared,
             imbue,
         } => play_action(&mut state, card, kindle, prepared, imbue, tape),
-        Action::BlazingThrow => {
+        Action::BlazingThrow(weapon) => {
             state.remove_hand(Card::BlazingThrow);
             state.pay_reserve(1);
-            let weapon = state.weapon;
-            state.weapon = Weapon::None;
-            state.weapon_durability = 0;
+            state.remove_weapon(weapon);
             state.send_to_gy(Card::BlazingThrow);
             state.add_damage(4);
             tape.push(
@@ -1247,33 +1382,35 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
         Action::MercenaryBlade => {
             state.remove_material(MAT_BLADE);
             state.prep -= 1;
-            state.weapon = Weapon::MercenaryBlade;
-            state.weapon_durability = state.weapon.durability();
+            state.equip_weapon(Weapon::MercenaryBlade);
+            let phase = tape_phase(&state);
             tape.push(
                 state,
-                TapePhase::Main,
+                phase,
                 EventKind::MaterializeBlade,
                 EventFields::default(),
             );
+            if state.phase == Phase::Materialize {
+                finish_materialization(&mut state, tape);
+            }
         }
-        Action::AttackWithWeapon => attack_with_weapon(&mut state, tape),
+        Action::AttackWithWeapon(weapon) => attack_with_weapon(&mut state, weapon, tape),
     }
     state
 }
 
-fn attack_with_weapon(state: &mut State, tape: &mut EventTape) {
-    if state.weapon == Weapon::None || !state.champion_awake {
+fn attack_with_weapon(state: &mut State, weapon: Weapon, tape: &mut EventTape) {
+    if !state.has_weapon(weapon) || !state.champion_awake {
         return;
     }
-    let weapon = state.weapon;
-    let power = weapon.power();
+    let power = state.weapon_power(weapon);
     tape.push(
         *state,
         TapePhase::Main,
         EventKind::WieldForAttack,
         EventFields::default().with_weapon(weapon),
     );
-    state.consume_weapon();
+    state.consume_weapon(weapon);
     state.champion_awake = false;
     state.add_damage(power);
     tape.push(
@@ -1303,7 +1440,7 @@ fn play_ally(
     kindle: u8,
     sacrifice: bool,
     hot_cake_sacrifice: bool,
-    flagrant_level: Option<u8>,
+    flagrant_level: Option<u16>,
     flagrant_gy_return: Option<Card>,
     tape: &mut EventTape,
 ) {
@@ -1481,7 +1618,7 @@ fn attack_ally(state: &mut State, index: usize, tape: &mut EventTape) {
 fn play_attack(
     state: &mut State,
     card: Card,
-    use_weapon: bool,
+    wield: Option<Weapon>,
     prepared: bool,
     doubled: bool,
     command_ally: Option<u8>,
@@ -1552,16 +1689,16 @@ fn play_attack(
         power += 1;
     }
     let mut wielded = Weapon::None;
-    if use_weapon && state.weapon != Weapon::None {
-        wielded = state.weapon;
-        power += wielded.power();
+    if let Some(weapon) = wield.filter(|&weapon| state.has_weapon(weapon)) {
+        wielded = weapon;
+        power += state.weapon_power(weapon);
         tape.push(
             *state,
             TapePhase::Main,
             EventKind::WieldForAttack,
             EventFields::default().with_weapon(wielded),
         );
-        state.consume_weapon();
+        state.consume_weapon(wielded);
     }
     state.send_to_gy(card);
     state.champion_awake = false;
@@ -1692,7 +1829,7 @@ fn level_zander2(
 fn apply_flagrant_level(
     state: &mut State,
     card: Card,
-    mat: u8,
+    mat: u16,
     gy_return: Option<Card>,
     phase: TapePhase,
     tape: &mut EventTape,
@@ -1813,7 +1950,7 @@ mod tests {
             state,
             Action::PlayAttack {
                 card: Card::IgnitedStab,
-                weapon: false,
+                wield: None,
                 prepared: false,
                 doubled: false,
                 command_ally: None,
@@ -1991,6 +2128,143 @@ mod tests {
             labels(&pass.events).join(" | ")
         );
         assert_eq!(stats.drawn[Card::IgnitedStab.index()], 1);
+    }
+
+    #[test]
+    fn fire_brick_going_second_draws_brick_without_a_deck() {
+        use crate::model::SolveRequest;
+        use std::collections::BTreeMap;
+
+        let hand = [
+            Card::Arthur,
+            Card::Arthur,
+            Card::ClumsyApprentice,
+            Card::KingdomInformant,
+            Card::KingdomInformant,
+            Card::RedHare,
+            Card::PepperedChef,
+        ];
+        let result = solve(&SolveRequest {
+            hand: hand.iter().map(|card| card.id().to_string()).collect(),
+            go_first: false,
+            max_turns: 2,
+            sim_type: SimType::FireBrick,
+            deck: BTreeMap::new(),
+            queue: None,
+            rollouts: 1,
+            seed: 1,
+            budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
+        })
+        .unwrap();
+        assert_eq!(
+            result
+                .events
+                .first()
+                .and_then(|event| event.drawn.as_deref()),
+            Some("brick"),
+            "with no deck attached, the opening draw stays a Fire Brick: {}",
+            labels(&result.events).join(" | ")
+        );
+    }
+
+    #[test]
+    fn fire_brick_going_second_draws_a_real_card_from_an_attached_deck() {
+        use crate::model::SolveRequest;
+        use std::collections::BTreeMap;
+
+        let hand = [
+            Card::Arthur,
+            Card::Arthur,
+            Card::ClumsyApprentice,
+            Card::KingdomInformant,
+            Card::KingdomInformant,
+            Card::RedHare,
+            Card::PepperedChef,
+        ];
+        let deck = BTreeMap::from([("ignited_stab".into(), 4_u8), ("brick".into(), 54_u8)]);
+        let result = solve(&SolveRequest {
+            hand: hand.iter().map(|card| card.id().to_string()).collect(),
+            go_first: false,
+            max_turns: 2,
+            sim_type: SimType::FireBrick,
+            deck: deck.clone(),
+            queue: None,
+            rollouts: 1,
+            seed: 7,
+            budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
+        })
+        .unwrap();
+        let drawn = result
+            .events
+            .first()
+            .and_then(|event| event.drawn.as_deref());
+        assert!(
+            drawn.is_some(),
+            "expected a real opening draw: {}",
+            labels(&result.events).join(" | ")
+        );
+
+        let again = solve(&SolveRequest {
+            hand: hand.iter().map(|card| card.id().to_string()).collect(),
+            go_first: false,
+            max_turns: 2,
+            sim_type: SimType::FireBrick,
+            deck,
+            queue: None,
+            rollouts: 1,
+            seed: 7,
+            budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
+        })
+        .unwrap();
+        assert_eq!(
+            drawn,
+            again
+                .events
+                .first()
+                .and_then(|event| event.drawn.as_deref()),
+            "same seed and deck must draw the same opening card"
+        );
+    }
+
+    #[test]
+    fn fire_brick_going_second_prefers_an_explicit_remaining_queue() {
+        use crate::model::SolveRequest;
+        use std::collections::BTreeMap;
+
+        let hand = [
+            Card::Arthur,
+            Card::Arthur,
+            Card::ClumsyApprentice,
+            Card::KingdomInformant,
+            Card::KingdomInformant,
+            Card::RedHare,
+            Card::PepperedChef,
+        ];
+        let result = solve(&SolveRequest {
+            hand: hand.iter().map(|card| card.id().to_string()).collect(),
+            go_first: false,
+            max_turns: 2,
+            sim_type: SimType::FireBrick,
+            deck: BTreeMap::new(),
+            queue: Some(vec!["ignited_stab".into(), "brick".into()]),
+            rollouts: 1,
+            seed: 42,
+            budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
+        })
+        .unwrap();
+        assert_eq!(
+            result
+                .events
+                .first()
+                .and_then(|event| event.drawn.as_deref()),
+            Some("ignited_stab"),
+            "an explicit remaining-deck order should be used as-is: {}",
+            labels(&result.events).join(" | ")
+        );
     }
 
     #[test]
@@ -2179,7 +2453,7 @@ mod tests {
             "blade should be materializable"
         );
         let (equipped, _) = apply(state, Action::MercenaryBlade);
-        assert_eq!(equipped.weapon, Weapon::MercenaryBlade);
+        assert!(equipped.has_weapon(Weapon::MercenaryBlade));
         assert!(
             equipped.champion_awake,
             "materializing the blade must not rest the champion"
@@ -2187,14 +2461,14 @@ mod tests {
         assert!(
             actions(equipped, false)
                 .iter()
-                .any(|action| matches!(action, Action::AttackWithWeapon)),
+                .any(|action| matches!(action, Action::AttackWithWeapon(_))),
             "awake champion with weapon must be able to swing"
         );
 
-        let (after, steps) = apply(equipped, Action::AttackWithWeapon);
+        let (after, steps) = apply(equipped, Action::AttackWithWeapon(Weapon::MercenaryBlade));
         assert_eq!(after.damage, 1, "{steps:?}");
         assert!(!after.champion_awake);
-        assert_eq!(after.weapon, Weapon::None);
+        assert!(!after.has_weapon(Weapon::MercenaryBlade));
         assert!(
             steps
                 .iter()
@@ -2212,10 +2486,9 @@ mod tests {
             &[],
         );
         state.champion_level = 1;
-        state.weapon = Weapon::ImpactHammer;
-        state.weapon_durability = 2;
+        state.equip_weapon(Weapon::ImpactHammer);
 
-        let (after_swing, steps) = apply(state, Action::AttackWithWeapon);
+        let (after_swing, steps) = apply(state, Action::AttackWithWeapon(Weapon::ImpactHammer));
         assert!(after_swing.champion_damaged);
         assert!(
             steps
@@ -2232,7 +2505,7 @@ mod tests {
             ready,
             Action::PlayAttack {
                 card: Card::HeatedVengeance,
-                weapon: false,
+                wield: None,
                 prepared: false,
                 doubled: false,
                 command_ally: None,
@@ -2252,8 +2525,7 @@ mod tests {
         let mut state = State::with_queue(&[], false, 2, &[]);
         state.champion_level = 1;
         state.champion_awake = true;
-        state.weapon = Weapon::MercenaryBlade;
-        state.weapon_durability = 1;
+        state.equip_weapon(Weapon::MercenaryBlade);
         state.add_ally(Card::Arthur, true, true);
 
         let (after_arthur, _) = apply(state, Action::AttackArthur(0));
@@ -2264,7 +2536,7 @@ mod tests {
         assert!(
             actions(after_arthur, false)
                 .iter()
-                .any(|action| matches!(action, Action::AttackWithWeapon)),
+                .any(|action| matches!(action, Action::AttackWithWeapon(_))),
             "{:?}",
             actions(after_arthur, false)
         );
@@ -2862,6 +3134,210 @@ mod tests {
                 format_line_event(step) == "Flagrant Guide On-Enter level (self 10)"
             }),
             "{steps:?}"
+        );
+    }
+
+    #[test]
+    fn materialize_ripper_pays_memory_and_equips() {
+        let mut state = State::with_queue(&[], false, 2, &[]);
+        state.phase = Phase::Materialize;
+        state.turn = 2;
+        state.champion_level = 1;
+        state.materials = MAT_RIPPER;
+        state.memory[Card::KingdomInformant.index()] = 1;
+        state.memory_len = 1;
+
+        let (after, steps) = apply(state, Action::MaterializeRipper);
+        assert_eq!(after.weapon_durability(Weapon::AssassinsRipper), 2);
+        assert_eq!(after.memory_len, 0);
+        assert_eq!(after.phase, Phase::Main);
+        assert!(
+            steps.iter().any(|step| {
+                format_line_event(step) == "Materialize Assassin's Ripper"
+            }),
+            "{steps:?}"
+        );
+    }
+
+    #[test]
+    fn activate_ripper_spends_prep_and_buffs_weapon() {
+        let mut state = State::with_queue(&[], false, 2, &[]);
+        state.champion_level = 1;
+        state.champion_awake = true;
+        state.prep = 1;
+        state.equip_weapon(Weapon::AssassinsRipper);
+
+        let (after, steps) = apply(state, Action::ActivateRipper);
+        assert_eq!(after.prep, 0);
+        assert_eq!(after.weapon_power_bonus, 2);
+        assert!(!after.champion_awake);
+        assert!(
+            steps.iter().any(|step| {
+                format_line_event(step) == "Activate Assassin's Ripper (+2 power, REST)"
+            }),
+            "{steps:?}"
+        );
+    }
+
+    #[test]
+    fn ripper_power_bonus_applies_to_weapon_attacks() {
+        let mut state = State::with_queue(&[], false, 2, &[]);
+        state.champion_level = 1;
+        state.champion_awake = true;
+        state.equip_weapon(Weapon::AssassinsRipper);
+        state.weapon_power_bonus = 2;
+
+        let (after, steps) = apply(state, Action::AttackWithWeapon(Weapon::AssassinsRipper));
+        assert_eq!(after.damage, 3, "{steps:?}");
+        assert!(
+            steps.iter().any(|step| {
+                format_line_event(step) == "Attack with Assassin's Ripper"
+            }),
+            "{steps:?}"
+        );
+    }
+
+    #[test]
+    fn mercenary_blade_requires_champion_in_mate_only() {
+        let mut unleveled_mate = State::with_queue(&[], false, 2, &[]);
+        unleveled_mate.phase = Phase::Materialize;
+        unleveled_mate.turn = 2;
+        unleveled_mate.prep = 1;
+        unleveled_mate.materials = MAT_BLADE;
+        assert!(
+            !actions(unleveled_mate, false)
+                .iter()
+                .any(|action| matches!(action, Action::MercenaryBlade)),
+            "mate blade requires leveled champion: {:?}",
+            actions(unleveled_mate, false)
+        );
+
+        let mut unleveled_main = unleveled_mate;
+        unleveled_main.phase = Phase::Main;
+        assert!(
+            actions(unleveled_main, false)
+                .iter()
+                .any(|action| matches!(action, Action::MercenaryBlade)),
+            "main blade only needs prep: {:?}",
+            actions(unleveled_main, false)
+        );
+
+        let mut leveled_mate = unleveled_main;
+        leveled_mate.champion_level = 1;
+        leveled_mate.phase = Phase::Materialize;
+        assert!(
+            actions(leveled_mate, false)
+                .iter()
+                .any(|action| matches!(action, Action::MercenaryBlade)),
+            "mate blade legal once champion is leveled: {:?}",
+            actions(leveled_mate, false)
+        );
+    }
+
+    #[test]
+    fn multiple_weapons_coexist_on_field() {
+        let mut state = State::with_queue(&[], false, 2, &[]);
+        state.phase = Phase::Materialize;
+        state.turn = 1;
+        state.materials = MAT_HAMMER | MAT_BLADE;
+        state.champion_level = 1;
+        state.prep = 1;
+
+        let (after_hammer, _) = apply(state, Action::MaterializeHammer);
+        assert!(after_hammer.has_weapon(Weapon::ImpactHammer));
+        assert_eq!(after_hammer.weapon_durability(Weapon::ImpactHammer), 2);
+
+        let mut after_blade = after_hammer;
+        after_blade.phase = Phase::Materialize;
+        after_blade.turn = 2;
+        after_blade.prep = 1;
+        let (after_blade, _) = apply(after_blade, Action::MercenaryBlade);
+        assert!(
+            after_blade.has_weapon(Weapon::ImpactHammer),
+            "hammer should remain when blade is materialized"
+        );
+        assert!(after_blade.has_weapon(Weapon::MercenaryBlade));
+        assert_eq!(after_blade.weapon_durability(Weapon::ImpactHammer), 2);
+    }
+
+    #[test]
+    fn hammer_and_blade_materialize_on_turn_two() {
+        let mut hammer_state = State::with_queue(&[], false, 2, &[]);
+        hammer_state.phase = Phase::Materialize;
+        hammer_state.turn = 2;
+        hammer_state.materials = MAT_HAMMER;
+        assert!(
+            actions(hammer_state, false)
+                .iter()
+                .any(|action| matches!(action, Action::MaterializeHammer)),
+            "Impact Hammer should be materializable on turn 2: {:?}",
+            actions(hammer_state, false)
+        );
+
+        let mut blade_state = State::with_queue(&[], false, 2, &[]);
+        blade_state.phase = Phase::Materialize;
+        blade_state.turn = 2;
+        blade_state.champion_level = 1;
+        blade_state.prep = 1;
+        blade_state.materials = MAT_BLADE;
+        assert!(
+            actions(blade_state, false)
+                .iter()
+                .any(|action| matches!(action, Action::MercenaryBlade)),
+            "Mercenary's Blade should be materializable on turn 2: {:?}",
+            actions(blade_state, false)
+        );
+
+        let (after_blade, steps) = apply(blade_state, Action::MercenaryBlade);
+        assert_eq!(after_blade.phase, Phase::Main);
+        assert!(after_blade.has_weapon(Weapon::MercenaryBlade));
+        assert!(
+            steps.iter().any(|step| {
+                format_line_event(step) == "Materialize Mercenary's Blade (prep)"
+            }),
+            "{steps:?}"
+        );
+    }
+
+    #[test]
+    fn crusader_ring_materializes_then_banishes_in_main() {
+        let mut state = State::with_queue(&[], false, 2, &[Card::IgnitedStab]);
+        state.phase = Phase::Materialize;
+        state.turn = 2;
+        state.materials = MAT_RING;
+
+        let legal_mate = actions(state, false);
+        assert!(
+            legal_mate
+                .iter()
+                .any(|action| matches!(action, Action::MaterializeRing)),
+            "ring should materialize from deck: {legal_mate:?}"
+        );
+        assert!(
+            !legal_mate
+                .iter()
+                .any(|action| matches!(action, Action::BanishCrusaderRing)),
+            "ring cannot be banished directly from deck: {legal_mate:?}"
+        );
+
+        let (after_mate, mate_steps) = apply(state, Action::MaterializeRing);
+        assert!(after_mate.ring);
+        assert!(!after_mate.has_material(MAT_RING));
+        assert_eq!(after_mate.phase, Phase::Main);
+        assert!(
+            mate_steps.iter().any(|step| {
+                format_line_event(step) == "Materialize Grand Crusader's Ring"
+            }),
+            "{mate_steps:?}"
+        );
+
+        let hand_before = after_mate.hand_len;
+        let (after_banish, banish_steps) = apply(after_mate, Action::BanishCrusaderRing);
+        assert!(!after_banish.ring);
+        assert!(after_banish.hand_len > hand_before);
+        assert!(
+            banish_steps.iter().any(|step| step.drawn.is_some()),
+            "{banish_steps:?}"
         );
     }
 
@@ -3687,3 +4163,4 @@ mod tests {
         );
     }
 }
+

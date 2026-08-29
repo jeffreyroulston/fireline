@@ -2,9 +2,11 @@
 import type { Bounds } from "./Bounds.js";
 import type { Budget } from "./Budget.js";
 import type { Metric } from "./Metric.js";
+import type { Strategy } from "./Strategy.js";
+import type { SwapConfig } from "./SwapConfig.js";
 
 export type OptimizeRequest = { bounds: { [key in string]?: Bounds }, deckSize: number, samples: number, 
 /**
  * How many unique legal lists to score.
  */
-decks: number, metric: Metric, seed: bigint, budget: Budget, materials: { [key in string]?: number }, };
+decks: number, metric: Metric, seed: bigint, budget: Budget, materials: { [key in string]?: number }, strategy: Strategy, baseDeck: { [key in string]?: number }, swap: SwapConfig | null, };

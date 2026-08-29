@@ -150,7 +150,7 @@ export async function pooledDamageDistribution(
         meanEndInfluence: run.mean_end_influence,
         sampleRun: {
           id: run.id,
-          startedAt: run.started_at,
+          startedAt: run.started_at.toISOString(),
           samples: run.samples,
           meanDamage: run.mean_damage,
           damages,
@@ -701,6 +701,7 @@ export async function listRunHistory(
       "runs.started_at as startedAt",
       "runs.completed_at as completedAt",
       "runs.elapsed_ms as elapsedMs",
+      "runs.error_message as errorMessage",
     ])
     .orderBy("runs.started_at", "desc")
     .limit(options.limit ?? 100);

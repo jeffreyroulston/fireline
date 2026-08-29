@@ -1,4 +1,10 @@
 import type { ReactNode } from "react";
+import { cn } from "@/lib/utils/cn";
+import {
+  statLineClass,
+  statLineCompactClass,
+  statSpanClass,
+} from "@/lib/utils/stat-classes";
 
 export type StatTone =
   | "mean"
@@ -45,11 +51,17 @@ export function StatLine({
   className?: string;
 }) {
   return (
-    <div className={["stat-line", className].filter(Boolean).join(" ")}>
+    <div
+      className={cn(
+        statLineClass,
+        className === "compact" && statLineCompactClass,
+        className !== "compact" && className,
+      )}
+    >
       {items.map((item, index) => {
         const tone = toneFor(item);
         return (
-          <span key={index} className={tone ? `is-${tone}` : undefined}>
+          <span key={index} className={statSpanClass(tone, index)}>
             <small>{item.label}</small>
             <b>{item.value}</b>
             {item.after}

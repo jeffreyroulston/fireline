@@ -76,6 +76,10 @@ function rowToSavedDeck(row: ApiDeckRow): SavedDeck {
   };
 }
 
+export function mapApiDeckRows(rows: ApiDeckRow[]): SavedDeck[] {
+  return rows.map(rowToSavedDeck);
+}
+
 export function normalizeDeckName(name: string, fallback = "Untitled deck"): string {
   const trimmed = name.trim();
   return trimmed.length > 0 ? trimmed : fallback;

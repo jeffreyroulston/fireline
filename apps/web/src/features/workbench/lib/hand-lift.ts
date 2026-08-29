@@ -4,13 +4,6 @@ export const MIN_HAND_BUCKET_SAMPLES = 5;
 
 type WeightedDamage = { damage: number; weight: number };
 
-type LiftSample = {
-  hand: Set<string>;
-  damage: number;
-  weight: number;
-  deckCards: Set<string>;
-};
-
 function weightedMean(entries: WeightedDamage[]): number | null {
   if (entries.length === 0) {
     return null;
@@ -112,8 +105,4 @@ export function formatLift(value: number): string {
   return value > 0 ? `+${text}` : `−${text}`;
 }
 
-export function liftDeltaTone(value: number): "is-hotter" | "is-cooler" | "" {
-  if (value > 0) return "is-hotter";
-  if (value < 0) return "is-cooler";
-  return "";
-}
+export { deltaTextClass as liftDeltaTone } from "@/lib/utils/ui-classes";

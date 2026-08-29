@@ -1,6 +1,7 @@
 "use client";
 
 import type { OptimizeProgress } from "@/lib/api/useRun";
+import { cn } from "@/lib/utils/cn";
 import {
   handProgressPercent,
   progressPercent,
@@ -17,17 +18,22 @@ function resolveRolloutTotal(
 function ProgressBar({
   percent,
   started,
-  trackClassName,
+  rollout,
 }: {
   percent: number;
   started?: boolean;
-  trackClassName?: string;
+  rollout?: boolean;
 }) {
   const indeterminate = percent <= 0 && !started;
   return (
-    <div className={trackClassName ?? "progress-track"}>
+    <div className="h-1 w-full overflow-hidden bg-border">
       <span
-        className={indeterminate ? "is-indeterminate" : undefined}
+        className={cn(
+          "block h-full bg-primary transition-[width] duration-[180ms] ease-in-out",
+          rollout && "bg-accent",
+          indeterminate &&
+            "w-[28%] animate-[progress-indeterminate_1.15s_ease-in-out_infinite] [transform:translateX(-120%)]",
+        )}
         style={indeterminate ? undefined : { width: `${percent}%` }}
       />
     </div>
@@ -61,12 +67,12 @@ export function OptimizeProgressPanel({
 
   return (
     <div
-      className="progress-panel"
+      className="grid w-full min-w-0 gap-2.5"
       role="status"
       aria-label={`${ariaPercent}% complete`}
     >
-      <div className="progress-row">
-        <div className="progress-meta">
+      <div className="grid min-w-0 gap-1.5">
+        <div className="flex flex-wrap gap-x-[18px] gap-y-2 font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
           {showDecks && (
             <span>
               {(progress?.decksScored ?? 0).toLocaleString()} /{" "}
@@ -84,14 +90,11 @@ export function OptimizeProgressPanel({
             <span>best {(progress?.bestScore ?? 0).toFixed(2)}</span>
           )}
         </div>
-        <ProgressBar
-          percent={handsPercent}
-          started={progress?.started}
-        />
+        <ProgressBar percent={handsPercent} started={progress?.started} />
       </div>
       {showRollouts && (
-        <div className="progress-row">
-          <div className="progress-meta">
+        <div className="grid min-w-0 gap-1.5">
+          <div className="flex flex-wrap gap-x-[18px] gap-y-2 font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
             <span>
               {(progress?.rolloutsDone ?? 0).toLocaleString()} /{" "}
               {totalRollouts.toLocaleString()} rollouts
@@ -104,7 +107,7 @@ export function OptimizeProgressPanel({
               ((progress.handsSimulated ?? 0) < (progress.totalHands ?? 0) ||
                 (progress.rolloutsDone ?? 0) > 0)
             }
-            trackClassName="progress-track progress-track-rollout"
+            rollout
           />
         </div>
       )}

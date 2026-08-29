@@ -25,7 +25,10 @@ pub enum ActionOp {
     TristanRecollect,
     SkipAgility,
     MaterializeSoulknife,
+    MaterializeRipper,
+    MaterializeRing,
     ActivateDagger,
+    ActivateRipper,
     ActivateSadi,
     AttackArthur,
     AttackOthers,
@@ -35,6 +38,7 @@ pub enum ActionOp {
     PlayAction,
     BlazingThrow,
     MercenaryBlade,
+    BanishCrusaderRing,
     AttackWithWeapon,
 }
 
@@ -50,7 +54,10 @@ impl ActionOp {
             Action::TristanRecollect => Self::TristanRecollect,
             Action::SkipAgility => Self::SkipAgility,
             Action::MaterializeSoulknife => Self::MaterializeSoulknife,
+            Action::MaterializeRipper => Self::MaterializeRipper,
+            Action::MaterializeRing => Self::MaterializeRing,
             Action::ActivateDagger => Self::ActivateDagger,
+            Action::ActivateRipper => Self::ActivateRipper,
             Action::ActivateSadi(_) => Self::ActivateSadi,
             Action::AttackArthur(_) => Self::AttackArthur,
             Action::AttackOthers => Self::AttackOthers,
@@ -58,9 +65,10 @@ impl ActionOp {
             Action::PlayItem { .. } => Self::PlayItem,
             Action::PlayAttack { .. } => Self::PlayAttack,
             Action::PlayAction { .. } => Self::PlayAction,
-            Action::BlazingThrow => Self::BlazingThrow,
+            Action::BlazingThrow(_) => Self::BlazingThrow,
             Action::MercenaryBlade => Self::MercenaryBlade,
-            Action::AttackWithWeapon => Self::AttackWithWeapon,
+            Action::BanishCrusaderRing => Self::BanishCrusaderRing,
+            Action::AttackWithWeapon(_) => Self::AttackWithWeapon,
         }
     }
 
@@ -76,7 +84,10 @@ impl ActionOp {
             Self::TristanRecollect => "tristanRecollect",
             Self::SkipAgility => "skipAgility",
             Self::MaterializeSoulknife => "materializeSoulknife",
+            Self::MaterializeRipper => "materializeRipper",
+            Self::MaterializeRing => "materializeRing",
             Self::ActivateDagger => "activateDagger",
+            Self::ActivateRipper => "activateRipper",
             Self::ActivateSadi => "activateSadi",
             Self::AttackArthur => "attackArthur",
             Self::AttackOthers => "attackOthers",
@@ -86,6 +97,7 @@ impl ActionOp {
             Self::PlayAction => "playAction",
             Self::BlazingThrow => "blazingThrow",
             Self::MercenaryBlade => "mercenaryBlade",
+            Self::BanishCrusaderRing => "banishCrusaderRing",
             Self::AttackWithWeapon => "attackWithWeapon",
         }
     }
@@ -103,6 +115,9 @@ pub enum EventKind {
     MaterializeHammer,
     MaterializeDagger,
     MaterializeSoulknife,
+    MaterializeRipper,
+    MaterializeRing,
+    FloatForRipper,
     MaterializeBlade,
     FloatForZander,
     FloatForZander2,
@@ -116,6 +131,7 @@ pub enum EventKind {
     MaterializeResolves,
     Play,
     ActivateDagger,
+    ActivateRipper,
     SadiBounce,
     OnDeath,
     UniqueDies,
@@ -133,6 +149,7 @@ pub enum EventKind {
     OnAttackDraw,
     CorhaziOnHit,
     HammerSelf,
+    BanishCrusaderRing,
     PassOpportunity,
     EndAgility,
     EndMain,
@@ -148,6 +165,9 @@ impl EventKind {
             Self::MaterializeHammer => "materializeHammer",
             Self::MaterializeDagger => "materializeDagger",
             Self::MaterializeSoulknife => "materializeSoulknife",
+            Self::MaterializeRipper => "materializeRipper",
+            Self::MaterializeRing => "materializeRing",
+            Self::FloatForRipper => "floatForRipper",
             Self::MaterializeBlade => "materializeBlade",
             Self::FloatForZander => "floatForZander",
             Self::FloatForZander2 => "floatForZander2",
@@ -161,6 +181,7 @@ impl EventKind {
             Self::MaterializeResolves => "materializeResolves",
             Self::Play => "play",
             Self::ActivateDagger => "activateDagger",
+            Self::ActivateRipper => "activateRipper",
             Self::SadiBounce => "sadiBounce",
             Self::OnDeath => "onDeath",
             Self::UniqueDies => "uniqueDies",
@@ -178,6 +199,7 @@ impl EventKind {
             Self::OnAttackDraw => "onAttackDraw",
             Self::CorhaziOnHit => "corhaziOnHit",
             Self::HammerSelf => "hammerSelf",
+            Self::BanishCrusaderRing => "banishCrusaderRing",
             Self::PassOpportunity => "passOpportunity",
             Self::EndAgility => "endAgility",
             Self::EndMain => "endMain",
@@ -311,6 +333,7 @@ impl Weapon {
             Self::ImpactHammer => Some("impact_hammer"),
             Self::MercenaryBlade => Some("mercenary_blade"),
             Self::VaruckanSoulknife => Some("varuckan_soulknife"),
+            Self::AssassinsRipper => Some("assassins_ripper"),
         }
     }
 }
@@ -610,6 +633,7 @@ pub fn format_line_event(event: &LineEvent) -> String {
             Some("impact_hammer") => "Impact Hammer",
             Some("mercenary_blade") => "Mercenary's Blade",
             Some("varuckan_soulknife") => "Varuckan Soulknife",
+            Some("assassins_ripper") => "Assassin's Ripper",
             _ => "No Weapon",
         }
     };
@@ -627,6 +651,15 @@ pub fn format_line_event(event: &LineEvent) -> String {
         EventKind::MaterializeSoulknife => {
             "Materialize Varuckan Soulknife (banish 3 Fire)".to_string()
         }
+        EventKind::FloatForRipper => {
+            if event.from_memory {
+                "Mem Cost for Assassin's Ripper (from Mem)".to_string()
+            } else {
+                "Mem Cost for Assassin's Ripper (Float from GY)".to_string()
+            }
+        }
+        EventKind::MaterializeRipper => "Materialize Assassin's Ripper".to_string(),
+        EventKind::MaterializeRing => "Materialize Grand Crusader's Ring".to_string(),
         EventKind::MaterializeBlade => "Materialize Mercenary's Blade (prep)".to_string(),
         EventKind::FloatForZander => {
             if event.from_memory {
@@ -782,6 +815,14 @@ pub fn format_line_event(event: &LineEvent) -> String {
             s
         }
         EventKind::ActivateDagger => "Activate Poisoned Dagger".to_string(),
+        EventKind::ActivateRipper => "Activate Assassin's Ripper (+2 power, REST)".to_string(),
+        EventKind::BanishCrusaderRing => {
+            if let Some(drawn) = event.drawn {
+                format!("Banish Grand Crusader's Ring (draw {})", short(Some(drawn)))
+            } else {
+                "Banish Grand Crusader's Ring (draw)".to_string()
+            }
+        }
         EventKind::SadiBounce => "Sadi bounce for Prep".to_string(),
         EventKind::OnDeath => {
             if event.drawn.is_some() {

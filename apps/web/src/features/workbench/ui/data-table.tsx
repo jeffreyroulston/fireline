@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { cn } from "@/lib/utils/cn";
 
 export type DataTableSort = {
   columnId: string;
@@ -63,7 +64,10 @@ export function DataTable<T>({
 }) {
   return (
     <table
-      className={["data-table", className].filter(Boolean).join(" ")}
+      className={cn(
+        "w-full border-collapse text-[0.9em] tabular-nums",
+        className,
+      )}
     >
       <thead>
         <tr>
@@ -74,13 +78,11 @@ export function DataTable<T>({
               <th
                 key={column.id}
                 scope="col"
-                className={[
-                  column.metric ? "is-metric" : undefined,
-                  sortable ? "is-sortable" : undefined,
-                  isSorted ? "is-sorted" : undefined,
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
+                className={cn(
+                  "border-b border-border py-2.5 pr-4 text-left text-[0.72rem] font-normal tracking-[0.04em] text-muted uppercase last:pr-0",
+                  column.metric && "text-right",
+                  isSorted && "[&_.data-table-sort]:text-foreground",
+                )}
                 aria-sort={
                   isSorted
                     ? sort!.direction === "asc"
@@ -91,11 +93,16 @@ export function DataTable<T>({
                       : undefined
                 }
               >
-                <span className="data-table-header-cell">
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1",
+                    column.metric && "flex w-full justify-end",
+                  )}
+                >
                   {sortable ? (
                     <button
                       type="button"
-                      className="data-table-sort"
+                      className="data-table-sort inline-flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-[inherit] tracking-[inherit] uppercase hover:text-foreground focus-visible:text-foreground"
                       onClick={() => {
                         if (isSorted && sort!.direction === "desc") {
                           onSortChange!({
@@ -128,7 +135,10 @@ export function DataTable<T>({
             {columns.map((column) => (
               <td
                 key={column.id}
-                className={column.metric ? "is-metric" : undefined}
+                className={cn(
+                  "border-b border-border py-2.5 pr-4 text-left font-normal text-foreground last:pr-0",
+                  column.metric && "text-right text-muted",
+                )}
               >
                 {column.cell(row)}
               </td>

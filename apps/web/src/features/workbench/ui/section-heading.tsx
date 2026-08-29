@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { cn } from "@/lib/utils/cn";
+import { typeSectionHeading } from "@/lib/utils/typography";
 
 export function SectionHeading({
   title,
@@ -10,7 +12,13 @@ export function SectionHeading({
   className?: string;
 }) {
   return (
-    <div className={["section-heading", className].filter(Boolean).join(" ")}>
+    <div
+      className={cn(
+        typeSectionHeading,
+        "mb-4 flex justify-between [&_strong]:font-medium [&_strong]:text-foreground",
+        className,
+      )}
+    >
       <span>{title}</span>
       {meta}
     </div>

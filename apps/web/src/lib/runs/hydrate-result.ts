@@ -1,6 +1,12 @@
-import type { LineEvent } from "@/lib/engine";
+import type { OptimizeResult } from "@ga-fire/contracts";
+import type { CardStat, LineEvent } from "@/lib/engine";
 import { CARDS, type CardId, type DeckCounts, type SimType } from "@/lib/engine";
-import type { DeckResult, RatioResult, SampleHand } from "@/features/workbench/types";
+import type {
+  DeckResult,
+  RatioResult,
+  RatioStrategy,
+  SampleHand,
+} from "@/features/workbench/types";
 import type { ActiveRunRow } from "./types";
 
 interface RunSampleRow {
@@ -29,6 +35,9 @@ interface RunCandidateRow {
   rank: number;
   score: number;
   counts: Record<string, number>;
+  candidate?: string | null;
+  score_delta?: number | null;
+  card_stats?: CardStat[] | null;
 }
 
 export interface FetchRunResponse {
@@ -117,6 +126,24 @@ export function hydrateDeckResult(response: FetchRunResponse): DeckResult | null
   };
 }
 
+export function mapOptimizeResultToRatio(result: OptimizeResult): RatioResult {
+  const top = result.top.map((row) => ({
+    rank: row.rank,
+    score: row.score,
+    counts: row.counts as DeckCounts,
+    scoreDelta: row.scoreDelta ?? null,
+    candidate: row.candidate ?? null,
+    cardStats: row.cardStats?.length ? row.cardStats : undefined,
+  }));
+  return {
+    bestCounts: result.bestCounts as DeckCounts,
+    bestScore: result.bestScore,
+    top,
+    history: result.history,
+    strategy: (result.effective.strategy as RatioStrategy | null) ?? undefined,
+  };
+}
+
 export function hydrateRatioResult(response: FetchRunResponse): RatioResult | null {
   const { run, candidates } = response;
   if (run.kind !== "optimize") {
@@ -126,8 +153,15 @@ export function hydrateRatioResult(response: FetchRunResponse): RatioResult | nu
     rank: row.rank,
     score: row.score,
     counts: row.counts as DeckCounts,
+    scoreDelta: row.score_delta ?? null,
+    candidate: row.candidate ?? null,
+    cardStats: row.card_stats ?? undefined,
   }));
-  const best = top[0];
+  const ranked = top.filter((row) => row.rank > 0);
+  const best =
+    ranked[0] ??
+    top.find((row) => row.rank === 0) ??
+    top[0];
   return {
     bestCounts: (best?.counts ?? {}) as DeckCounts,
     bestScore: run.best_score ?? best?.score ?? 0,

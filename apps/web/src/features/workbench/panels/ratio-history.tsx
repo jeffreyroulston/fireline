@@ -5,7 +5,6 @@ import {
   CARDS,
   listToCounts,
   parseDecklist,
-  PLAYABLE_CARD_IDS,
   type CardId,
   type DeckCounts,
 } from "@/lib/engine";
@@ -17,66 +16,30 @@ import {
   type VersionGroup,
 } from "@/lib/api/client";
 import type { SavedDeck } from "@/lib/decks";
+import { cn, buttonVariants } from "@/lib/utils";
+import { typeSubsectionLabel } from "@/lib/utils/typography";
+import { StatusBadge } from "@/components/status-badge";
 import { SectionHeading } from "../ui";
 import { historyQueryPatch } from "../routes";
-import { useWorkbenchQuery } from "../use-workbench-query";
-
-function groupKey(group: VersionGroup): string {
-  return `${group.rulesVersion}:${group.samplerVersion}:${group.attributionVersion}`;
-}
-
-function formatVersionLabel(group: VersionGroup): string {
-  return `r${group.rulesVersion} · s${group.samplerVersion} · a${group.attributionVersion ?? "?"}`;
-}
-
-function formatWhen(iso: string): string {
-  const date = new Date(iso);
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatRunTime(elapsedMs: number | null): string {
-  if (elapsedMs == null) {
-    return "—";
-  }
-  if (elapsedMs < 1000) {
-    return `${Math.round(elapsedMs)}ms`;
-  }
-  if (elapsedMs < 60_000) {
-    return `${(elapsedMs / 1000).toFixed(1)}s`;
-  }
-  const minutes = Math.floor(elapsedMs / 60_000);
-  const seconds = Math.round((elapsedMs % 60_000) / 1000);
-  return `${minutes}m ${seconds}s`;
-}
-
-function formatSignedCopies(delta: number): string {
-  if (delta > 0) return `+${delta}×`;
-  if (delta < 0) return `−${Math.abs(delta)}×`;
-  return "0×";
-}
-
-function deckDiffEntries(
-  baseCounts: DeckCounts,
-  nextCounts: DeckCounts,
-): { id: CardId; from: number; to: number; delta: number }[] {
-  const entries: { id: CardId; from: number; to: number; delta: number }[] =
-    [];
-  for (const id of PLAYABLE_CARD_IDS) {
-    const from = baseCounts[id] ?? 0;
-    const to = nextCounts[id] ?? 0;
-    if (from === to) continue;
-    entries.push({ id, from, to, delta: to - from });
-  }
-  return entries.sort((a, b) => {
-    if (a.delta !== b.delta) return a.delta - b.delta;
-    return CARDS[a.id].name.localeCompare(CARDS[b.id].name);
-  });
-}
+import { useWorkbenchQuery } from "../hooks/use-workbench-query";
+import {
+  formatRunTime,
+  formatVersionLabel,
+  formatWhen,
+  groupKey,
+  historyMonoCellClass,
+  historyPanelTableWrapClass,
+  historyResultCellClass,
+} from "./history/shared";
+import {
+  deckDiffEntries,
+  formatSignedCopies,
+  ratioChangeRowClass,
+  ratioChangesClass,
+  ratioRankingHeaderClass,
+  ratioRankingItemClass,
+  ratioSaveDeckClass,
+} from "./ratios/shared";
 
 function runMatchesGroup(run: RunHistoryRow, group: VersionGroup): boolean {
   return (
@@ -226,8 +189,8 @@ export function RatioHistoryPanel({
   }, [deck.id, selectedGroup, refreshToken]);
 
   return (
-    <div className="history-ratio-analysis">
-      <section className="history-panel history-ratio-panel">
+    <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-[22px]">
+      <section className="min-w-0 border border-border bg-surface px-[18px] pt-[18px] pb-3 [&>.section-heading]:mb-3">
         <SectionHeading
           title="RATIO LAB HISTORY"
           meta={
@@ -242,12 +205,12 @@ export function RatioHistoryPanel({
         />
 
         {groups.length === 0 ? (
-          <p className="history-empty">
+          <p className="mb-2 py-2 pb-3 text-sm leading-normal text-muted">
             No completed ratio lab runs for {deck.name} yet.
           </p>
         ) : (
           <>
-            <div className="history-controls history-ratio-controls">
+            <div className="mb-4 grid grid-cols-[minmax(14ch,1.3fr)_minmax(12ch,0.9fr)_minmax(16ch,1.2fr)] items-end gap-x-[18px] gap-y-3.5 max-[900px]:grid-cols-1">
               <label>
                 Version group
                 <select
@@ -269,24 +232,35 @@ export function RatioHistoryPanel({
               </label>
             </div>
 
-            {loading && <p className="sim-hint">Loading ratio lab history…</p>}
+            {loading && (
+              <p className="mt-2 text-xs leading-snug text-muted">
+                Loading ratio lab history…
+              </p>
+            )}
 
             {!loading && candidates && candidates.candidates.length > 0 && (
-              <div className="history-ratio-candidates">
-                <p className="history-ratio-kicker">
+              <div className="mb-[22px] bg-foreground p-7 text-white">
+                <p className="mb-2.5 font-mono text-[10px] tracking-[0.08em] text-white/55 uppercase">
                   TOP LISTS ACROSS {groupRuns.length} RUN
                   {groupRuns.length === 1 ? "" : "S"}
                 </p>
-                <ol className="ratio-rankings">
+                <ol className="grid list-none grid-cols-1 gap-4 p-0">
                   {candidates.candidates.map((entry) => {
                     const entryCounts = countsFromRecord(entry.counts);
                     const changes = deckDiffEntries(baseCounts, entryCounts);
                     return (
-                      <li key={`${entry.deckHash}-${entry.rank}`}>
-                        <header>
-                          <span>#{entry.rank}</span>
-                          <strong>{entry.bestScore.toFixed(2)}</strong>
-                          <small>
+                      <li
+                        key={`${entry.deckHash}-${entry.rank}`}
+                        className={ratioRankingItemClass}
+                      >
+                        <header className={cn(ratioRankingHeaderClass, "flex-wrap")}>
+                          <span className="font-mono text-[11px] tracking-[0.08em] text-white/55">
+                            #{entry.rank}
+                          </span>
+                          <strong className="font-display text-[32px] leading-none text-primary">
+                            {entry.bestScore.toFixed(2)}
+                          </strong>
+                          <small className="font-mono text-[10px] tracking-[0.06em] text-white/55">
                             avg {entry.avgScore.toFixed(2)} · {entry.appearances}{" "}
                             appearance{entry.appearances === 1 ? "" : "s"}
                             {entry.wins > 0
@@ -295,23 +269,28 @@ export function RatioHistoryPanel({
                           </small>
                         </header>
                         {changes.length > 0 && (
-                          <div className="ratio-changes">
-                            <p className="ratio-changes-label">
+                          <div className={ratioChangesClass}>
+                            <p className="m-0 font-mono text-[10px] tracking-[0.06em] text-white/55 uppercase">
                               {changes.length} change
                               {changes.length === 1 ? "" : "s"} vs base
                             </p>
-                            <ul>
+                            <ul className="grid list-none gap-1.5 p-0">
                               {changes.map((change) => (
                                 <li
                                   key={`${entry.rank}-Δ-${change.id}`}
-                                  className={
-                                    change.delta > 0 ? "is-added" : "is-cut"
-                                  }
+                                  className={cn(
+                                    ratioChangeRowClass,
+                                    change.delta > 0
+                                      ? "[&_b]:text-[#9ed4a8]"
+                                      : "[&_b]:text-[#f0a090]",
+                                  )}
                                 >
-                                  <b>{formatSignedCopies(change.delta)}</b>
-                                  <span>
+                                  <b className="font-mono">
+                                    {formatSignedCopies(change.delta)}
+                                  </b>
+                                  <span className="grid min-w-0 gap-0.5">
                                     {CARDS[change.id]?.name ?? change.id}
-                                    <small>
+                                    <small className="font-mono text-[10px] text-white/45">
                                       {change.from}× → {change.to}×
                                     </small>
                                   </span>
@@ -320,13 +299,16 @@ export function RatioHistoryPanel({
                             </ul>
                           </div>
                         )}
-                        <ul className="ratio-full-list">
+                        <ul className="grid list-none gap-1.5 p-0">
                           {Object.entries(entry.counts)
                             .filter(([, count]) => count > 0)
                             .sort((a, b) => b[1] - a[1])
                             .map(([id, count]) => (
-                              <li key={`${entry.rank}-${id}`}>
-                                <b>{count}×</b>
+                              <li
+                                key={`${entry.rank}-${id}`}
+                                className={ratioChangeRowClass}
+                              >
+                                <b className="font-mono text-primary">{count}×</b>
                                 <span>{CARDS[id as CardId]?.name ?? id}</span>
                               </li>
                             ))}
@@ -334,7 +316,7 @@ export function RatioHistoryPanel({
                         {onSaveDecklist && (
                           <button
                             type="button"
-                            className="ratio-save-deck"
+                            className={ratioSaveDeckClass()}
                             onClick={() =>
                               void onSaveDecklist(
                                 entryCounts,
@@ -358,24 +340,27 @@ export function RatioHistoryPanel({
               candidates &&
               candidates.candidates.length === 0 &&
               groupRuns.length > 0 && (
-                <p className="history-empty">
+                <p className="mb-2 py-2 pb-3 text-sm leading-normal text-muted">
                   No ranked lists stored for this version group yet.
                 </p>
               )}
 
             {groupRuns.length > 0 && (
-              <div className="history-ratio-runs">
-                <p className="history-ratio-kicker">RUNS IN THIS GROUP</p>
-                <div className="history-table-wrap">
+              <div className="mt-2">
+                <p className={cn(typeSubsectionLabel, "mb-2.5")}>
+                  RUNS IN THIS GROUP
+                </p>
+                <div className={historyPanelTableWrapClass}>
                   <table>
                     <thead>
                       <tr>
                         <th>When</th>
                         <th>Hands</th>
                         <th>Runtime</th>
+                        <th>Status</th>
                         <th>Best score</th>
                         <th>
-                          <span className="visually-hidden">Actions</span>
+                          <span className="sr-only">Actions</span>
                         </th>
                       </tr>
                     </thead>
@@ -383,21 +368,27 @@ export function RatioHistoryPanel({
                       {groupRuns.map((run) => (
                         <tr key={run.id}>
                           <td>{formatWhen(run.startedAt)}</td>
-                          <td className="history-mono">
+                          <td className={historyMonoCellClass}>
                             {run.samples != null ? String(run.samples) : "—"}
                           </td>
-                          <td className="history-mono">
+                          <td className={historyMonoCellClass}>
                             {formatRunTime(run.elapsedMs)}
                           </td>
-                          <td className="history-result">
+                          <td>
+                            <StatusBadge
+                              status={run.status}
+                              errorMessage={run.errorMessage}
+                            />
+                          </td>
+                          <td className={historyResultCellClass}>
                             {run.bestScore != null
                               ? run.bestScore.toFixed(2)
                               : "—"}
                           </td>
-                          <td className="history-actions">
+                          <td className="w-[1%] whitespace-nowrap text-right">
                             <button
                               type="button"
-                              className="text-action"
+                              className={buttonVariants({ intent: "text" })}
                               onClick={() => onOpenRun(run.id, deck.id)}
                             >
                               Open
@@ -414,7 +405,10 @@ export function RatioHistoryPanel({
         )}
 
         {error && (
-          <p className="error-banner" role="alert">
+          <p
+            className="mt-5 border-l-4 border-primary bg-[color-mix(in_srgb,var(--color-primary)_10%,white)] px-[15px] py-3"
+            role="alert"
+          >
             {error}
           </p>
         )}

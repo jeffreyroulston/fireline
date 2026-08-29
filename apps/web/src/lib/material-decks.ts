@@ -47,6 +47,12 @@ function rowToSavedMaterialDeck(row: ApiMaterialDeckRow): SavedMaterialDeck {
   };
 }
 
+export function mapApiMaterialDeckRows(
+  rows: ApiMaterialDeckRow[],
+): SavedMaterialDeck[] {
+  return rows.map(rowToSavedMaterialDeck);
+}
+
 export function normalizeMaterialDeckName(
   name: string,
   fallback = "Untitled material deck",

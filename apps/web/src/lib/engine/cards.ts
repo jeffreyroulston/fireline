@@ -385,6 +385,8 @@ export const MATERIAL_NAMES: Record<MaterialId, string> = {
   zander_2: "Zander, Deft Executor",
   varuckan_soulknife: "Varuckan Soulknife",
   tristan_1: "Tristan, Underhanded",
+  assassins_ripper: "Assassin's Ripper",
+  grand_crusaders_ring: "Grand Crusader's Ring",
 };
 
 export const ALL_MATERIAL_IDS: MaterialId[] = [
@@ -395,6 +397,8 @@ export const ALL_MATERIAL_IDS: MaterialId[] = [
   "zander_2",
   "varuckan_soulknife",
   "tristan_1",
+  "assassins_ripper",
+  "grand_crusaders_ring",
 ];
 
 export const DEFAULT_MATERIALS: MaterialId[] = [

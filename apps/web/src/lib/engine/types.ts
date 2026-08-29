@@ -49,7 +49,9 @@ export type MaterialId =
   | "zander_1"
   | "zander_2"
   | "varuckan_soulknife"
-  | "tristan_1";
+  | "tristan_1"
+  | "assassins_ripper"
+  | "grand_crusaders_ring";
 
 export type Phase =
   | "main"

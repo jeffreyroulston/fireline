@@ -1,4 +1,4 @@
-import type { OptimizeProgress } from "@/lib/api/useRun";
+import type { OptimizeProgress } from "./types";
 
 export type { OptimizeProgress };
 

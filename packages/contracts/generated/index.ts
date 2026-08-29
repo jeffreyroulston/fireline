@@ -24,5 +24,7 @@ export type { SimType } from "./SimType.js";
 export type { SolveRequest } from "./SolveRequest.js";
 export type { SolveResult } from "./SolveResult.js";
 export type { SparseLineStats } from "./SparseLineStats.js";
+export type { Strategy } from "./Strategy.js";
+export type { SwapConfig } from "./SwapConfig.js";
 export type { TapePhase } from "./TapePhase.js";
 export type { TwoPassResult } from "./TwoPassResult.js";

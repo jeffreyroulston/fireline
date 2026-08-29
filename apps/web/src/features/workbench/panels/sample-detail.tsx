@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import type { CardId, DamageDistribution, LineEvent, SimType, SolveResult } from "@/lib/engine";
 import type { SampleHand } from "../types";
+import { cn, buttonVariants } from "@/lib/utils";
 import { DamageBars, HandCard, OptimalLine, SectionHeading, TwoPassCompare } from "../ui";
 
 function showsDrawnStrip(mode: SimType): boolean {
@@ -40,7 +41,7 @@ export function MonteCarloSampleDetail({
     selected !== null ? (distribution.rollouts[selected] ?? null) : null;
 
   return (
-    <div className="mc-sample-block">
+    <div className="mt-5">
       <DamageBars
         className="short"
         ariaLabel="Hand rollouts"
@@ -97,7 +98,7 @@ export function LineInspector({
       : `${sample.damage} DAMAGE`;
 
   return (
-    <div className="sample-detail">
+    <div className="sample-detail mt-7 border-t border-border pt-6">
       <SectionHeading
         title={
           title ?? (
@@ -109,19 +110,20 @@ export function LineInspector({
         }
         meta={<strong>{sample.nodes.toLocaleString()} states</strong>}
       />
-      <div className="hand-strip sample-hand" aria-label="Sampled opening hand">
+      <div className="pointer-events-none mb-3.5 grid min-h-0 grid-cols-7 gap-2" aria-label="Sampled opening hand">
         {sample.hand.map((id, index) => (
           <HandCard key={`${id}-${index}`} id={id} />
         ))}
       </div>
       {drawn.length > 0 && (
-        <div className="sample-drawn">
+        <div className="mb-2">
           <SectionHeading
+            className="mb-2.5"
             title="DRAWN"
             meta={<strong>{drawn.length} cards</strong>}
           />
           <div
-            className="hand-strip sample-hand"
+            className="pointer-events-none mb-3.5 grid min-h-0 grid-cols-7 gap-2"
             aria-label="Cards drawn on the line"
           >
             {drawn.map((id, index) => (
@@ -133,7 +135,7 @@ export function LineInspector({
       {showSendToSolver && onSendToHandSolver && (
         <button
           type="button"
-          className="secondary-action send-to-solver"
+          className={cn(buttonVariants({ intent: "secondary" }), "mb-[22px]")}
           onClick={() => onSendToHandSolver(sample)}
         >
           Send to hand solver

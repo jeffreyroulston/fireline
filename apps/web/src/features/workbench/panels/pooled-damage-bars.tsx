@@ -4,9 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import type { CardId, SimType } from "@/lib/engine";
 import { fetchPooledSample } from "@/lib/api/client";
 import type { SampleHand } from "../types";
+import { cn } from "@/lib/utils/cn";
 import type { BarCardHighlight } from "./card-leaderboard";
 import { LineInspector } from "./sample-detail";
 import { DamageBars } from "../ui";
+import {
+  errorBannerClass,
+  simHintClass,
+} from "./history/shared";
 
 export interface PooledSampleBar {
   key: string;
@@ -90,6 +95,44 @@ export function usePooledSampleSelection(
   return { sample, loading, loadError, mcIndex, setMcIndex };
 }
 
+const historyBarsPanelClass =
+  "flex h-[var(--pooled-chart-total-height,273px)] min-w-0 flex-col";
+
+const historyBarsScrollClass =
+  "mx-[-6px] my-2 flex h-[var(--pooled-chart-total-height,273px)] flex-[1_1_var(--pooled-chart-total-height,273px)] flex-col overflow-x-auto overflow-y-hidden px-1.5 pb-3 [scrollbar-gutter:stable] [scrollbar-color:color-mix(in_srgb,var(--color-foreground)_35%,transparent)_transparent]";
+
+const historyBarsChartClass =
+  "short mt-2 min-w-full gap-[3px] mb-[var(--pooled-chart-tick-height,21px)] h-[var(--pooled-chart-plot-height,252px)] flex-[0_0_var(--pooled-chart-plot-height,252px)] box-border [&>button]:block [&>button]:min-w-[11px] [&>button]:flex-[1_0_11px]";
+
+function historyBarClass(
+  dimmed: boolean,
+  highlight: BarCardHighlight | undefined,
+  selected: boolean,
+): string | undefined {
+  if (dimmed) {
+    return cn(
+      "bg-gradient-to-b from-[color-mix(in_srgb,var(--color-foreground)_18%,var(--color-surface-muted))] to-[color-mix(in_srgb,var(--color-foreground)_32%,var(--color-surface-deep))] opacity-[0.42] shadow-none hover:brightness-100",
+      selected &&
+        "opacity-[0.72] shadow-[inset_0_0_0_2px_color-mix(in_srgb,var(--color-foreground)_55%,transparent)]",
+    );
+  }
+  if (highlight === "in_hand") {
+    return cn(
+      "bg-gradient-to-b from-[#e8dcc8] to-[#b8a588] hover:brightness-[1.08]",
+      selected &&
+        "bg-gradient-to-b from-[#f0e2c8] to-[#c4ad80] shadow-[inset_0_0_0_2px_var(--color-foreground)]",
+    );
+  }
+  if (highlight === "played") {
+    return cn(
+      "bg-gradient-to-b from-[#8fd8ae] to-[#3d9970] hover:brightness-[1.08]",
+      selected &&
+        "bg-gradient-to-b from-[#a8e8c4] to-[#4aad78] shadow-[inset_0_0_0_2px_var(--color-foreground)]",
+    );
+  }
+  return undefined;
+}
+
 export function PooledDamageBarChart({
   bars,
   totalSamples,
@@ -108,33 +151,28 @@ export function PooledDamageBarChart({
   dimmedKeys?: ReadonlySet<string>;
 }) {
   return (
-    <div className="history-bars-panel">
-      <div className="history-bars-scroll" aria-label="Pooled sample damage">
+    <div className={historyBarsPanelClass}>
+      <div className={historyBarsScrollClass} aria-label="Pooled sample damage">
         <DamageBars
-          className="short history-bars"
+          className={historyBarsChartClass}
           scaleMax={sampleMax}
           selectedKey={selectedKey}
           onSelect={onSelectedKeyChange}
           items={bars.map((bar) => {
             const cardHighlight = cardHighlights[bar.key];
             const dimmed = dimmedKeys?.has(bar.key) ?? false;
+            const selected = selectedKey === bar.key;
             return {
               key: bar.key,
               damage: bar.damage,
               title: bar.label,
               disabled: !(bar.inspectable ?? Boolean(bar.runId)),
-              className: [
-                dimmed ? "is-out-of-range" : "",
-                cardHighlight === "in_hand" ? "is-card-in-hand" : "",
-                cardHighlight === "played" ? "is-card-played" : "",
-              ]
-                .filter(Boolean)
-                .join(" ") || undefined,
+              className: historyBarClass(dimmed, cardHighlight, selected),
             };
           })}
         />
       </div>
-      <p className="sim-hint history-bars-hint">
+      <p className={simHintClass}>
         {totalSamples != null && totalSamples > bars.length
           ? `Showing ${bars.length.toLocaleString()} most recent of ${totalSamples.toLocaleString()} samples. `
           : ""}
@@ -180,15 +218,15 @@ export function PooledSampleDetail({
   }
 
   return (
-    <div className="history-pooled-sample" ref={detailRef}>
-      {loading && <p className="sim-hint">Loading sample…</p>}
+    <div className="mt-4 [&_.sample-detail]:mt-0" ref={detailRef}>
+      {loading && <p className={simHintClass}>Loading sample…</p>}
       {loadError && (
-        <p className="error-banner" role="alert">
+        <p className={errorBannerClass} role="alert">
           {loadError}
         </p>
       )}
       {!loading && !loadError && !sample && (
-        <p className="sim-hint">No stored line for this sample.</p>
+        <p className={simHintClass}>No stored line for this sample.</p>
       )}
       {sample && (
         <LineInspector

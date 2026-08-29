@@ -484,6 +484,8 @@ const MATERIAL_PLAY_KINDS: Record<string, string[]> = {
   zander_1: ["floatForZander", "levelZander"],
   zander_2: ["onEnterLevel", "levelZander2", "zanderGyReturn"],
   tristan_1: ["floatForTristan", "levelTristan", "tristanRecollect"],
+  assassins_ripper: ["floatForRipper", "materializeRipper", "activateRipper"],
+  grand_crusaders_ring: ["materializeRing", "banishCrusaderRing"],
 };
 
 export type CardPlayMatrixCell = {

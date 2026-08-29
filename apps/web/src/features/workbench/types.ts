@@ -57,13 +57,23 @@ export const SIM_TYPE_LABELS: Record<SimType, string> = {
   oracle_only: "Oracle only",
 };
 
+export type RatioStrategy =
+  | "randomSample"
+  | "hillClimb"
+  | "genetic"
+  | "swapSweep";
+
 export interface RatioResult {
   bestCounts: DeckCounts;
   bestScore: number;
+  strategy?: RatioStrategy;
   top?: {
     rank: number;
     score: number;
     counts: DeckCounts;
+    scoreDelta?: number | null;
+    candidate?: string | null;
+    cardStats?: CardStat[];
   }[];
   history: { iteration: number; score: number }[];
 }

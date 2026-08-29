@@ -1,18 +1,19 @@
 import { Suspense } from "react";
-import { RunTrackerProvider } from "@/lib/runs/run-tracker";
+import { WorkbenchLoader } from "@/features/workbench/ui/workbench-loader";
+import { WorkbenchBootstrap } from "@/features/workbench/workbench-bootstrap";
 import { WorkbenchShell } from "./workbench-shell";
 
-export default function WorkbenchLayout({
+export default async function WorkbenchLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   return (
-    <RunTrackerProvider>
-      <Suspense fallback={null}>
+    <WorkbenchBootstrap>
+      <Suspense fallback={<WorkbenchLoader />}>
         <WorkbenchShell />
       </Suspense>
       {children}
-    </RunTrackerProvider>
+    </WorkbenchBootstrap>
   );
 }

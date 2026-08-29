@@ -6,6 +6,14 @@ const apiOrigin = process.env.API_ORIGIN ?? "http://127.0.0.1:8080";
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "cdn.gatcg.com",
+      },
+    ],
+  },
   output: "standalone",
   outputFileTracingRoot: path.join(rootDir, "../.."),
   async rewrites() {

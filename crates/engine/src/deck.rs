@@ -130,6 +130,40 @@ pub struct OptimizeRequest {
     pub budget: crate::budget::Budget,
     #[serde(default)]
     pub materials: BTreeMap<String, u8>,
+    #[serde(default)]
+    pub strategy: Strategy,
+    #[serde(default)]
+    pub base_deck: BTreeMap<String, u8>,
+    #[serde(default)]
+    pub swap: Option<SwapConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
+pub enum Strategy {
+    #[default]
+    RandomSample,
+    HillClimb,
+    Genetic,
+    SwapSweep,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
+pub struct SwapConfig {
+    pub from: String,
+    pub count: u8,
+    pub candidates: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
@@ -168,6 +202,12 @@ pub struct RankedDeck {
     pub rank: u8,
     pub score: f64,
     pub counts: BTreeMap<String, u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score_delta: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub card_stats: Vec<crate::stats::CardStat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -486,10 +526,14 @@ fn solve_unique_hands(
 }
 
 #[derive(Clone, Copy)]
-struct Rng(u64);
+pub(crate) struct Rng(u64);
 
 impl Rng {
-    fn next(&mut self) -> u64 {
+    pub(crate) fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    pub(crate) fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9e3779b97f4a7c15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
@@ -497,7 +541,7 @@ impl Rng {
         z ^ (z >> 31)
     }
 
-    fn index(&mut self, len: usize) -> usize {
+    pub(crate) fn index(&mut self, len: usize) -> usize {
         (self.next() as usize) % len
     }
 }
@@ -543,7 +587,7 @@ fn evaluate_hands(
     } else {
         1
     };
-    let mut rng = Rng(request.seed);
+    let mut rng = Rng::new(request.seed);
 
     let mut draws = Vec::with_capacity(request.samples as usize);
     for sample_index in 0..request.samples {
@@ -677,6 +721,7 @@ fn evaluate_hands(
             bounds: BTreeMap::new(),
             deck_size: None,
             decks: None,
+            strategy: None,
             budget,
         },
         card_stats: stats_acc.finish(),
@@ -709,118 +754,12 @@ pub fn count_legal_decks(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Re
 
 pub fn optimize_with_progress(
     request: &OptimizeRequest,
-    mut on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
+    on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
 ) -> Result<OptimizeResult, String> {
-    let started = Instant::now();
-    let budget = request.budget;
-    let legal_decks = count_legal_decks(&request.bounds, request.deck_size)?;
-    if legal_decks == 0 {
-        return Err("no legal lists exist for these bounds and deck size".into());
-    }
-
-    let target = (request.decks.max(1))
-        .min(budget.max_optimize_decks)
-        .min(u32::try_from(legal_decks).unwrap_or(u32::MAX));
-    let total_hands = u64::from(target) * u64::from(request.samples);
-    let mut decks_scored = 0_u32;
-    let mut best_score = 0.0_f64;
-    let mut best = BTreeMap::new();
-    let mut top: Vec<(f64, BTreeMap<String, u8>)> = Vec::with_capacity(5);
-    let mut history = Vec::new();
-
-    if on_progress(OptimizeProgress {
-        decks_scored: 0,
-        total_decks: target,
-        legal_decks,
-        hands_simulated: 0,
-        total_hands,
-        best_score: 0.0,
-    })
-    .is_break()
-    {
-        return Err("cancelled".into());
-    }
-
-    let mut rng = Rng(request.seed);
-    let mut seen = rustc_hash::FxHashSet::default();
-    let mut attempts = 0_u64;
-    let max_draw_attempts = u64::from(target).saturating_mul(64).max(64);
-
-    while decks_scored < target && attempts < max_draw_attempts {
-        attempts += 1;
-        let counts = initial_counts(&request.bounds, request.deck_size, &mut rng)?;
-        let key = counts_key(&counts);
-        if !seen.insert(key) {
-            if seen.len() as u64 >= legal_decks {
-                break;
-            }
-            continue;
-        }
-
-        let score = score_optimize_deck(
-            &counts,
-            request,
-            &mut decks_scored,
-            target,
-            legal_decks,
-            total_hands,
-            best_score,
-            &mut on_progress,
-        )?;
-        consider_top(&mut top, score, &counts);
-        if decks_scored == 1 || score > best_score {
-            best_score = score;
-            best = counts;
-        }
-        history.push(HistoryPoint {
-            iteration: decks_scored as u16,
-            score: best_score,
-        });
-    }
-
-    if decks_scored == 0 {
-        return Err("could not sample any legal lists".into());
-    }
-
-    let _ = on_progress(OptimizeProgress {
-        decks_scored,
-        total_decks: target,
-        legal_decks,
-        hands_simulated: u64::from(decks_scored) * u64::from(request.samples),
-        total_hands,
-        best_score,
-    });
-
-    Ok(OptimizeResult {
-        best_counts: best,
-        best_score,
-        top: ranked_decks(&top),
-        history,
-        legal_decks,
-        decks_scored,
-        elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
-        effective: EffectiveRequest {
-            engine_version: ENGINE_VERSION,
-            root_seed: request.seed,
-            sim_type: Some(SimType::FireBrick),
-            deck: BTreeMap::new(),
-            go_first: Some(true),
-            max_turns: Some(3),
-            rollouts: Some(1),
-            samples: Some(request.samples),
-            metric: Some(match request.metric {
-                Metric::Mean => "mean",
-                Metric::P50 => "p50",
-            }),
-            bounds: request.bounds.clone(),
-            deck_size: Some(request.deck_size),
-            decks: Some(target),
-            budget,
-        },
-    })
+    crate::optimize_strategies::optimize_with_progress(request, on_progress)
 }
 
-fn counts_key(counts: &BTreeMap<String, u8>) -> Vec<u8> {
+pub(crate) fn counts_key(counts: &BTreeMap<String, u8>) -> Vec<u8> {
     counts.values().copied().collect()
 }
 
@@ -874,14 +813,16 @@ fn count_compositions(ranges: &[(u8, u8)], deck_size: u8) -> u64 {
     dp[size]
 }
 
-fn consider_top(
-    top: &mut Vec<(f64, BTreeMap<String, u8>)>,
+pub(crate) fn consider_top(
+    top: &mut Vec<(f64, BTreeMap<String, u8>, Vec<crate::stats::CardStat>)>,
     score: f64,
     counts: &BTreeMap<String, u8>,
+    card_stats: Vec<crate::stats::CardStat>,
 ) {
-    if let Some(existing) = top.iter_mut().find(|(_, known)| known == counts) {
+    if let Some(existing) = top.iter_mut().find(|(_, known, _)| known == counts) {
         if score > existing.0 {
             existing.0 = score;
+            existing.2 = card_stats;
             top.sort_by(|left, right| {
                 right
                     .0
@@ -891,8 +832,8 @@ fn consider_top(
         }
         return;
     }
-    if top.len() < 5 || top.last().is_some_and(|(worst, _)| score > *worst) {
-        top.push((score, counts.clone()));
+    if top.len() < 5 || top.last().is_some_and(|(worst, _, _)| score > *worst) {
+        top.push((score, counts.clone(), card_stats));
         top.sort_by(|left, right| {
             right
                 .0
@@ -903,59 +844,20 @@ fn consider_top(
     }
 }
 
-fn ranked_decks(top: &[(f64, BTreeMap<String, u8>)]) -> Vec<RankedDeck> {
+pub(crate) fn ranked_decks(
+    top: &[(f64, BTreeMap<String, u8>, Vec<crate::stats::CardStat>)],
+) -> Vec<RankedDeck> {
     top.iter()
         .enumerate()
-        .map(|(index, (score, counts))| RankedDeck {
+        .map(|(index, (score, counts, card_stats))| RankedDeck {
             rank: (index + 1) as u8,
             score: *score,
             counts: counts.clone(),
+            score_delta: None,
+            card_stats: card_stats.clone(),
+            candidate: None,
         })
         .collect()
-}
-
-fn score_optimize_deck(
-    counts: &BTreeMap<String, u8>,
-    request: &OptimizeRequest,
-    decks_scored: &mut u32,
-    total_decks: u32,
-    legal_decks: u64,
-    total_hands: u64,
-    best_score: f64,
-    on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
-) -> Result<f64, String> {
-    *decks_scored += 1;
-    let deck_number = *decks_scored;
-    let samples = request.samples;
-    let result = evaluate_with_progress(
-        &DeckEvalRequest {
-            deck: counts.clone(),
-            samples,
-            go_first: true,
-            max_turns: 3,
-            seed: request.seed.wrapping_add(u64::from(deck_number) * 131),
-            sim_type: SimType::FireBrick,
-            rollouts: 1,
-            budget: request.budget,
-            materials: request.materials.clone(),
-        },
-        |progress| {
-            let hands_simulated = u64::from(deck_number.saturating_sub(1)) * u64::from(samples)
-                + u64::from(progress.sample);
-            on_progress(OptimizeProgress {
-                decks_scored: deck_number,
-                total_decks,
-                legal_decks,
-                hands_simulated,
-                total_hands,
-                best_score,
-            })
-        },
-    )?;
-    Ok(match request.metric {
-        Metric::Mean => result.mean,
-        Metric::P50 => f64::from(result.p50),
-    })
 }
 
 fn parse_counts(counts: &BTreeMap<String, u8>) -> Result<Vec<Card>, String> {
@@ -967,7 +869,7 @@ fn parse_counts(counts: &BTreeMap<String, u8>) -> Result<Vec<Card>, String> {
     Ok(deck)
 }
 
-fn initial_counts(
+pub(crate) fn initial_counts(
     bounds: &BTreeMap<String, Bounds>,
     deck_size: u8,
     rng: &mut Rng,
@@ -1058,6 +960,9 @@ mod tests {
             seed: 4,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            strategy: Strategy::RandomSample,
+            base_deck: BTreeMap::new(),
+            swap: None,
         })
         .unwrap();
         assert_eq!(

@@ -27,6 +27,7 @@ import {
 import {
   hydrateDeckResult,
   hydrateRatioResult,
+  mapOptimizeResultToRatio,
   type FetchRunResponse,
 } from "./hydrate-result";
 import {
@@ -199,7 +200,15 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
               : current.progress,
           };
         }
-        const ratio = result as RatioResult;
+        const ratio =
+          result &&
+          typeof result === "object" &&
+          "bestCounts" in result &&
+          "top" in result
+            ? mapOptimizeResultToRatio(
+                result as Parameters<typeof mapOptimizeResultToRatio>[0],
+              )
+            : (result as RatioResult);
         return {
           ...current,
           status: "complete",

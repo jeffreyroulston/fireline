@@ -1,4 +1,5 @@
 import type { SavedDeck } from "@/lib/decks";
+import { cn } from "@/lib/utils/cn";
 
 export function DeckPicker({
   label,
@@ -10,6 +11,7 @@ export function DeckPicker({
   loading = false,
   formatOption,
   disabled,
+  className,
 }: {
   label: string;
   decks: SavedDeck[];
@@ -20,13 +22,14 @@ export function DeckPicker({
   loading?: boolean;
   formatOption?: (deck: SavedDeck) => string;
   disabled?: boolean;
+  className?: string;
 }) {
   const isDisabled = disabled ?? (loading ? true : decks.length === 0);
   const emptyOptionLabel =
     loading || (value && decks.length === 0) ? loadingLabel : emptyLabel;
 
   return (
-    <label className="deck-picker">
+    <label className={cn("min-w-[180px] flex-1", className)}>
       {label}
       <select
         value={value}
