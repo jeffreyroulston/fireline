@@ -29,8 +29,12 @@ enum EvaluateStreamEvent {
         sample: u16,
         total: u16,
         rollout: u16,
+        #[serde(rename = "totalRollouts")]
         total_rollouts: u16,
     },
+    /// `rename_all` on the enum only renames the `kind` tag; field names on
+    /// struct variants need their own camelCase rename.
+    #[serde(rename_all = "camelCase")]
     HandProgress {
         sample_index: u16,
         phase: HandPhase,
@@ -230,7 +234,7 @@ fn merge_budget(request: Budget, worker: Budget) -> Budget {
 async fn stream_ndjson(
     run: impl FnOnce(mpsc::Sender<String>) + Send + 'static,
 ) -> Result<Response, StatusCode> {
-    let (tx, rx) = mpsc::channel::<String>(32);
+    let (tx, rx) = mpsc::channel::<String>(512);
     tokio::task::spawn_blocking(move || run(tx));
     let body = axum::body::Body::from_stream(
         ReceiverStream::new(rx).map(Ok::<_, std::convert::Infallible>),
@@ -259,5 +263,32 @@ mod tests {
             ..Budget::default()
         };
         assert_eq!(merge_budget(custom, Budget::default()), custom);
+    }
+
+    #[test]
+    fn evaluate_stream_events_use_camel_case_fields() {
+        let progress = serde_json::to_value(EvaluateStreamEvent::Progress {
+            sample: 1,
+            total: 8,
+            rollout: 0,
+            total_rollouts: 16,
+        })
+        .unwrap();
+        assert_eq!(progress["kind"], "progress");
+        assert_eq!(progress["totalRollouts"], 16);
+        assert!(progress.get("total_rollouts").is_none());
+
+        let hand = serde_json::to_value(EvaluateStreamEvent::HandProgress {
+            sample_index: 3,
+            phase: HandPhase::Started,
+            rollout: 0,
+            total_rollouts: 16,
+        })
+        .unwrap();
+        assert_eq!(hand["kind"], "handProgress");
+        assert_eq!(hand["sampleIndex"], 3);
+        assert_eq!(hand["totalRollouts"], 16);
+        assert_eq!(hand["phase"], "started");
+        assert!(hand.get("sample_index").is_none());
     }
 }

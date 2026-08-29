@@ -1,7 +1,6 @@
 "use client";
 
 import type { HandProgress } from "@/lib/runs/types";
-import { cn } from "@/lib/utils/cn";
 
 const MAX_VISIBLE_HANDS = 8;
 
@@ -17,22 +16,20 @@ function handBarPercent(hand: HandProgress): number {
 
 function HandBar({ hand }: { hand: HandProgress }) {
   const percent = handBarPercent(hand);
-  const indeterminate = hand.totalRollouts <= 1 || hand.phase === "started";
   return (
-    <div className="grid min-w-0 grid-cols-[2.5rem_1fr] items-center gap-2">
+    <div className="grid min-w-0 grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-2">
       <span className="font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
-        #{hand.sampleIndex}
+        #{hand.sampleIndex + 1}
       </span>
       <div className="h-1 w-full overflow-hidden bg-border">
         <span
-          className={cn(
-            "block h-full bg-accent transition-[width] duration-[180ms] ease-in-out",
-            indeterminate &&
-              "w-[28%] animate-[progress-indeterminate_1.15s_ease-in-out_infinite] [transform:translateX(-120%)]",
-          )}
-          style={indeterminate ? undefined : { width: `${percent}%` }}
+          className="block h-full bg-accent transition-[width] duration-[180ms] ease-in-out"
+          style={{ width: `${percent}%` }}
         />
       </div>
+      <span className="font-mono text-[10px] tracking-[0.06em] text-muted uppercase tabular-nums">
+        {hand.rolloutsDone}/{hand.totalRollouts}
+      </span>
     </div>
   );
 }
@@ -42,16 +39,20 @@ export function HandProgressBars({
 }: {
   hands: HandProgress[] | undefined;
 }) {
-  if (!hands || hands.length === 0) {
+  // Only hands with at least one finished rollout (actively measuring).
+  const active = (hands ?? []).filter(
+    (hand) => hand.totalRollouts > 1 && hand.rolloutsDone > 0,
+  );
+  if (active.length === 0) {
     return null;
   }
-  const visible = hands.slice(0, MAX_VISIBLE_HANDS);
-  const overflow = hands.length - visible.length;
+  const visible = active.slice(0, MAX_VISIBLE_HANDS);
+  const overflow = active.length - visible.length;
 
   return (
     <div className="grid min-w-0 gap-1.5">
       <div className="font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
-        {hands.length} concurrent hand{hands.length === 1 ? "" : "s"}
+        {active.length} hand{active.length === 1 ? "" : "s"} calculating
       </div>
       <div className="grid min-w-0 gap-1">
         {visible.map((hand) => (

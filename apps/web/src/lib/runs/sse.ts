@@ -29,10 +29,12 @@ function asHandPhase(value: unknown): HandPhase | null {
 export function coerceHandProgress(
   data: Record<string, unknown>,
 ): HandProgress | null {
-  const sampleIndex = asNumber(data.sampleIndex);
+  const sampleIndex =
+    asNumber(data.sampleIndex) ?? asNumber(data.sample_index);
   const phase = asHandPhase(data.phase);
   const rollout = asNumber(data.rollout);
-  const totalRollouts = asNumber(data.totalRollouts);
+  const totalRollouts =
+    asNumber(data.totalRollouts) ?? asNumber(data.total_rollouts);
   if (
     sampleIndex == null ||
     phase == null ||
@@ -56,6 +58,12 @@ export function applyHandProgress(
   const hands = current ?? [];
   if (update.phase === "done") {
     return hands.filter((hand) => hand.sampleIndex !== update.sampleIndex);
+  }
+  // Ignore "started" — it only means the hand acquired a gate slot. Showing a
+  // bar then stacks empty loading rows for every concurrent hand. Wait until
+  // the first rollout tick so the list is "bars being worked on".
+  if (update.phase === "started" || update.rolloutsDone <= 0) {
+    return hands;
   }
   const index = hands.findIndex(
     (hand) => hand.sampleIndex === update.sampleIndex,
