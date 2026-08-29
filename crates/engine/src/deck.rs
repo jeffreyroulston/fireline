@@ -1,5 +1,6 @@
 use crate::{
     cards::{CARD_COUNT, Card},
+    error::{EngineError, Result},
     line_event::LineEvent,
     model::{
         DamageDistribution, EffectiveRequest, SimType, SolveRequest, TwoPassResult,
@@ -369,7 +370,7 @@ fn solve_sample_hand(
     sample_index: u16,
     hands_done: u16,
     ctx: &SampleContext<'_, impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
-) -> Result<SampleHand, String> {
+) -> Result<SampleHand> {
     let request = ctx.request;
     let total_rollouts = if request.sim_type == SimType::MonteCarlo {
         ctx.rollouts
@@ -388,7 +389,7 @@ fn solve_sample_hand(
         )
         .is_break()
     {
-        return Err("cancelled".into());
+        return Err(EngineError::Cancelled);
     }
     let hand_ids = drawn.iter().map(|card| card.id().to_string()).collect();
     let result = solve_with_progress(
@@ -447,7 +448,7 @@ fn solve_one_unique_hand(
     sample_index: u16,
     hands_done: u16,
     ctx: &SampleContext<'_, impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
-) -> Result<((SimType, [u8; CARD_COUNT]), SampleHand), String> {
+) -> Result<((SimType, [u8; CARD_COUNT]), SampleHand)> {
     let drawn = drawn_from_key(key);
     let mut sample = solve_sample_hand(&drawn, sample_index, hands_done, ctx)?;
     sample.hand = drawn.iter().map(|card| card.id()).collect();
@@ -469,7 +470,7 @@ fn solve_unique_hands(
     rollouts: u16,
     on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
     parallel: bool,
-) -> Result<FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand>, String> {
+) -> Result<FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand>> {
     let total = request.samples.max(1);
     let total_rollouts = if request.sim_type == SimType::MonteCarlo {
         rollouts
@@ -505,7 +506,7 @@ fn solve_unique_hands(
             )
             .is_break()
             {
-                return Err("cancelled".into());
+                return Err(EngineError::Cancelled);
             }
         }
         return Ok(cache);
@@ -516,8 +517,7 @@ fn solve_unique_hands(
     let threads = hand_threads(request.sim_type);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
-        .build()
-        .map_err(|err| format!("rayon pool: {err}"))?;
+        .build()?;
     // map + collect into Result short-circuits on the first failure, so real
     // errors (e.g. unknown card) propagate instead of collapsing into
     // "cancelled".
@@ -526,7 +526,7 @@ fn solve_unique_hands(
             .par_iter()
             .map(|&(sim_type, key, sample_index)| {
                 if cancelled.load(Ordering::Relaxed) {
-                    return Err("cancelled".into());
+                    return Err(EngineError::Cancelled);
                 }
                 let hands_done = completed.load(Ordering::Relaxed);
                 let (cache_key, sample) =
@@ -544,11 +544,11 @@ fn solve_unique_hands(
                 .is_break()
                 {
                     cancelled.store(true, Ordering::Relaxed);
-                    return Err("cancelled".into());
+                    return Err(EngineError::Cancelled);
                 }
                 Ok((cache_key, sample))
             })
-            .collect::<Result<FxHashMap<_, _>, String>>()
+            .collect::<Result<FxHashMap<_, _>>>()
     })?;
     Ok(cache)
 }
@@ -574,7 +574,7 @@ impl Rng {
     }
 }
 
-pub fn evaluate(request: &DeckEvalRequest) -> Result<DeckEvalResult, String> {
+pub fn evaluate(request: &DeckEvalRequest) -> Result<DeckEvalResult> {
     evaluate_with_progress(request, |_| ControlFlow::Continue(()))
 }
 
@@ -584,14 +584,14 @@ pub fn evaluate(request: &DeckEvalRequest) -> Result<DeckEvalResult, String> {
 pub fn evaluate_with_serial_progress(
     request: &DeckEvalRequest,
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
-) -> Result<DeckEvalResult, String> {
+) -> Result<DeckEvalResult> {
     evaluate_hands(request, on_progress, false)
 }
 
 pub fn evaluate_with_progress(
     request: &DeckEvalRequest,
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
-) -> Result<DeckEvalResult, String> {
+) -> Result<DeckEvalResult> {
     evaluate_hands(request, on_progress, true)
 }
 
@@ -599,12 +599,14 @@ fn evaluate_hands(
     request: &DeckEvalRequest,
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
     parallel: bool,
-) -> Result<DeckEvalResult, String> {
+) -> Result<DeckEvalResult> {
     let started = Instant::now();
     let budget = request.budget;
     let deck = parse_counts(&request.deck)?;
     if deck.len() < 7 {
-        return Err("deck must contain at least seven recognized cards".into());
+        return Err(EngineError::invalid(
+            "deck must contain at least seven recognized cards",
+        ));
     }
     let max_turns = request
         .max_turns
@@ -651,7 +653,7 @@ fn evaluate_hands(
     )
     .is_break()
     {
-        return Err("cancelled".into());
+        return Err(EngineError::Cancelled);
     }
 
     let cache = solve_unique_hands(
@@ -709,7 +711,7 @@ fn evaluate_hands(
     )
     .is_break()
     {
-        return Err("cancelled".into());
+        return Err(EngineError::Cancelled);
     }
 
     let mut sorted = damages.clone();
@@ -766,12 +768,12 @@ fn evaluate_hands(
     })
 }
 
-pub fn optimize(request: &OptimizeRequest) -> Result<OptimizeResult, String> {
+pub fn optimize(request: &OptimizeRequest) -> Result<OptimizeResult> {
     optimize_with_progress(request, |_| ControlFlow::Continue(()))
 }
 
 /// Number of legal count vectors inside `bounds` that sum to `deck_size`.
-pub fn count_legal_decks(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Result<u64, String> {
+pub fn count_legal_decks(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Result<u64> {
     validate_bounds(bounds, deck_size)?;
     let ranges = bounds
         .values()
@@ -783,7 +785,7 @@ pub fn count_legal_decks(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Re
 pub fn optimize_with_progress(
     request: &OptimizeRequest,
     on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
-) -> Result<OptimizeResult, String> {
+) -> Result<OptimizeResult> {
     crate::optimize_strategies::optimize_with_progress(request, on_progress)
 }
 
@@ -791,23 +793,25 @@ pub(crate) fn counts_key(counts: &BTreeMap<String, u8>) -> Vec<u8> {
     counts.values().copied().collect()
 }
 
-fn validate_bounds(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Result<(), String> {
+fn validate_bounds(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Result<()> {
     if bounds.is_empty() {
-        return Err("bounds must include at least one card".into());
+        return Err(EngineError::invalid(
+            "bounds must include at least one card",
+        ));
     }
     for id in bounds.keys() {
-        crate::cards::parse_card(id).ok_or_else(|| format!("unknown card: {id}"))?;
+        crate::cards::parse_card(id).ok_or_else(|| EngineError::UnknownCard(id.clone()))?;
     }
     let min_total: u16 = bounds.values().map(|bound| u16::from(bound.min)).sum();
     let max_total: u16 = bounds.values().map(|bound| u16::from(bound.max)).sum();
     if u16::from(deck_size) < min_total || u16::from(deck_size) > max_total {
-        return Err(format!(
+        return Err(EngineError::invalid(format!(
             "deck size must be between bound totals {min_total} and {max_total}"
-        ));
+        )));
     }
     for bound in bounds.values() {
         if bound.min > bound.max {
-            return Err("each card minimum must be <= maximum".into());
+            return Err(EngineError::invalid("each card minimum must be <= maximum"));
         }
     }
     Ok(())
@@ -888,10 +892,11 @@ pub(crate) fn ranked_decks(
         .collect()
 }
 
-fn parse_counts(counts: &BTreeMap<String, u8>) -> Result<Vec<Card>, String> {
+fn parse_counts(counts: &BTreeMap<String, u8>) -> Result<Vec<Card>> {
     let mut deck = Vec::new();
     for (id, &count) in counts {
-        let card = crate::cards::parse_card(id).ok_or_else(|| format!("unknown card: {id}"))?;
+        let card =
+            crate::cards::parse_card(id).ok_or_else(|| EngineError::UnknownCard(id.clone()))?;
         deck.extend(std::iter::repeat_n(card, count as usize));
     }
     Ok(deck)
@@ -901,7 +906,7 @@ pub(crate) fn initial_counts(
     bounds: &BTreeMap<String, Bounds>,
     deck_size: u8,
     rng: &mut Rng,
-) -> Result<BTreeMap<String, u8>, String> {
+) -> Result<BTreeMap<String, u8>> {
     validate_bounds(bounds, deck_size)?;
     let min_total: u16 = bounds.values().map(|bound| u16::from(bound.min)).sum();
     let mut counts = bounds

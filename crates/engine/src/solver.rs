@@ -1,3 +1,4 @@
+use crate::error::{EngineError, Result};
 #[cfg(test)]
 use crate::line_event::LineEvent;
 use crate::{
@@ -151,7 +152,7 @@ fn shuffle_cards(values: &mut [Card], rng: &mut Rng) {
     }
 }
 
-pub fn solve(request: &SolveRequest) -> Result<SolveResult, String> {
+pub fn solve(request: &SolveRequest) -> Result<SolveResult> {
     solve_with_progress(request, |_, _| ControlFlow::Continue(()))
 }
 
@@ -159,15 +160,15 @@ pub fn solve(request: &SolveRequest) -> Result<SolveResult, String> {
 pub fn solve_with_progress(
     request: &SolveRequest,
     on_rollout: impl FnMut(u16, u16) -> ControlFlow<()>,
-) -> Result<SolveResult, String> {
+) -> Result<SolveResult> {
     if request.hand.len() < 2 || request.hand.len() > 16 {
-        return Err("hand must contain 2–16 cards".to_string());
+        return Err(EngineError::invalid("hand must contain 2–16 cards"));
     }
     let hand = request
         .hand
         .iter()
-        .map(|card| parse_card(card).ok_or_else(|| format!("unknown card: {card}")))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|card| parse_card(card).ok_or_else(|| EngineError::UnknownCard(card.clone())))
+        .collect::<Result<Vec<_>>>()?;
     let max_turns = request
         .max_turns
         .clamp(request.budget.max_turns_min, request.budget.max_turns_max);
@@ -393,7 +394,7 @@ fn solve_monte_carlo(
     max_turns: u8,
     config: MonteCarloConfig,
     mut on_rollout: impl FnMut(u16, u16) -> ControlFlow<()>,
-) -> Result<SolveResult, String> {
+) -> Result<SolveResult> {
     let started = Instant::now();
     let rollouts = config.rollouts;
     let materials = config.materials;
@@ -409,7 +410,7 @@ fn solve_monte_carlo(
     let mut search = Search::new(true);
 
     if on_rollout(0, rollouts).is_break() {
-        return Err("cancelled".into());
+        return Err(EngineError::Cancelled);
     }
 
     for done in 1..=rollouts {
@@ -429,7 +430,7 @@ fn solve_monte_carlo(
         stats_acc.add_sample(hand, &line_stats);
         rollout_stats.push(line_stats);
         if on_rollout(done, rollouts).is_break() {
-            return Err("cancelled".into());
+            return Err(EngineError::Cancelled);
         }
     }
 
@@ -488,16 +489,16 @@ fn oracle_queue(remaining: &[Card], seed: u64, ordered: bool) -> Vec<Card> {
     queue
 }
 
-fn remaining_for_solve(request: &SolveRequest, hand: &[Card]) -> Result<Vec<Card>, String> {
+fn remaining_for_solve(request: &SolveRequest, hand: &[Card]) -> Result<Vec<Card>> {
     Ok(remaining_queue(request, hand)?.0)
 }
 
-fn remaining_queue(request: &SolveRequest, hand: &[Card]) -> Result<(Vec<Card>, bool), String> {
+fn remaining_queue(request: &SolveRequest, hand: &[Card]) -> Result<(Vec<Card>, bool)> {
     if let Some(ids) = &request.queue {
         let cards = ids
             .iter()
-            .map(|id| parse_card(id).ok_or_else(|| format!("unknown card in queue: {id}")))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|id| parse_card(id).ok_or_else(|| EngineError::UnknownQueueCard(id.clone())))
+            .collect::<Result<Vec<_>>>()?;
         return Ok((cards, true));
     }
     Ok((remaining_deck(&request.deck, hand)?, false))
@@ -601,16 +602,15 @@ fn fire_brick_opening_queue(request: &SolveRequest, hand: &[Card]) -> Vec<Card> 
     remaining
 }
 
-fn remaining_deck(deck: &BTreeMap<String, u8>, hand: &[Card]) -> Result<Vec<Card>, String> {
+fn remaining_deck(deck: &BTreeMap<String, u8>, hand: &[Card]) -> Result<Vec<Card>> {
     if deck.is_empty() {
-        return Err(
-            "Monte Carlo, Two-pass, and Oracle need a maindeck so unknown draws can be sampled"
-                .into(),
-        );
+        return Err(EngineError::invalid(
+            "Monte Carlo, Two-pass, and Oracle need a maindeck so unknown draws can be sampled",
+        ));
     }
     let mut counts = BTreeMap::new();
     for (id, &count) in deck {
-        let card = parse_card(id).ok_or_else(|| format!("unknown card in deck: {id}"))?;
+        let card = parse_card(id).ok_or_else(|| EngineError::UnknownDeckCard(id.clone()))?;
         *counts.entry(card).or_insert(0_u8) += count;
     }
 
@@ -635,7 +635,9 @@ fn remaining_deck(deck: &BTreeMap<String, u8>, hand: &[Card]) -> Result<Vec<Card
         remaining.extend(std::iter::repeat_n(card, count as usize));
     }
     if remaining.is_empty() {
-        return Err("no cards remain in the deck after removing the opening hand".into());
+        return Err(EngineError::invalid(
+            "no cards remain in the deck after removing the opening hand",
+        ));
     }
     Ok(remaining)
 }
@@ -4159,7 +4161,7 @@ mod tests {
             materials: BTreeMap::new(),
         });
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("need a maindeck"),);
+        assert!(result.unwrap_err().to_string().contains("need a maindeck"));
     }
 
     #[test]

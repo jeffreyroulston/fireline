@@ -142,7 +142,9 @@ async fn evaluate_handler(
         });
         let event = match result {
             Ok(value) => EvaluateStreamEvent::Result(Box::new(value)),
-            Err(message) => EvaluateStreamEvent::Error { message },
+            Err(error) => EvaluateStreamEvent::Error {
+                message: error.to_string(),
+            },
         };
         let _ = send_event(&tx, &event);
     })
@@ -167,7 +169,9 @@ async fn optimize_handler(
         });
         let event = match result {
             Ok(value) => OptimizeStreamEvent::Result(Box::new(value)),
-            Err(message) => OptimizeStreamEvent::Error { message },
+            Err(error) => OptimizeStreamEvent::Error {
+                message: error.to_string(),
+            },
         };
         let _ = send_event(&tx, &event);
     })

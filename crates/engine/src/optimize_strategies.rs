@@ -4,6 +4,7 @@ use crate::{
         OptimizeResult, RankedDeck, Rng, Strategy, consider_top, count_legal_decks, counts_key,
         initial_counts, ranked_decks,
     },
+    error::{EngineError, Result},
     model::{Bounds, EffectiveRequest, SimType},
     version::ENGINE_VERSION,
 };
@@ -14,7 +15,7 @@ use std::time::Instant;
 pub fn optimize_with_progress(
     request: &OptimizeRequest,
     on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
-) -> Result<OptimizeResult, String> {
+) -> Result<OptimizeResult> {
     match request.strategy {
         Strategy::SwapSweep => optimize_swap_sweep(request, on_progress),
         _ => optimize_search(request, on_progress),
@@ -115,7 +116,7 @@ fn score_optimize_deck_full(
     decks_scored: &mut u32,
     best_score: f64,
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
-) -> Result<DeckEvalResult, String> {
+) -> Result<DeckEvalResult> {
     *decks_scored += 1;
     let deck_number = *decks_scored;
     let samples = ctx.request.samples;
@@ -151,7 +152,7 @@ fn try_score_search(
     state: &mut OptimizeSearchState,
     ctx: &ScoreContext<'_>,
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
-) -> Result<bool, String> {
+) -> Result<bool> {
     let key = counts_key(&counts);
     if !state.seen.insert(key) {
         return Ok(false);
@@ -171,11 +172,13 @@ fn try_score_search(
 fn optimize_search(
     request: &OptimizeRequest,
     mut on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
-) -> Result<OptimizeResult, String> {
+) -> Result<OptimizeResult> {
     let started = Instant::now();
     let legal_decks = count_legal_decks(&request.bounds, request.deck_size)?;
     if legal_decks == 0 {
-        return Err("no legal lists exist for these bounds and deck size".into());
+        return Err(EngineError::invalid(
+            "no legal lists exist for these bounds and deck size",
+        ));
     }
 
     let target = (request.decks.max(1))
@@ -194,7 +197,7 @@ fn optimize_search(
     })
     .is_break()
     {
-        return Err("cancelled".into());
+        return Err(EngineError::Cancelled);
     }
 
     let ctx = ScoreContext {
@@ -218,7 +221,7 @@ fn optimize_search(
     }
 
     if state.decks_scored == 0 {
-        return Err("could not sample any legal lists".into());
+        return Err(EngineError::invalid("could not sample any legal lists"));
     }
 
     let _ = on_progress(OptimizeProgress {
@@ -247,7 +250,7 @@ fn optimize_random_sample(
     ctx: &ScoreContext<'_>,
     state: &mut OptimizeSearchState,
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
-) -> Result<(), String> {
+) -> Result<()> {
     let mut rng = Rng::new(request.seed);
     let mut attempts = 0_u64;
     let max_draw_attempts = u64::from(ctx.target).saturating_mul(64).max(64);
@@ -307,7 +310,7 @@ fn optimize_hill_climb(
     ctx: &ScoreContext<'_>,
     state: &mut OptimizeSearchState,
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
-) -> Result<(), String> {
+) -> Result<()> {
     let mut rng = Rng::new(request.seed);
     let mut attempts = 0_u64;
     let max_draw_attempts = u64::from(ctx.target).saturating_mul(64).max(64);
@@ -410,7 +413,7 @@ fn repair_to_size(
     bounds: &BTreeMap<String, Bounds>,
     deck_size: u8,
     rng: &mut Rng,
-) -> Result<(), String> {
+) -> Result<()> {
     for (id, bound) in bounds {
         let count = counts.entry(id.clone()).or_insert(bound.min);
         *count = (*count).clamp(bound.min, bound.max);
@@ -426,7 +429,9 @@ fn repair_to_size(
                 .filter(|id| counts[*id] < bounds[*id].max)
                 .collect();
             if expandable.is_empty() {
-                return Err("could not repair child deck to target size".into());
+                return Err(EngineError::invalid(
+                    "could not repair child deck to target size",
+                ));
             }
             let id = expandable[rng.index(expandable.len())];
             *counts.get_mut(id).expect("id") += 1;
@@ -440,7 +445,9 @@ fn repair_to_size(
                 .filter(|id| counts[*id] > bounds[*id].min)
                 .collect();
             if shrinkable.is_empty() {
-                return Err("could not repair child deck to target size".into());
+                return Err(EngineError::invalid(
+                    "could not repair child deck to target size",
+                ));
             }
             let id = shrinkable[rng.index(shrinkable.len())];
             *counts.get_mut(id).expect("id") -= 1;
@@ -462,7 +469,7 @@ fn optimize_genetic(
     ctx: &ScoreContext<'_>,
     state: &mut OptimizeSearchState,
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
-) -> Result<(), String> {
+) -> Result<()> {
     let mut rng = Rng::new(request.seed.wrapping_add(17));
     let pop_size = ctx.target.clamp(4, POP_SIZE_CAP);
     let mut population: Vec<(f64, BTreeMap<String, u8>)> = Vec::new();
@@ -546,19 +553,23 @@ pub fn apply_fixed_swap(
     from: &str,
     to: &str,
     count: u8,
-) -> Result<BTreeMap<String, u8>, String> {
-    crate::cards::parse_card(from).ok_or_else(|| format!("unknown card: {from}"))?;
-    crate::cards::parse_card(to).ok_or_else(|| format!("unknown card: {to}"))?;
+) -> Result<BTreeMap<String, u8>> {
+    crate::cards::parse_card(from).ok_or_else(|| EngineError::UnknownCard(from.to_string()))?;
+    crate::cards::parse_card(to).ok_or_else(|| EngineError::UnknownCard(to.to_string()))?;
     if from == to {
-        return Err("swap from and to must differ".into());
+        return Err(EngineError::invalid("swap from and to must differ"));
     }
     let from_count = *base.get(from).unwrap_or(&0);
     if from_count < count {
-        return Err(format!("not enough copies of {from} to swap {count}"));
+        return Err(EngineError::invalid(format!(
+            "not enough copies of {from} to swap {count}"
+        )));
     }
     let to_count = *base.get(to).unwrap_or(&0);
     if to_count.saturating_add(count) > 4 {
-        return Err(format!("swap would exceed 4 copies of {to}"));
+        return Err(EngineError::invalid(format!(
+            "swap would exceed 4 copies of {to}"
+        )));
     }
     let mut next = base.clone();
     *next.get_mut(from).expect("from") -= count;
@@ -572,17 +583,19 @@ pub fn apply_fixed_swap(
 fn optimize_swap_sweep(
     request: &OptimizeRequest,
     mut on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
-) -> Result<OptimizeResult, String> {
+) -> Result<OptimizeResult> {
     let started = Instant::now();
     let swap = request
         .swap
         .as_ref()
-        .ok_or_else(|| "swap config is required for swap sweep".to_string())?;
+        .ok_or_else(|| EngineError::invalid("swap config is required for swap sweep"))?;
     if swap.candidates.is_empty() {
-        return Err("swap sweep requires at least one candidate".into());
+        return Err(EngineError::invalid(
+            "swap sweep requires at least one candidate",
+        ));
     }
     if request.base_deck.is_empty() {
-        return Err("base deck is required for swap sweep".into());
+        return Err(EngineError::invalid("base deck is required for swap sweep"));
     }
 
     let target = 1_u32.saturating_add(swap.candidates.len() as u32);
@@ -599,7 +612,7 @@ fn optimize_swap_sweep(
     })
     .is_break()
     {
-        return Err("cancelled".into());
+        return Err(EngineError::Cancelled);
     }
 
     let ctx = ScoreContext {

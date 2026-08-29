@@ -374,6 +374,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "thiserror",
  "ts-rs",
 ]
 
