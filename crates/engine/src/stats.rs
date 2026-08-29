@@ -99,11 +99,31 @@ impl LineCardStats {
                 self.plays[card.index()] += 1;
                 self.record_draws_in_events(events);
             }
-            Action::PlayAttack { card, .. } | Action::PlayAction { card, .. } => {
+            Action::PlayAttack { card, .. } => {
                 self.plays[card.index()] += 1;
                 let delta = u32::from(after.damage.saturating_sub(before_damage));
                 self.damage[card.index()] += delta;
                 self.record_draws_in_events(events);
+            }
+            Action::PlayAction { card, .. } => {
+                self.plays[card.index()] += 1;
+                // Undeniable Truth can bundle an On Death (sacrificed ally);
+                // credit that damage to the dead card, the rest to the action.
+                let mut prev = before_damage;
+                let mut claimed = 0_u32;
+                for event in events {
+                    let delta = u32::from(event.damage.saturating_sub(prev));
+                    prev = event.damage;
+                    if delta > 0 && event.kind == EventKind::OnDeath {
+                        if let Some(dead) = event.card.and_then(card_from_id) {
+                            self.damage[dead.index()] += delta;
+                            claimed += delta;
+                        }
+                    }
+                    self.record_draw_event(event);
+                }
+                let delta = u32::from(after.damage.saturating_sub(before_damage));
+                self.damage[card.index()] += delta.saturating_sub(claimed);
             }
             Action::BlazingThrow(_) => {
                 self.plays[Card::BlazingThrow.index()] += 1;
@@ -268,6 +288,9 @@ impl LineCardStats {
 
     fn record_draw_event(&mut self, event: &LineEvent) {
         if let Some(card) = event.drawn.and_then(card_from_id) {
+            self.record_opening_draw(card);
+        }
+        if let Some(card) = event.memory_draw.and_then(card_from_id) {
             self.record_opening_draw(card);
         }
     }
@@ -666,6 +689,7 @@ mod tests {
             card: Some("clumsy_apprentice"),
             kindle: None,
             drawn: None,
+            memory_draw: None,
             discarded: None,
             prepared: None,
             imbue: None,

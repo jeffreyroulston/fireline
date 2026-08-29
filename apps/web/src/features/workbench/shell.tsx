@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   CARDS,
+  formatDecklist,
   materialDeckCounts,
   parseMaterialDecklist,
   PLAYABLE_CARD_IDS,
@@ -165,17 +166,7 @@ export default function FizaWorkbench({
     rank: number,
     deckName?: string,
   ) {
-    const lines = Object.entries(counts)
-      .filter(([, count]) => count > 0)
-      .sort((a, b) => {
-        const byCount = b[1] - a[1];
-        if (byCount !== 0) return byCount;
-        const nameA = CARDS[a[0] as CardId]?.name ?? a[0];
-        const nameB = CARDS[b[0] as CardId]?.name ?? b[0];
-        return nameA.localeCompare(nameB);
-      })
-      .map(([id, count]) => `${count} ${CARDS[id as CardId]?.name ?? id}`);
-    const text = `${lines.join("\n")}\n`;
+    const text = formatDecklist(counts);
     const preferredName = `${deckName ?? ratio.ratioCriteria?.baseDeckName ?? activeDeck?.name ?? "Deck"} · Ratio #${rank} · ${score.toFixed(2)}`;
     const deck = await saveRatioDecklistRemote(text, preferredName);
     if (deck) {

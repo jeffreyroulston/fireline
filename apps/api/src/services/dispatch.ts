@@ -19,6 +19,13 @@ type EvaluateEvent =
       rollout?: number;
       totalRollouts?: number;
     }
+  | {
+      kind: "handProgress";
+      sampleIndex: number;
+      phase: "started" | "rollout" | "done";
+      rollout: number;
+      totalRollouts: number;
+    }
   | { kind: "result" } & DeckEvalResult
   | { kind: "error"; message: string };
 
@@ -136,16 +143,34 @@ export class RunDispatcher {
         );
         for await (const event of lines) {
           if (event.kind === "progress") {
+            const totalRollouts =
+              event.totalRollouts ??
+              (event as { total_rollouts?: number }).total_rollouts;
             const payload = {
               type: "progress" as const,
               sample: event.sample,
               total: event.total,
               ...(event.rollout != null ? { rollout: event.rollout } : {}),
-              ...(event.totalRollouts != null
-                ? { totalRollouts: event.totalRollouts }
-                : {}),
+              ...(totalRollouts != null ? { totalRollouts } : {}),
             };
             runHub.publish(runId, payload);
+          } else if (event.kind === "handProgress") {
+            const sampleIndex =
+              event.sampleIndex ??
+              (event as { sample_index?: number }).sample_index;
+            const totalRollouts =
+              event.totalRollouts ??
+              (event as { total_rollouts?: number }).total_rollouts;
+            if (sampleIndex == null || totalRollouts == null) {
+              continue;
+            }
+            runHub.publish(runId, {
+              type: "handProgress" as const,
+              sampleIndex,
+              phase: event.phase,
+              rollout: event.rollout,
+              totalRollouts,
+            });
           } else if (event.kind === "error") {
             throw new Error(event.message);
           } else if (event.kind === "result") {

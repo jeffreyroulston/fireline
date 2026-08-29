@@ -383,6 +383,25 @@ pub struct EvalProgress {
     pub total_rollouts: u16,
 }
 
+/// Phase of a single opening-hand solve, for per-hand progress bars.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HandPhase {
+    Started,
+    Rollout,
+    Done,
+}
+
+/// Progress for one concurrent opening hand (started / mid-rollout / done).
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandProgress {
+    pub sample_index: u16,
+    pub phase: HandPhase,
+    pub rollout: u16,
+    pub total_rollouts: u16,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(TS))]
@@ -467,13 +486,18 @@ fn drawn_from_key(key: [u8; CARD_COUNT]) -> Vec<Card> {
 
 /// Shared read-only inputs for solving sampled hands. Grouping them keeps the
 /// per-hand call sites readable and under the argument-count lint.
-struct SampleContext<'a, F: FnMut(EvalProgress) -> ControlFlow<()> + Send> {
+struct SampleContext<
+    'a,
+    F: FnMut(EvalProgress) -> ControlFlow<()> + Send,
+    G: FnMut(HandProgress) -> ControlFlow<()> + Send,
+> {
     request: &'a DeckEvalRequest,
     budget: &'a crate::budget::Budget,
     max_turns: u8,
     rollouts: u16,
     hands_total: u16,
     on_progress: &'a Mutex<F>,
+    on_hand_progress: &'a Mutex<G>,
     report_in_hand_progress: bool,
 }
 
@@ -481,7 +505,11 @@ fn solve_sample_hand(
     drawn: &[Card],
     sample_index: u16,
     hands_done: u16,
-    ctx: &SampleContext<'_, impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
+    ctx: &SampleContext<
+        '_,
+        impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
+        impl FnMut(HandProgress) -> ControlFlow<()> + Send,
+    >,
 ) -> Result<SampleHand> {
     let request = ctx.request;
     let total_rollouts = if request.sim_type == SimType::MonteCarlo {
@@ -489,6 +517,19 @@ fn solve_sample_hand(
     } else {
         1
     };
+    if report_hand_progress(
+        ctx.on_hand_progress,
+        HandProgress {
+            sample_index,
+            phase: HandPhase::Started,
+            rollout: 0,
+            total_rollouts,
+        },
+    )
+    .is_break()
+    {
+        return Err(EngineError::Cancelled);
+    }
     if ctx.report_in_hand_progress
         && report_eval_progress(
             ctx.on_progress,
@@ -518,6 +559,20 @@ fn solve_sample_hand(
             materials: request.materials.clone(),
         },
         |rollout, total_rollouts| {
+            if rollout > 0
+                && report_hand_progress(
+                    ctx.on_hand_progress,
+                    HandProgress {
+                        sample_index,
+                        phase: HandPhase::Rollout,
+                        rollout,
+                        total_rollouts,
+                    },
+                )
+                .is_break()
+            {
+                return ControlFlow::Break(());
+            }
             if !ctx.report_in_hand_progress {
                 return ControlFlow::Continue(());
             }
@@ -532,6 +587,19 @@ fn solve_sample_hand(
             )
         },
     )?;
+    if report_hand_progress(
+        ctx.on_hand_progress,
+        HandProgress {
+            sample_index,
+            phase: HandPhase::Done,
+            rollout: total_rollouts,
+            total_rollouts,
+        },
+    )
+    .is_break()
+    {
+        return Err(EngineError::Cancelled);
+    }
     let damage = match request.sim_type {
         SimType::MonteCarlo => result
             .distribution
@@ -559,7 +627,11 @@ fn solve_one_unique_hand(
     key: [u8; CARD_COUNT],
     sample_index: u16,
     hands_done: u16,
-    ctx: &SampleContext<'_, impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
+    ctx: &SampleContext<
+        '_,
+        impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
+        impl FnMut(HandProgress) -> ControlFlow<()> + Send,
+    >,
 ) -> Result<((SimType, [u8; CARD_COUNT]), SampleHand)> {
     let drawn = drawn_from_key(key);
     let mut sample = solve_sample_hand(&drawn, sample_index, hands_done, ctx)?;
@@ -574,6 +646,13 @@ fn report_eval_progress(
     on_progress.lock().unwrap_or_else(|err| err.into_inner())(progress)
 }
 
+fn report_hand_progress(
+    on_hand_progress: &Mutex<impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
+    progress: HandProgress,
+) -> ControlFlow<()> {
+    on_hand_progress.lock().unwrap_or_else(|err| err.into_inner())(progress)
+}
+
 fn solve_unique_hands(
     unique: &[(SimType, [u8; CARD_COUNT], u16)],
     request: &DeckEvalRequest,
@@ -581,6 +660,7 @@ fn solve_unique_hands(
     max_turns: u8,
     rollouts: u16,
     on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
+    on_hand_progress: &Mutex<impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
     parallel: bool,
 ) -> Result<FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand>> {
     let total = request.samples.max(1);
@@ -597,6 +677,7 @@ fn solve_unique_hands(
         rollouts,
         hands_total: total,
         on_progress,
+        on_hand_progress,
         report_in_hand_progress,
     };
     if !parallel {
@@ -677,19 +758,30 @@ pub fn evaluate_with_serial_progress(
     request: &DeckEvalRequest,
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
 ) -> Result<DeckEvalResult> {
-    evaluate_hands(request, on_progress, false)
+    evaluate_hands(request, on_progress, |_| ControlFlow::Continue(()), false)
 }
 
 pub fn evaluate_with_progress(
     request: &DeckEvalRequest,
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
 ) -> Result<DeckEvalResult> {
-    evaluate_hands(request, on_progress, true)
+    evaluate_hands(request, on_progress, |_| ControlFlow::Continue(()), true)
+}
+
+/// Parallel deck-eval with both aggregate hand progress and per-hand
+/// started / rollout / done events (for multi-bar UI).
+pub fn evaluate_with_hand_progress(
+    request: &DeckEvalRequest,
+    on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
+    on_hand_progress: impl FnMut(HandProgress) -> ControlFlow<()> + Send,
+) -> Result<DeckEvalResult> {
+    evaluate_hands(request, on_progress, on_hand_progress, true)
 }
 
 fn evaluate_hands(
     request: &DeckEvalRequest,
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
+    on_hand_progress: impl FnMut(HandProgress) -> ControlFlow<()> + Send,
     parallel: bool,
 ) -> Result<DeckEvalResult> {
     let started = Instant::now();
@@ -734,6 +826,7 @@ fn evaluate_hands(
 
     let hands_total = request.samples.max(1);
     let on_progress = Mutex::new(on_progress);
+    let on_hand_progress = Mutex::new(on_hand_progress);
     if report_eval_progress(
         &on_progress,
         EvalProgress {
@@ -755,6 +848,7 @@ fn evaluate_hands(
         max_turns,
         rollouts,
         &on_progress,
+        &on_hand_progress,
         parallel,
     )?;
 
@@ -1301,6 +1395,77 @@ mod tests {
             ticks.iter().any(|tick| tick.sample == 1 && tick.total == 1),
             "expected a completed-hand tick, got {ticks:?}"
         );
+    }
+
+    #[test]
+    fn parallel_monte_carlo_emits_per_hand_progress() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 3),
+            ("kingdom_informant".into(), 3),
+            ("clumsy_apprentice".into(), 3),
+            ("sable_remnant".into(), 2),
+            ("blazing_throw".into(), 2),
+            ("red_hare".into(), 2),
+            ("march_hare".into(), 2),
+        ]);
+        let mut hand_ticks = Vec::new();
+        let result = evaluate_with_hand_progress(
+            &DeckEvalRequest {
+                deck,
+                samples: 2,
+                go_first: true,
+                max_turns: 2,
+                seed: 13,
+                sim_type: SimType::MonteCarlo,
+                rollouts: 3,
+                budget: crate::budget::Budget {
+                    max_eval_rollouts: 3,
+                    ..crate::budget::Budget::default()
+                },
+                materials: BTreeMap::new(),
+            },
+            |_| ControlFlow::Continue(()),
+            |progress| {
+                hand_ticks.push(progress);
+                ControlFlow::Continue(())
+            },
+        )
+        .unwrap();
+        assert_eq!(result.effective.rollouts, Some(3));
+        let unique_indexes: std::collections::BTreeSet<_> =
+            hand_ticks.iter().map(|tick| tick.sample_index).collect();
+        assert!(
+            !unique_indexes.is_empty(),
+            "expected at least one hand progress sample_index"
+        );
+        for &index in &unique_indexes {
+            let for_hand: Vec<_> = hand_ticks
+                .iter()
+                .filter(|tick| tick.sample_index == index)
+                .copied()
+                .collect();
+            assert_eq!(
+                for_hand.first().map(|tick| tick.phase),
+                Some(HandPhase::Started),
+                "hand {index} should start with Started, got {for_hand:?}"
+            );
+            assert_eq!(
+                for_hand.last().map(|tick| tick.phase),
+                Some(HandPhase::Done),
+                "hand {index} should end with Done, got {for_hand:?}"
+            );
+            let rollouts: Vec<_> = for_hand
+                .iter()
+                .filter(|tick| tick.phase == HandPhase::Rollout)
+                .map(|tick| tick.rollout)
+                .collect();
+            assert_eq!(rollouts, vec![1, 2, 3], "hand {index} rollouts: {rollouts:?}");
+        }
+        let done_count = hand_ticks
+            .iter()
+            .filter(|tick| tick.phase == HandPhase::Done)
+            .count();
+        assert_eq!(done_count, unique_indexes.len());
     }
 
     #[test]

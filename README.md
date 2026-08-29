@@ -99,7 +99,7 @@ Docker Compose sets both run concurrency values to `1` so a single evaluation ca
 
 Monte Carlo / Oracle / Two-pass enable Glimpse and keep a large search memo (often 1–3 GiB peak per concurrent hand). The engine caps those sims from `MemAvailable` (`free_ram / ~3 GiB`). Fire Brick still uses the full Rayon pool. On Linux, freed pages are returned to the OS after each solve (`malloc_trim`).
 
-Monte Carlo deck evaluations report hand-level progress only (`12/64 hands`) when hands run in parallel. Per-rollout ticks are reserved for the serial progress path.
+Monte Carlo deck evaluations stream per-hand progress while hands run in parallel: the UI shows aggregate hand completion (`12/64 hands`) plus one live bar per concurrent opening hand as its rollouts advance. Aggregate per-rollout ticks on the shared progress channel remain reserved for the serial progress path.
 
 Postgres data persists in the `pgdata` Compose volume. Migrations run automatically when the data API starts.
 

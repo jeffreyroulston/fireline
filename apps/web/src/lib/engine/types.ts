@@ -40,7 +40,17 @@ export type CardId =
   | "woodland_squirrels"
   | "duchess_six_of_hearts"
   | "wandering_glaivier"
-  | "flagrant_guide";
+  | "flagrant_guide"
+  | "gildas"
+  | "incapacitate"
+  | "lurking_assailant"
+  | "undeniable_truth"
+  | "corhazi_arsonist"
+  | "ignite_fate"
+  | "increasing_danger"
+  | "reduce_to_ash"
+  | "smoke_out"
+  | "spark_alight";
 
 export type MaterialId =
   | "impact_hammer"

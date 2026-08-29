@@ -195,15 +195,15 @@ export function useShellSolver({
   }, [activeDeckId, decksHydrated]);
 
   async function solveHand() {
-    const known =
-      solverMode === "deck" ? [...hand, ...drawn] : hand;
-    if (known.length < 2) {
+    if (hand.length < 2) {
       setError("Add at least two cards to solve a line.");
       return;
     }
+    // Opening hand only — drawn cards are known upcoming library draws, not
+    // extra cards in hand for the line.
     const remainingQueue =
       solverMode === "deck" && orderedDeck.length > 0
-        ? subtractCards(orderedDeck, known)
+        ? [...drawn, ...subtractCards(orderedDeck, [...hand, ...drawn])]
         : undefined;
     const needsDeck = simType !== "fire_brick" && remainingQueue === undefined;
     const deckCards = parseDecklist(deckText);
@@ -215,13 +215,13 @@ export function useShellSolver({
     }
     const deck =
       deckCards.length >= MIN_VALID_DECK_SIZE
-        ? deckCountsCoveringHand(deckCards, known)
+        ? deckCountsCoveringHand(deckCards, hand)
         : undefined;
     setBusy("solve");
     setError("");
     try {
       const result = await apiSolve({
-        hand: known,
+        hand,
         goFirst,
         maxTurns: turns,
         simType,
@@ -272,6 +272,7 @@ export function useShellSolver({
       handsSimulated: 0,
       totalHands: samples,
       bestScore: 0,
+      hands: [],
       ...(simType === "monte_carlo"
         ? { rolloutsDone: 0, totalRollouts: rollouts }
         : {}),

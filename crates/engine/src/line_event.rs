@@ -30,6 +30,7 @@ pub enum ActionOp {
     ActivateDagger,
     ActivateRipper,
     ActivateSadi,
+    ActivateArsonist,
     AttackArthur,
     AttackOthers,
     PlayAlly,
@@ -59,6 +60,7 @@ impl ActionOp {
             Action::ActivateDagger => Self::ActivateDagger,
             Action::ActivateRipper => Self::ActivateRipper,
             Action::ActivateSadi(_) => Self::ActivateSadi,
+            Action::ActivateArsonist(_) => Self::ActivateArsonist,
             Action::AttackArthur(_) => Self::AttackArthur,
             Action::AttackOthers => Self::AttackOthers,
             Action::PlayAlly { .. } => Self::PlayAlly,
@@ -89,6 +91,7 @@ impl ActionOp {
             Self::ActivateDagger => "activateDagger",
             Self::ActivateRipper => "activateRipper",
             Self::ActivateSadi => "activateSadi",
+            Self::ActivateArsonist => "activateArsonist",
             Self::AttackArthur => "attackArthur",
             Self::AttackOthers => "attackOthers",
             Self::PlayAlly => "playAlly",
@@ -133,6 +136,7 @@ pub enum EventKind {
     ActivateDagger,
     ActivateRipper,
     SadiBounce,
+    ArsonistStealth,
     OnDeath,
     UniqueDies,
     Sacrifice,
@@ -183,6 +187,7 @@ impl EventKind {
             Self::ActivateDagger => "activateDagger",
             Self::ActivateRipper => "activateRipper",
             Self::SadiBounce => "sadiBounce",
+            Self::ArsonistStealth => "arsonistStealth",
             Self::OnDeath => "onDeath",
             Self::UniqueDies => "uniqueDies",
             Self::Sacrifice => "sacrifice",
@@ -290,6 +295,9 @@ pub struct LineEvent {
     pub kindle: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drawn: Option<&'static str>,
+    /// Card drawn directly into the memory zone (Increasing Danger).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_draw: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discarded: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -457,6 +465,7 @@ impl EventTape {
             card: fields.card.map(Card::id),
             kindle: fields.kindle.filter(|&k| k > 0),
             drawn: fields.drawn.map(Card::id),
+            memory_draw: fields.memory_draw.map(Card::id),
             discarded: fields.discarded.map(Card::id),
             prepared: fields.prepared,
             imbue: fields.imbue,
@@ -533,6 +542,7 @@ pub struct EventFields {
     pub card: Option<Card>,
     pub kindle: Option<u8>,
     pub drawn: Option<Card>,
+    pub memory_draw: Option<Card>,
     pub discarded: Option<Card>,
     pub prepared: Option<bool>,
     pub imbue: Option<bool>,
@@ -562,6 +572,11 @@ impl EventFields {
 
     pub fn with_drawn(mut self, drawn: Card) -> Self {
         self.drawn = Some(drawn);
+        self
+    }
+
+    pub fn with_memory_draw(mut self, memory_draw: Card) -> Self {
+        self.memory_draw = Some(memory_draw);
         self
     }
 
@@ -758,12 +773,34 @@ pub fn format_line_event(event: &LineEvent) -> String {
                         | "heated_vengeance"
                         | "vicious_slice"
                         | "uncanny_realization"
+                        | "incapacitate"
+                        | "undeniable_truth"
+                        | "ignite_fate"
+                        | "increasing_danger"
+                        | "reduce_to_ash"
+                        | "smoke_out"
+                        | "spark_alight"
                 )
             ) {
                 card_name
             } else {
                 format!("Activate {card_name}")
             };
+            if event.card == Some("increasing_danger") {
+                s = match (event.drawn, event.memory_draw) {
+                    (Some(drawn), Some(mem)) => format!(
+                        "Increasing Danger (draw {}, memory {})",
+                        short(Some(drawn)),
+                        short(Some(mem))
+                    ),
+                    _ => "Increasing Danger".to_string(),
+                };
+            }
+            if event.card == Some("undeniable_truth")
+                && let Some(drawn) = event.drawn
+            {
+                s = format!("Undeniable Truth (draw {}, +1 prep)", short(Some(drawn)));
+            }
             if event.prepared == Some(true) {
                 if event.card == Some("ignited_stab") {
                     s = "Ignited Stab (prepared)".to_string();
@@ -841,6 +878,9 @@ pub fn format_line_event(event: &LineEvent) -> String {
             }
         }
         EventKind::SadiBounce => "Sadi bounce for Prep".to_string(),
+        EventKind::ArsonistStealth => {
+            "Corhazi Arsonist gains stealth (−1 prep)".to_string()
+        }
         EventKind::OnDeath => {
             if event.drawn.is_some() {
                 format!(
@@ -853,7 +893,10 @@ pub fn format_line_event(event: &LineEvent) -> String {
             }
         }
         EventKind::UniqueDies => format!("Unique: {} dies", name(event.card)),
-        EventKind::Sacrifice => "Peppered Chef sacrifice".to_string(),
+        EventKind::Sacrifice => match event.card {
+            Some(card) => format!("Sacrifice {}", name(Some(card))),
+            None => "Peppered Chef sacrifice".to_string(),
+        },
         EventKind::OnEnterDamage => {
             if event.card == Some("rococo") {
                 "Rococo On-Enter damage".to_string()

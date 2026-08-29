@@ -3,10 +3,12 @@
 import type { OptimizeProgress } from "@/lib/api/useRun";
 import { cn } from "@/lib/utils/cn";
 import {
+  aggregateRollouts,
   handProgressPercent,
   progressPercent,
   rolloutProgressPercent,
 } from "../lib/progress-percent";
+import { HandProgressBars } from "./hand-progress-bars";
 
 function resolveRolloutTotal(
   progress: OptimizeProgress | null | undefined,
@@ -17,14 +19,15 @@ function resolveRolloutTotal(
 
 function ProgressBar({
   percent,
-  started,
   rollout,
 }: {
   percent: number;
-  started?: boolean;
   rollout?: boolean;
 }) {
-  const indeterminate = percent <= 0 && !started;
+  // Keep the slide animation while still at 0%. Tying it to !started made the
+  // bar look frozen for the whole first MC hand (parallel path only bumps
+  // handsSimulated when a hand finishes).
+  const indeterminate = percent <= 0;
   return (
     <div className="h-1 w-full overflow-hidden bg-border">
       <span
@@ -50,10 +53,15 @@ export function OptimizeProgressPanel({
   /** Deck-damage MC runs: keep the rollout bar visible for the whole job. */
   monteCarloRollouts?: number;
 }) {
+  const hands = progress?.hands;
+  const showHandBars = (hands?.length ?? 0) > 0;
   const totalRollouts = resolveRolloutTotal(progress, monteCarloRollouts);
+  const jobRollouts = aggregateRollouts(progress, totalRollouts);
   const showRollouts =
-    (monteCarloRollouts ?? 0) > 1 || (progress?.totalRollouts ?? 0) > 1;
-  const handsPercent = showRollouts
+    !showHandBars &&
+    !jobRollouts &&
+    ((monteCarloRollouts ?? 0) > 1 || (progress?.totalRollouts ?? 0) > 1);
+  const handsPercent = showRollouts || showHandBars
     ? handProgressPercent(progress)
     : (percent ?? progressPercent(progress));
   const rolloutsPercent = showRollouts
@@ -83,6 +91,12 @@ export function OptimizeProgressPanel({
             {(progress?.handsSimulated ?? 0).toLocaleString()} /{" "}
             {(progress?.totalHands ?? 0).toLocaleString()} hands
           </span>
+          {jobRollouts && (
+            <span>
+              {jobRollouts.done.toLocaleString()} /{" "}
+              {jobRollouts.total.toLocaleString()} rollouts
+            </span>
+          )}
           {legalDecks > 0 && (
             <span>{legalDecks.toLocaleString()} legal</span>
           )}
@@ -90,8 +104,9 @@ export function OptimizeProgressPanel({
             <span>best {(progress?.bestScore ?? 0).toFixed(2)}</span>
           )}
         </div>
-        <ProgressBar percent={handsPercent} started={progress?.started} />
+        <ProgressBar percent={handsPercent} />
       </div>
+      {showHandBars && <HandProgressBars hands={hands} />}
       {showRollouts && (
         <div className="grid min-w-0 gap-1.5">
           <div className="flex flex-wrap gap-x-[18px] gap-y-2 font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
@@ -100,15 +115,7 @@ export function OptimizeProgressPanel({
               {totalRollouts.toLocaleString()} rollouts
             </span>
           </div>
-          <ProgressBar
-            percent={rolloutsPercent}
-            started={
-              progress?.started &&
-              ((progress.handsSimulated ?? 0) < (progress.totalHands ?? 0) ||
-                (progress.rolloutsDone ?? 0) > 0)
-            }
-            rollout
-          />
+          <ProgressBar percent={rolloutsPercent} rollout />
         </div>
       )}
     </div>

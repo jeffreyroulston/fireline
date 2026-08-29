@@ -4,7 +4,11 @@ import type { AttackBonuses } from "./AttackBonuses.js";
 import type { EventKind } from "./EventKind.js";
 import type { TapePhase } from "./TapePhase.js";
 
-export type LineEvent = { op: ActionOp, kind: EventKind, actionIndex: number, turn: number, phase: TapePhase, damage: number, fireGy: number, card: string | null, kindle: number | null, drawn: string | null, discarded: string | null, prepared: boolean | null, imbue: boolean | null, weapon: string | null, commandAlly: string | null, bonuses: AttackBonuses | null, hand: Array<string> | null, memory: Array<string> | null, allies: Array<string> | null, 
+export type LineEvent = { op: ActionOp, kind: EventKind, actionIndex: number, turn: number, phase: TapePhase, damage: number, fireGy: number, card: string | null, kindle: number | null, drawn: string | null, 
+/**
+ * Card drawn directly into the memory zone (Increasing Danger).
+ */
+memoryDraw: string | null, discarded: string | null, prepared: boolean | null, imbue: boolean | null, weapon: string | null, commandAlly: string | null, bonuses: AttackBonuses | null, hand: Array<string> | null, memory: Array<string> | null, allies: Array<string> | null, 
 /**
  * Fast ally play during materialize (formatter hint).
  */

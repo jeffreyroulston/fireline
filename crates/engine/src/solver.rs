@@ -617,7 +617,7 @@ fn is_fast_phase(phase: Phase) -> bool {
     matches!(phase, Phase::Materialize | Phase::Agility)
 }
 
-const ACTION_CARDS: [Card; 7] = [
+const ACTION_CARDS: [Card; 14] = [
     Card::FieryInterference,
     Card::IntensifiedPyre,
     Card::MarkTheTarget,
@@ -625,16 +625,54 @@ const ACTION_CARDS: [Card; 7] = [
     Card::VermilionDecree,
     Card::Demolition,
     Card::SurgingBolt,
+    Card::Incapacitate,
+    Card::UndeniableTruth,
+    Card::IgniteFate,
+    Card::IncreasingDanger,
+    Card::ReduceToAsh,
+    Card::SmokeOut,
+    Card::SparkAlight,
 ];
+
+/// Reserve cost after Class Bonus reductions (Incapacitate costs 2 less while Assassin).
+fn action_cost(state: &State, card: Card) -> u8 {
+    let cost = card.cost();
+    if card == Card::Incapacitate && state.is_assassin() {
+        cost.saturating_sub(2)
+    } else {
+        cost
+    }
+}
+
+/// Undeniable Truth: additional cost sacrifices an ally, so offer one play per ally.
+fn push_undeniable_truth_plays(state: State, result: &mut Vec<Action>) {
+    if !state.has(Card::UndeniableTruth) || state.hand_len < 2 {
+        return;
+    }
+    for index in 0..state.ally_len as usize {
+        result.push(Action::PlayAction {
+            card: Card::UndeniableTruth,
+            kindle: 0,
+            prepared: false,
+            imbue: false,
+            sacrifice_ally: Some(index as u8),
+        });
+    }
+}
 
 fn push_action_plays(state: State, result: &mut Vec<Action>) {
     for card in ACTION_CARDS {
         if !state.has(card) {
             continue;
         }
-        let max_kindle = card.kindle().min(state.fire_gy).min(card.cost());
+        if card == Card::UndeniableTruth {
+            push_undeniable_truth_plays(state, result);
+            continue;
+        }
+        let cost = action_cost(&state, card);
+        let max_kindle = card.kindle().min(state.fire_gy).min(cost);
         for kindle in 0..=max_kindle {
-            let reserve = card.cost().saturating_sub(kindle);
+            let reserve = cost.saturating_sub(kindle);
             if state.hand_len.saturating_sub(1) < reserve {
                 continue;
             }
@@ -655,6 +693,7 @@ fn push_action_plays(state: State, result: &mut Vec<Action>) {
                     kindle,
                     prepared,
                     imbue,
+                    sacrifice_ally: None,
                 });
             };
 
@@ -773,9 +812,14 @@ fn push_fast_action_plays(state: State, result: &mut Vec<Action>) {
         if !card.is_fast() || !state.has(card) {
             continue;
         }
-        let max_kindle = card.kindle().min(state.fire_gy).min(card.cost());
+        if card == Card::UndeniableTruth {
+            push_undeniable_truth_plays(state, result);
+            continue;
+        }
+        let cost = action_cost(&state, card);
+        let max_kindle = card.kindle().min(state.fire_gy).min(cost);
         for kindle in 0..=max_kindle {
-            let reserve = card.cost().saturating_sub(kindle);
+            let reserve = cost.saturating_sub(kindle);
             if state.hand_len.saturating_sub(1) < reserve {
                 continue;
             }
@@ -796,6 +840,7 @@ fn push_fast_action_plays(state: State, result: &mut Vec<Action>) {
                     kindle,
                     prepared,
                     imbue,
+                    sacrifice_ally: None,
                 });
             };
 
@@ -1087,6 +1132,14 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
         && state.champion_awake
     {
         result.push(Action::ActivateRipper);
+    }
+    if state.prep > 0 {
+        for index in 0..state.ally_len as usize {
+            let ally = state.allies[index];
+            if ally.card() == Card::CorhaziArsonist && !ally.stealth() {
+                result.push(Action::ActivateArsonist(index as u8));
+            }
+        }
     }
     if state.ring {
         result.push(Action::BanishCrusaderRing);
@@ -1405,7 +1458,33 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
             kindle,
             prepared,
             imbue,
-        } => play_action(&mut state, card, kindle, prepared, imbue, tape),
+            sacrifice_ally,
+        } => play_action(
+            &mut state,
+            card,
+            kindle,
+            prepared,
+            imbue,
+            sacrifice_ally,
+            tape,
+        ),
+        Action::ActivateArsonist(index) => {
+            let index = index as usize;
+            if state.prep > 0
+                && index < state.ally_len as usize
+                && state.allies[index].card() == Card::CorhaziArsonist
+                && !state.allies[index].stealth()
+            {
+                state.prep = state.prep.saturating_sub(1);
+                state.allies[index].set_stealth(true);
+                tape.push(
+                    state,
+                    TapePhase::Main,
+                    EventKind::ArsonistStealth,
+                    EventFields::card(Card::CorhaziArsonist),
+                );
+            }
+        }
         Action::BlazingThrow(weapon) => {
             state.remove_hand(Card::BlazingThrow);
             state.pay_reserve(1);
@@ -1775,19 +1854,39 @@ fn play_action(
     kindle: u8,
     prepared: bool,
     imbue: bool,
+    sacrifice_ally: Option<u8>,
     tape: &mut EventTape,
 ) {
+    // Additional cost legality (Undeniable Truth): the ally must exist.
+    if let Some(index) = sacrifice_ally
+        && index as usize >= state.ally_len as usize
+    {
+        return;
+    }
     state.remove_hand(card);
 
-    let imbued = state.pay_imbue_cost(card.cost(), card.imbue(), kindle, imbue);
+    let phase = tape_phase(state);
+    if let Some(index) = sacrifice_ally
+        && let Some(victim) = state.remove_ally(index as usize, true)
+    {
+        push_ally_gy_death(state, victim, phase, tape);
+        tape.push(
+            *state,
+            phase,
+            EventKind::Sacrifice,
+            EventFields::card(victim),
+        );
+    }
+
+    let imbued = state.pay_imbue_cost(action_cost(state, card), card.imbue(), kindle, imbue);
 
     if prepared && card.prepare() > 0 {
         state.prep = state.prep.saturating_sub(card.prepare());
     }
     state.send_to_gy(card);
 
-    let phase = tape_phase(state);
     let mut drawn = None;
+    let mut memory_draw = None;
     let damage = match card {
         Card::FieryInterference => 2,
         Card::MarkTheTarget => {
@@ -1808,6 +1907,25 @@ fn play_action(
         Card::Demolition => 3,
         Card::SurgingBolt if imbued => 4,
         Card::SurgingBolt => 3,
+        Card::IgniteFate => {
+            // Hits each champion; only the opponent's life is scored, but ours
+            // registering damage enables Heated Vengeance.
+            state.champion_damaged = true;
+            2
+        }
+        Card::IncreasingDanger => {
+            drawn = Some(state.draw_unknown());
+            memory_draw = Some(state.draw_to_memory());
+            0
+        }
+        Card::UndeniableTruth => {
+            drawn = Some(state.draw_unknown());
+            state.prep = state.prep.saturating_add(1);
+            0
+        }
+        Card::SmokeOut => 1,
+        Card::SparkAlight => 2,
+        // Incapacitate and Reduce to Ash have no modeled effect.
         _ => 0,
     };
     state.add_damage(damage);
@@ -1821,6 +1939,9 @@ fn play_action(
     }
     if let Some(drawn) = drawn {
         fields = fields.with_drawn(drawn);
+    }
+    if let Some(memory_draw) = memory_draw {
+        fields = fields.with_memory_draw(memory_draw);
     }
     if card.is_fast() && is_fast_phase(state.phase) {
         fields = fields.fast();
@@ -2778,6 +2899,7 @@ mod tests {
                 kindle: 0,
                 prepared: false,
                 imbue: false,
+                sacrifice_ally: None,
             },
         );
         assert_eq!(after_demolition.damage, 3);
@@ -3459,6 +3581,372 @@ mod tests {
     }
 
     #[test]
+    fn mercurial_heart_cards_are_recognized() {
+        for name in [
+            "gildas_chronicler_of_aesa",
+            "incapacitate",
+            "lurking_assailant",
+            "undeniable_truth",
+            "corhazi_arsonist",
+            "ignite_fate",
+            "increasing_danger",
+            "reduce_to_ash",
+            "smoke_out",
+            "spark_alight",
+        ] {
+            assert!(parse_card(name).is_some(), "missing {name}");
+        }
+        assert_eq!(
+            parse_card("Gildas, Chronicler of Aesa"),
+            Some(Card::Gildas)
+        );
+        assert!(Card::Gildas.is_unique());
+        assert!(Card::Incapacitate.is_fast());
+        assert!(Card::UndeniableTruth.is_fast());
+        assert!(Card::IgniteFate.floating_memory());
+        assert!(Card::ReduceToAsh.is_fire());
+        assert_eq!(Card::SparkAlight.cost(), 2);
+        assert_eq!(Card::SmokeOut.cost(), 1);
+    }
+
+    #[test]
+    fn gildas_balance_grants_plus_three_when_hand_equals_memory() {
+        let mut state = State::with_queue(&[Card::Brick, Card::Brick], true, 1, &[]);
+        state.add_ally(Card::Gildas, true, false);
+        assert_eq!(
+            state.ally_power(state.allies[0]),
+            1,
+            "2 hand vs 0 memory: no Balance"
+        );
+        state.pay_reserve(1);
+        assert_eq!(
+            state.ally_power(state.allies[0]),
+            4,
+            "1 hand vs 1 memory: Balance +3"
+        );
+        state.pay_reserve(1);
+        assert_eq!(
+            state.ally_power(state.allies[0]),
+            1,
+            "0 hand vs 2 memory: no Balance"
+        );
+    }
+
+    #[test]
+    fn lurking_assailant_stealth_only_while_awake() {
+        let mut awake = State::with_queue(&[], false, 3, &[]);
+        awake.turn = 1;
+        awake.add_ally(Card::LurkingAssailant, true, false);
+        awake.add_ally(Card::ClumsyApprentice, true, false);
+        awake.enemy_cull(None);
+        assert_eq!(awake.ally_len, 1);
+        assert_eq!(awake.allies[0].card(), Card::LurkingAssailant);
+
+        let mut rested = State::with_queue(&[], false, 3, &[]);
+        rested.turn = 1;
+        rested.add_ally(Card::LurkingAssailant, false, false);
+        rested.add_ally(Card::ClumsyApprentice, true, false);
+        rested.enemy_cull(None);
+        assert_eq!(
+            rested.ally_len, 0,
+            "rested Lurking Assailant has no stealth, cull wipes the board"
+        );
+    }
+
+    #[test]
+    fn corhazi_arsonist_spends_prep_for_stealth() {
+        let mut state = State::with_queue(&[], false, 3, &[]);
+        state.turn = 1;
+        state.prep = 1;
+        state.add_ally(Card::CorhaziArsonist, true, false);
+        let activate = actions(state, false)
+            .into_iter()
+            .find(|action| matches!(action, Action::ActivateArsonist(0)))
+            .expect("Arsonist should offer prep-for-stealth activation");
+        let (after, steps) = apply(state, activate);
+        assert_eq!(after.prep, 0, "{steps:?}");
+        assert!(after.allies[0].stealth(), "{steps:?}");
+        assert!(
+            steps
+                .iter()
+                .any(|step| format_line_event(step) == "Corhazi Arsonist gains stealth (−1 prep)"),
+            "{steps:?}"
+        );
+
+        let mut culled = after;
+        culled.enemy_cull(None);
+        assert_eq!(culled.ally_len, 1, "stealthed Arsonist survives cull");
+
+        let mut no_prep = State::with_queue(&[], false, 3, &[]);
+        no_prep.turn = 1;
+        no_prep.add_ally(Card::CorhaziArsonist, true, false);
+        assert!(
+            !actions(no_prep, false)
+                .iter()
+                .any(|action| matches!(action, Action::ActivateArsonist(_))),
+            "no prep, no activation"
+        );
+        no_prep.enemy_cull(None);
+        assert_eq!(no_prep.ally_len, 0);
+
+        let mut next_turn = after;
+        next_turn.wake();
+        assert!(
+            !next_turn.allies[0].stealth(),
+            "granted stealth expires at end of turn"
+        );
+    }
+
+    #[test]
+    fn undeniable_truth_requires_ally_sacrifice() {
+        let hand = [
+            Card::UndeniableTruth,
+            Card::Brick,
+            Card::Brick,
+            Card::Brick,
+        ];
+        let no_ally = State::with_queue(&hand, true, 1, &[]);
+        assert!(
+            !actions(no_ally, false).iter().any(|action| matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::UndeniableTruth,
+                    ..
+                }
+            )),
+            "Undeniable Truth needs an ally to sacrifice"
+        );
+
+        let mut state = State::with_queue(&hand, true, 1, &[Card::Brick, Card::Brick]);
+        state.champion_awake = true;
+        state.add_ally(Card::ClumsyApprentice, true, false);
+        state.add_ally(Card::ManicZealot, true, false);
+        let plays: Vec<_> = actions(state, false)
+            .into_iter()
+            .filter(|action| {
+                matches!(
+                    action,
+                    Action::PlayAction {
+                        card: Card::UndeniableTruth,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(plays.len(), 2, "one play per sacrifice target: {plays:?}");
+
+        let zealot_play = plays
+            .iter()
+            .find(|action| {
+                matches!(
+                    action,
+                    Action::PlayAction {
+                        sacrifice_ally: Some(1),
+                        ..
+                    }
+                )
+            })
+            .copied()
+            .expect("sacrifice slot 1");
+        let (after, steps) = apply(state, zealot_play);
+        assert_eq!(after.damage, 2, "Manic Zealot on-death: {steps:?}");
+        assert!(after.champion_damaged, "{steps:?}");
+        assert_eq!(after.ally_len, 1, "{steps:?}");
+        assert_eq!(after.allies[0].card(), Card::ClumsyApprentice);
+        assert_eq!(after.prep, 1, "{steps:?}");
+        // Hand: 4 - 1 (Truth) - 1 (reserve) + 1 (draw) = 3.
+        assert_eq!(after.hand_len, 3, "{steps:?}");
+        assert!(
+            steps
+                .iter()
+                .any(|step| format_line_event(step) == "Sacrifice Manic Zealot"),
+            "{steps:?}"
+        );
+        assert!(
+            steps.iter().any(|step| format_line_event(step)
+                == "Undeniable Truth (draw Brick, +1 prep)"),
+            "{steps:?}"
+        );
+    }
+
+    #[test]
+    fn ignite_fate_damages_both_champions_and_enables_heated_vengeance() {
+        let hand = [
+            Card::IgniteFate,
+            Card::HeatedVengeance,
+            Card::Brick,
+            Card::Brick,
+            Card::Brick,
+            Card::Brick,
+            Card::Brick,
+            Card::Brick,
+        ];
+        let mut state = State::with_queue(&hand, true, 1, &[]);
+        state.champion_awake = true;
+        let ignite = actions(state, false)
+            .into_iter()
+            .find(|action| {
+                matches!(
+                    action,
+                    Action::PlayAction {
+                        card: Card::IgniteFate,
+                        ..
+                    }
+                )
+            })
+            .expect("Ignite Fate should be playable");
+        let (after, steps) = apply(state, ignite);
+        assert_eq!(after.damage, 2, "{steps:?}");
+        assert!(after.champion_damaged, "{steps:?}");
+        assert_eq!(after.float_gy, 1, "{steps:?}");
+
+        let vengeance = Action::PlayAttack {
+            card: Card::HeatedVengeance,
+            wield: None,
+            prepared: false,
+            doubled: false,
+            command_ally: None,
+        };
+        let (after_vengeance, vengeance_steps) = apply(after, vengeance);
+        assert_eq!(
+            after_vengeance.damage, 7,
+            "2 Ignite + 2 Heated + 3 champion-damaged bonus: {vengeance_steps:?}"
+        );
+    }
+
+    #[test]
+    fn increasing_danger_draws_to_hand_and_memory() {
+        let hand = [Card::IncreasingDanger, Card::Brick, Card::Brick];
+        let mut state = State::with_queue(&hand, true, 1, &[Card::SmokeOut, Card::SparkAlight]);
+        state.champion_awake = true;
+        let play = actions(state, false)
+            .into_iter()
+            .find(|action| {
+                matches!(
+                    action,
+                    Action::PlayAction {
+                        card: Card::IncreasingDanger,
+                        ..
+                    }
+                )
+            })
+            .expect("Increasing Danger should be playable");
+        let (after, steps) = apply(state, play);
+        assert_eq!(after.damage, 0, "{steps:?}");
+        // Hand: 3 - 1 (Danger) - 2 (reserve) + 1 (draw Smoke Out) = 1.
+        assert_eq!(after.hand_len, 1, "{steps:?}");
+        assert!(after.has(Card::SmokeOut), "{steps:?}");
+        // Two paid bricks plus Spark Alight straight into memory.
+        assert_eq!(after.memory_len, 3, "{steps:?}");
+        assert_eq!(after.memory[Card::SparkAlight as usize], 1, "{steps:?}");
+        assert!(
+            steps.iter().any(|step| {
+                format_line_event(step) == "Increasing Danger (draw Smoke, memory Spark)"
+            }),
+            "{steps:?}"
+        );
+    }
+
+    #[test]
+    fn smoke_out_and_spark_alight_burn() {
+        let hand = [
+            Card::SmokeOut,
+            Card::SparkAlight,
+            Card::Brick,
+            Card::Brick,
+            Card::Brick,
+        ];
+        let result = solve_cards(&hand, true, 1, ALL_MATERIALS);
+        assert_eq!(
+            result.max_damage, 3,
+            "Smoke Out 1 + Spark Alight 2, line: {:?}",
+            result.events
+        );
+    }
+
+    #[test]
+    fn incapacitate_class_bonus_discount_and_inert_actions() {
+        let hand = [Card::Incapacitate, Card::Brick, Card::Brick];
+        let unleveled = State::with_queue(&hand, true, 1, &[]);
+        assert!(
+            !actions(unleveled, false).iter().any(|action| matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::Incapacitate,
+                    ..
+                }
+            )),
+            "unleveled Incapacitate should cost 4"
+        );
+
+        let mut leveled = State::with_queue(&hand, true, 1, &[]);
+        leveled.champion_level = 1;
+        let play = actions(leveled, false)
+            .into_iter()
+            .find(|action| {
+                matches!(
+                    action,
+                    Action::PlayAction {
+                        card: Card::Incapacitate,
+                        ..
+                    }
+                )
+            })
+            .expect("leveled Incapacitate should cost 2");
+        let (after, steps) = apply(leveled, play);
+        assert_eq!(after.damage, 0, "Incapacitate is inert: {steps:?}");
+        assert_eq!(after.hand_len, 0, "paid 2 reserve: {steps:?}");
+        assert_eq!(after.gy[Card::Incapacitate as usize], 1, "{steps:?}");
+
+        let ash_hand = [Card::ReduceToAsh, Card::Brick, Card::Brick, Card::Brick];
+        let ash_state = State::with_queue(&ash_hand, true, 1, &[]);
+        let ash = actions(ash_state, false)
+            .into_iter()
+            .find(|action| {
+                matches!(
+                    action,
+                    Action::PlayAction {
+                        card: Card::ReduceToAsh,
+                        ..
+                    }
+                )
+            })
+            .expect("Reduce to Ash should be playable");
+        let (after_ash, ash_steps) = apply(ash_state, ash);
+        assert_eq!(after_ash.damage, 0, "{ash_steps:?}");
+        assert_eq!(after_ash.fire_gy, 1, "{ash_steps:?}");
+    }
+
+    #[test]
+    fn fast_actions_are_offered_during_materialize() {
+        let hand = [Card::SmokeOut, Card::IncreasingDanger, Card::Brick];
+        let mut state = State::with_queue(&hand, true, 1, &[]);
+        state.champion_awake = true;
+        state.phase = Phase::Materialize;
+        let legal = actions(state, false);
+        assert!(
+            legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::SmokeOut,
+                    ..
+                }
+            )),
+            "fast Smoke Out should be offered in materialize: {legal:?}"
+        );
+        assert!(
+            !legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::IncreasingDanger,
+                    ..
+                }
+            )),
+            "slow Increasing Danger must wait for main phase: {legal:?}"
+        );
+    }
+
+    #[test]
     fn hot_cake_buffs_next_ally_attack() {
         let hand = [
             Card::HotCake,
@@ -3728,6 +4216,7 @@ mod tests {
             kindle: 0,
             prepared: false,
             imbue: false,
+            sacrifice_ally: None,
         };
         let (after, steps) = apply(state, action);
         assert_eq!(after.damage, 3, "{steps:?}");
@@ -3789,6 +4278,7 @@ mod tests {
                 kindle: 0,
                 prepared: false,
                 imbue: true,
+                sacrifice_ally: None,
             },
         );
         assert!(
@@ -3810,6 +4300,7 @@ mod tests {
                 kindle: 0,
                 prepared: false,
                 imbue: false,
+                sacrifice_ally: None,
             },
         );
         assert!(
@@ -3857,6 +4348,7 @@ mod tests {
                 kindle: 0,
                 prepared: false,
                 imbue: false,
+                sacrifice_ally: None,
             },
         );
         assert!(
@@ -3903,6 +4395,7 @@ mod tests {
                 kindle: 0,
                 prepared: false,
                 imbue: false,
+                sacrifice_ally: None,
             },
         );
         assert_eq!(after.damage, 3, "{steps:?}");
@@ -3943,6 +4436,7 @@ mod tests {
                 kindle: 0,
                 prepared: false,
                 imbue: false,
+                sacrifice_ally: None,
             },
         );
         assert_eq!(after.damage, 4, "{steps:?}");
@@ -3987,6 +4481,7 @@ mod tests {
                 kindle: 0,
                 prepared: false,
                 imbue: false,
+                sacrifice_ally: None,
             },
         );
         assert_eq!(after.damage, 3, "{steps:?}");
