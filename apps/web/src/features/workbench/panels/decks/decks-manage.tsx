@@ -5,6 +5,10 @@ import { isDeckCardlistLocked } from "@/lib/decks";
 import {
   MIN_VALID_DECK_SIZE,
   analyzeMaterialDecklist,
+  formatDecklist,
+  listToCounts,
+  maxCopiesForCard,
+  type DeckCounts,
 } from "@/lib/engine";
 import type { SavedMaterialDeck } from "@/lib/material-decks";
 import {
@@ -16,8 +20,9 @@ import type { CardId, MaterialId } from "@/lib/engine/types";
 import { useState } from "react";
 import { cn } from "@/lib/utils/cn";
 import { buttonVariants } from "@/lib/utils/variants";
-import { DeckPicker, SectionHeading } from "../../ui";
+import { DeckPicker, MaterialDeckPicker, SectionHeading } from "../../ui";
 import { MainDeckCardGrid, MaterialDeckCardGrid } from "./card-grids";
+import { DeckCardCatalog } from "./deck-card-catalog";
 
 const toolbarClass =
   "mt-[18px] flex items-end gap-3 max-[620px]:flex-col max-[620px]:items-stretch";
@@ -37,6 +42,22 @@ const deckTextareaClass =
 
 const deckIssuesListClass =
   "m-0 list-none p-0 [&_li]:border-t [&_li]:border-primary-dark/20 [&_li]:py-1.5 [&_li]:text-[13px] [&_li]:leading-[1.45] [&_li]:text-primary-dark [&_li:first-child]:border-t-0 [&_li:first-child]:pt-0 [&_li:last-child]:pb-0";
+
+function commitDeckCounts(
+  counts: DeckCounts,
+  unrecognizedLines: string[],
+  onDeckTextChange: (text: string) => void,
+) {
+  const formatted = formatDecklist(counts);
+  if (unrecognizedLines.length === 0) {
+    onDeckTextChange(formatted);
+    return;
+  }
+  const trailer = unrecognizedLines.join("\n");
+  onDeckTextChange(
+    formatted ? `${formatted.trimEnd()}\n\n${trailer}\n` : `${trailer}\n`,
+  );
+}
 
 export function DecksManage({
   decks,
@@ -112,6 +133,7 @@ export function DecksManage({
 
   const materialDraftAnalysis = analyzeMaterialDecklist(materialDraftText);
   const underSize = recognizedDeckCount < MIN_VALID_DECK_SIZE;
+  const deckCounts = listToCounts(deckCards);
   const issues: string[] = [];
   if (underSize) {
     issues.push(
@@ -120,6 +142,26 @@ export function DecksManage({
   }
   for (const line of unrecognizedLines) {
     issues.push(`Unrecognized card: ${line}`);
+  }
+
+  function addCard(id: CardId) {
+    const next = { ...deckCounts };
+    const qty = next[id] ?? 0;
+    if (qty >= maxCopiesForCard(id)) return;
+    next[id] = qty + 1;
+    commitDeckCounts(next, unrecognizedLines, onDeckTextChange);
+  }
+
+  function removeCard(id: CardId) {
+    const next = { ...deckCounts };
+    const qty = next[id] ?? 0;
+    if (qty <= 0) return;
+    if (qty === 1) {
+      delete next[id];
+    } else {
+      next[id] = qty - 1;
+    }
+    commitDeckCounts(next, unrecognizedLines, onDeckTextChange);
   }
 
   async function saveMaterialDraft() {
@@ -223,17 +265,6 @@ export function DecksManage({
             </p>
           </div>
         )}
-        {!locked && (
-          <label className="mt-[18px] grid gap-[7px]">
-            One card per line, with quantity
-            <textarea
-              className={deckTextareaClass}
-              value={deckText}
-              onChange={(event) => onDeckTextChange(event.target.value)}
-              spellCheck={false}
-            />
-          </label>
-        )}
         {issues.length > 0 && (
           <div
             className="mt-[18px] border border-primary-dark/45 bg-[color-mix(in_srgb,var(--color-primary)_12%,white)] px-4 py-3.5"
@@ -252,7 +283,20 @@ export function DecksManage({
           </div>
         )}
 
-        <MainDeckCardGrid cards={deckCards} />
+        <MainDeckCardGrid
+          cards={deckCards}
+          editable={!locked}
+          onAdd={addCard}
+          onRemove={removeCard}
+        />
+        {!locked && (
+          <DeckCardCatalog
+            counts={deckCounts}
+            onAdd={addCard}
+            deckText={deckText}
+            onDeckTextChange={onDeckTextChange}
+          />
+        )}
 
         {!locked && (
           <div className="mt-[18px]">
@@ -261,22 +305,15 @@ export function DecksManage({
               meta={<strong>{`${materialCards.length} active`}</strong>}
             />
             <div className={toolbarClass}>
-              <label className="grid min-w-[180px] flex-1 gap-[7px]">
-                Material deck for this list
-                <select
-                  value={
-                    activeMaterialDeck?.id ?? activeDeck?.materialDeckId ?? ""
-                  }
-                  onChange={(event) => onAssignMaterialDeck(event.target.value)}
-                  disabled={materialDecks.length === 0}
-                >
-                  {materialDecks.map((deck) => (
-                    <option key={deck.id} value={deck.id}>
-                      {deck.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <MaterialDeckPicker
+                label="Material deck for this list"
+                decks={materialDecks}
+                value={
+                  activeMaterialDeck?.id ?? activeDeck?.materialDeckId ?? ""
+                }
+                onChange={onAssignMaterialDeck}
+                disabled={materialDecks.length === 0}
+              />
               <div className={toolbarActionsClass}>
                 <button
                   className={secondaryButtonClass}

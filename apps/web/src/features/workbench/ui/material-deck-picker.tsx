@@ -1,26 +1,26 @@
-import type { SavedDeck } from "@/lib/decks";
+import type { SavedMaterialDeck } from "@/lib/material-decks";
 import { SearchableSelect } from "./searchable-select";
 
-export function DeckPicker({
+export function MaterialDeckPicker({
   label,
   decks,
   value,
   onChange,
-  emptyLabel = "No saved decks",
-  loadingLabel = "Loading decks…",
+  emptyLabel = "No material decks",
+  loadingLabel = "Loading material decks…",
   loading = false,
   formatOption,
   disabled,
   className,
 }: {
   label: string;
-  decks: SavedDeck[];
+  decks: SavedMaterialDeck[];
   value: string;
   onChange: (deckId: string) => void;
   emptyLabel?: string;
   loadingLabel?: string;
   loading?: boolean;
-  formatOption?: (deck: SavedDeck) => string;
+  formatOption?: (deck: SavedMaterialDeck) => string;
   disabled?: boolean;
   className?: string;
 }) {
@@ -38,7 +38,7 @@ export function DeckPicker({
       loadingLabel={loadingLabel}
       loading={loading}
       disabled={disabled}
-      placeholder="Search decks…"
+      placeholder="Search material decks…"
       className={className}
     />
   );

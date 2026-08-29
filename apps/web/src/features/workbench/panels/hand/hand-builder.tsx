@@ -13,6 +13,7 @@ import {
   ActionBar,
   DeckPicker,
   RunSettings,
+  SearchableSelect,
   SectionHeading,
 } from "../../ui";
 import type { SolverMode } from "../../types";
@@ -214,21 +215,17 @@ export function HandBuilder({
         )}
 
         <div className="mt-[18px] flex items-end gap-3 max-[620px]:flex-col max-[620px]:items-stretch">
-          <label>
-            Add card
-            <select
-              value={selectedCard}
-              onChange={(event) =>
-                onSelectedCardChange(event.target.value as CardId)
-              }
-            >
-              {playableCards.map((card) => (
-                <option key={card.id} value={card.id}>
-                  {card.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SearchableSelect
+            label="Add card"
+            options={playableCards.map((card) => ({
+              value: card.id,
+              label: card.name,
+              keywords: `${card.short ?? ""} ${card.id}`,
+            }))}
+            value={selectedCard}
+            onChange={(id) => onSelectedCardChange(id as CardId)}
+            placeholder="Search cards…"
+          />
           <button
             className={cn(
               buttonVariants({ intent: "secondary" }),

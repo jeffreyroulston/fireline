@@ -17,6 +17,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { DeckCardControls } from "./deck-card-controls";
 import { DeckCardPreview } from "./card-preview";
 import {
   CARD_PREVIEW_DELAY_MS,
@@ -26,7 +27,21 @@ import {
 const deckCardImageClass =
   "block aspect-[5/7] w-full border border-foreground/20 bg-foreground/[0.04] object-cover";
 
-export function DeckCardFace({ id, qty }: { id: CardId | MaterialId; qty: number }) {
+export function DeckCardFace({
+  id,
+  qty,
+  editable = false,
+  canAdd = false,
+  onAdd,
+  onRemove,
+}: {
+  id: CardId | MaterialId;
+  qty: number;
+  editable?: boolean;
+  canAdd?: boolean;
+  onAdd?: () => void;
+  onRemove?: () => void;
+}) {
   const card = resolveDeckCard(id);
   const src = cardImageUrl(id);
   const faceRef = useRef<HTMLElement>(null);
@@ -46,6 +61,7 @@ export function DeckCardFace({ id, qty }: { id: CardId | MaterialId; qty: number
   }, []);
 
   function showPreviewSoon() {
+    if (editable) return;
     clearTimer();
     timerRef.current = window.setTimeout(() => {
       const el = faceRef.current;
@@ -68,7 +84,7 @@ export function DeckCardFace({ id, qty }: { id: CardId | MaterialId; qty: number
       onMouseLeave={hidePreview}
       onFocus={showPreviewSoon}
       onBlur={hidePreview}
-      tabIndex={0}
+      tabIndex={editable ? undefined : 0}
     >
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element -- remote GATCG art
@@ -90,16 +106,34 @@ export function DeckCardFace({ id, qty }: { id: CardId | MaterialId; qty: number
           </small>
         </div>
       )}
-      <figcaption className="flex min-w-0 items-baseline gap-1.5">
-        <span
-          className="shrink-0 font-display text-base leading-none font-bold tracking-[-0.02em] text-foreground"
-          aria-label={`Quantity ${qty}`}
-        >
-          {qty}
-        </span>
-        <span className="truncate font-display text-[11px] leading-[1.2] text-muted">
-          {card.name}
-        </span>
+      <figcaption className="flex min-w-0 flex-col gap-0.5">
+        {editable && onAdd && onRemove ? (
+          <>
+            <span className="truncate font-display text-[11px] leading-[1.2] text-muted">
+              {card.name}
+            </span>
+            <DeckCardControls
+              qty={qty}
+              canAdd={canAdd}
+              canRemove={qty > 0}
+              onAdd={onAdd}
+              onRemove={onRemove}
+              cardName={card.name}
+            />
+          </>
+        ) : (
+          <div className="flex min-w-0 items-baseline gap-1.5">
+            <span
+              className="shrink-0 font-display text-base leading-none font-bold tracking-[-0.02em] text-foreground"
+              aria-label={`Quantity ${qty}`}
+            >
+              {qty}
+            </span>
+            <span className="truncate font-display text-[11px] leading-[1.2] text-muted">
+              {card.name}
+            </span>
+          </div>
+        )}
       </figcaption>
       {anchor &&
         createPortal(

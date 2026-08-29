@@ -1,5 +1,5 @@
 import { CARDS, PLAYABLE_CARD_IDS, type CardId, type DeckCounts } from "@/lib/engine";
-import { SectionHeading } from "../../ui";
+import { SearchableSelect, SectionHeading } from "../../ui";
 import {
   ratioPanelClass,
   ratioRefineHintClass,
@@ -49,20 +49,20 @@ export function SwapSweepPanel({
         count. Only cards not already in the deck are shown below.
       </p>
       <div className="mb-[18px] flex items-end gap-3">
-        <label className="min-w-[min(280px,100%)]">
-          Swappable card
-          <select
-            value={swapFrom}
-            onChange={(event) => onSwapFromChange(event.target.value as CardId)}
-          >
-            <option value="">Select a card…</option>
-            {swappable.map((id) => (
-              <option key={id} value={id}>
-                {CARDS[id].name} · {baseCounts[id]}×
-              </option>
-            ))}
-          </select>
-        </label>
+        <SearchableSelect
+          label="Swappable card"
+          className="min-w-[min(280px,100%)]"
+          options={swappable.map((id) => ({
+            value: id,
+            label: `${CARDS[id].name} · ${baseCounts[id]}×`,
+            keywords: `${CARDS[id].name} ${CARDS[id].short ?? ""} ${id}`,
+          }))}
+          value={swapFrom}
+          onChange={(id) => onSwapFromChange(id as CardId)}
+          clearable
+          clearLabel="Select a card…"
+          placeholder="Search cards…"
+        />
         <label>
           Swap count
           <input
