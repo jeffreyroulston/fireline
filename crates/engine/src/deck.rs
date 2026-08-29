@@ -17,8 +17,8 @@ use ts_rs::TS;
 
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Instant;
 
 use rayon::prelude::*;
@@ -27,7 +27,60 @@ use rayon::prelude::*;
 /// queues. Cap concurrent heavy hands so 16 GiB machines stay alive.
 const MB_PER_HEAVY_HAND: u64 = 3072;
 
+/// Available memory in MiB, best-effort. Detection order: cgroup v2 limit
+/// (Docker / k8s, including Docker Desktop on WSL2) → cgroup v1 limit →
+/// /proc/meminfo (bare-metal Linux / WSL) → None (e.g. native Windows).
+///
+/// `/proc/meminfo` alone would report the *host* memory inside a container,
+/// over-subscribing relative to the container's actual limit.
 fn mem_available_mb() -> Option<u64> {
+    cgroup_available_mb().or_else(proc_meminfo_available_mb)
+}
+
+/// The cgroup memory limit is fixed for the container's lifetime, so it is
+/// discovered once; the current usage is read per call.
+fn cgroup_available_mb() -> Option<u64> {
+    static LIMIT: OnceLock<Option<u64>> = OnceLock::new();
+    let limit = (*LIMIT.get_or_init(cgroup_limit_bytes))?;
+    let current = cgroup_current_bytes().unwrap_or(0);
+    Some(limit.saturating_sub(current) / (1024 * 1024))
+}
+
+fn parse_cgroup_v2_limit(raw: &str) -> Option<u64> {
+    let raw = raw.trim();
+    if raw == "max" {
+        return None;
+    }
+    raw.parse().ok()
+}
+
+fn parse_cgroup_v1_limit(raw: &str) -> Option<u64> {
+    let bytes: u64 = raw.trim().parse().ok()?;
+    // A sentinel near 2^60 means unlimited.
+    (bytes < (1 << 60)).then_some(bytes)
+}
+
+fn cgroup_limit_bytes() -> Option<u64> {
+    if let Ok(raw) = std::fs::read_to_string("/sys/fs/cgroup/memory.max") {
+        return parse_cgroup_v2_limit(&raw);
+    }
+    if let Ok(raw) = std::fs::read_to_string("/sys/fs/cgroup/memory/memory.limit_in_bytes") {
+        return parse_cgroup_v1_limit(&raw);
+    }
+    None
+}
+
+fn cgroup_current_bytes() -> Option<u64> {
+    if let Ok(raw) = std::fs::read_to_string("/sys/fs/cgroup/memory.current") {
+        return raw.trim().parse().ok();
+    }
+    if let Ok(raw) = std::fs::read_to_string("/sys/fs/cgroup/memory/memory.usage_in_bytes") {
+        return raw.trim().parse().ok();
+    }
+    None
+}
+
+fn proc_meminfo_available_mb() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/meminfo").ok()?;
     for line in status.lines() {
         let Some(rest) = line.strip_prefix("MemAvailable:") else {
@@ -46,18 +99,23 @@ fn sim_uses_heavy_search(sim_type: SimType) -> bool {
     )
 }
 
-/// Hand parallelism for deck eval. `RAYON_NUM_THREADS` is an upper bound.
-/// Monte Carlo / Oracle / Two-pass are also capped by free RAM.
-pub fn hand_threads(sim_type: SimType) -> usize {
+/// Threads requested for hand parallelism: `RAYON_NUM_THREADS` if set and
+/// valid, else the CPU count.
+fn requested_threads() -> usize {
     let cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    let requested = std::env::var("RAYON_NUM_THREADS")
+    std::env::var("RAYON_NUM_THREADS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|&n| n > 0)
-        .unwrap_or(cpus);
-    hand_threads_with(sim_type, requested, mem_available_mb())
+        .unwrap_or(cpus)
+}
+
+/// Hand parallelism for deck eval. `RAYON_NUM_THREADS` is an upper bound.
+/// Monte Carlo / Oracle / Two-pass are also capped by free RAM.
+pub fn hand_threads(sim_type: SimType) -> usize {
+    hand_threads_with(sim_type, requested_threads(), mem_available_mb())
 }
 
 /// Pure core of [`hand_threads`], split out so tests stay off process env.
@@ -65,10 +123,64 @@ fn hand_threads_with(sim_type: SimType, requested: usize, mem_available: Option<
     if !sim_uses_heavy_search(sim_type) {
         return requested;
     }
-    let by_ram = mem_available
-        .map(|mb| usize::try_from((mb / MB_PER_HEAVY_HAND).max(1)).unwrap_or(1))
-        .unwrap_or(1);
-    requested.min(by_ram)
+    match mem_available {
+        Some(mb) => requested.min(usize::try_from((mb / MB_PER_HEAVY_HAND).max(1)).unwrap_or(1)),
+        // No memory source (native Windows): trust the CPU count rather than
+        // forcing heavy sims to a single thread.
+        None => requested,
+    }
+}
+
+/// Shared pool for deck-eval hand parallelism, sized once from the CPU count
+/// (or `RAYON_NUM_THREADS`). The RAM-based cap is enforced by [`HandGate`]
+/// inside the pool instead of rebuilding differently-sized pools per request.
+fn shared_pool() -> Result<&'static rayon::ThreadPool> {
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    if let Some(pool) = POOL.get() {
+        return Ok(pool);
+    }
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(requested_threads())
+        .build()?;
+    // A concurrent request may win the race; dropping the loser joins its threads.
+    Ok(POOL.get_or_init(|| pool))
+}
+
+/// Bounds how many heavy hands run at once inside the shared pool.
+struct HandGate {
+    free: Mutex<usize>,
+    condvar: Condvar,
+}
+
+impl HandGate {
+    fn new(count: usize) -> Self {
+        Self {
+            free: Mutex::new(count.max(1)),
+            condvar: Condvar::new(),
+        }
+    }
+
+    fn acquire(&self) -> GatePermit<'_> {
+        let mut free = self.free.lock().unwrap_or_else(|err| err.into_inner());
+        while *free == 0 {
+            free = self
+                .condvar
+                .wait(free)
+                .unwrap_or_else(|err| err.into_inner());
+        }
+        *free -= 1;
+        GatePermit(self)
+    }
+}
+
+struct GatePermit<'a>(&'a HandGate);
+
+impl Drop for GatePermit<'_> {
+    fn drop(&mut self) {
+        let mut free = self.0.free.lock().unwrap_or_else(|err| err.into_inner());
+        *free += 1;
+        self.0.condvar.notify_one();
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -514,10 +626,10 @@ fn solve_unique_hands(
 
     let completed = AtomicU16::new(0);
     let cancelled = AtomicBool::new(false);
-    let threads = hand_threads(request.sim_type);
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .build()?;
+    // The shared pool is CPU-sized; the gate caps concurrent heavy hands to
+    // what free RAM allows right now.
+    let gate = HandGate::new(hand_threads(request.sim_type));
+    let pool = shared_pool()?;
     // map + collect into Result short-circuits on the first failure, so real
     // errors (e.g. unknown card) propagate instead of collapsing into
     // "cancelled".
@@ -528,6 +640,7 @@ fn solve_unique_hands(
                 if cancelled.load(Ordering::Relaxed) {
                     return Err(EngineError::Cancelled);
                 }
+                let _permit = gate.acquire();
                 let hands_done = completed.load(Ordering::Relaxed);
                 let (cache_key, sample) =
                     solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx)?;
@@ -645,6 +758,13 @@ fn evaluate_hands(
         parallel,
     )?;
 
+    let mut remaining_uses: FxHashMap<(SimType, [u8; CARD_COUNT]), u16> = FxHashMap::default();
+    for draw in &draws {
+        *remaining_uses
+            .entry((request.sim_type, draw.key))
+            .or_insert(0) += 1;
+    }
+
     let mut hands = Vec::with_capacity(draws.len());
     let mut damages = Vec::with_capacity(draws.len());
     let mut total_nodes = 0;
@@ -657,12 +777,24 @@ fn evaluate_hands(
     let mut oracle_stats_acc =
         crate::stats::DeckStatAccumulator::with_deck_and_materials(&deck, materials_mask);
 
+    let mut cache = cache;
     for draw in &draws {
         let cache_key = (request.sim_type, draw.key);
-        let mut sample = cache
-            .get(&cache_key)
-            .cloned()
-            .expect("every draw key was solved");
+        let last = remaining_uses
+            .get_mut(&cache_key)
+            .map(|n| {
+                *n = n.saturating_sub(1);
+                *n == 0
+            })
+            .unwrap_or(true);
+        let mut sample = if last {
+            cache.remove(&cache_key).expect("every draw key was solved")
+        } else {
+            cache
+                .get(&cache_key)
+                .cloned()
+                .expect("every draw key was solved")
+        };
         sample.hand = draw.drawn.iter().map(|card| card.id()).collect();
         total_nodes += sample.nodes;
         damages.push(sample.damage);
@@ -1209,10 +1341,54 @@ mod tests {
         assert_eq!(hand_threads_with(SimType::MonteCarlo, 8, Some(8192)), 2);
         assert_eq!(hand_threads_with(SimType::OracleOnly, 8, Some(4096)), 1);
         assert_eq!(hand_threads_with(SimType::TwoPass, 8, Some(8192)), 2);
-        // Unknown memory (non-Linux) falls back to a single heavy hand.
-        assert_eq!(hand_threads_with(SimType::MonteCarlo, 8, None), 1);
+        // No memory source (native Windows) falls back to the CPU count.
+        assert_eq!(hand_threads_with(SimType::MonteCarlo, 8, None), 8);
         // Light sims are never RAM-capped.
         assert_eq!(hand_threads_with(SimType::FireBrick, 8, Some(1)), 8);
         assert_eq!(hand_threads_with(SimType::FireBrick, 8, None), 8);
+    }
+
+    #[test]
+    fn cgroup_v2_max_is_unlimited() {
+        assert_eq!(parse_cgroup_v2_limit("max\n"), None);
+        assert_eq!(parse_cgroup_v2_limit("  max  "), None);
+    }
+
+    #[test]
+    fn cgroup_v2_limit_parses_bytes() {
+        assert_eq!(parse_cgroup_v2_limit("17179869184\n"), Some(17_179_869_184));
+    }
+
+    #[test]
+    fn cgroup_v1_sentinel_is_unlimited() {
+        assert_eq!(parse_cgroup_v1_limit("9223372036854771712\n"), None);
+        assert_eq!(parse_cgroup_v1_limit("17179869184\n"), Some(17_179_869_184));
+    }
+
+    #[test]
+    fn duplicate_opening_hands_keep_independent_sample_records() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 7),
+            ("kingdom_informant".into(), 1),
+            ("clumsy_apprentice".into(), 1),
+        ]);
+        let result = evaluate(&DeckEvalRequest {
+            deck,
+            samples: 8,
+            go_first: true,
+            max_turns: 1,
+            seed: 1,
+            sim_type: SimType::FireBrick,
+            rollouts: 1,
+            budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
+        })
+        .unwrap();
+        assert_eq!(result.hands.len(), 8);
+        // A 9-card deck with 7 Arthur copies repeats opening hands; each
+        // sample still carries its own drawn-card list.
+        for sample in &result.hands {
+            assert_eq!(sample.hand.len(), 7);
+        }
     }
 }

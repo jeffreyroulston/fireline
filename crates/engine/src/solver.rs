@@ -324,10 +324,9 @@ fn solve_pass_with(
         },
         line_stats,
     );
-    // Drop memo before returning so callers that keep Search can reset cleanly;
-    // trim helps parallel deck eval return pages between hands.
+    // Drop the memo before returning so callers that keep the Search shell
+    // reuse a clean table; trimming happens once per hand, not per pass.
     search.reset(search.glimpse_enabled);
-    release_process_memory();
     result
 }
 
@@ -395,6 +394,9 @@ fn solve_monte_carlo(
             return Err(EngineError::Cancelled);
         }
     }
+    // The memo was reset after every rollout; return the freed pages once per
+    // hand so parallel deck eval does not stack arenas across hands.
+    release_process_memory();
 
     let mut sorted = damages.clone();
     sorted.sort_unstable();
@@ -405,9 +407,14 @@ fn solve_monte_carlo(
         .iter()
         .position(|sample| sample.damage == p50)
         .unwrap_or(0);
+    // The median tape is cloned because the distribution keeps every rollout's
+    // events on the wire; the headline stats are moved out instead.
     let headline = samples[median_index].clone();
     let headline_influence = sample_influences.get(median_index).copied().unwrap_or(0);
-    let headline_stats = rollout_stats.get(median_index).cloned().unwrap_or_default();
+    let headline_stats = rollout_stats
+        .into_iter()
+        .nth(median_index)
+        .unwrap_or_default();
 
     Ok(SolveResult {
         sim_type: SimType::MonteCarlo,
@@ -479,6 +486,7 @@ fn solve_two_pass(
     let (mut brick, brick_stats) = solve_pass(hand, go_first, max_turns, &[], false, materials);
     let queue = oracle_queue(remaining, seed, ordered);
     let (mut oracle, oracle_stats) = solve_pass(hand, go_first, max_turns, &queue, true, materials);
+    release_process_memory();
     brick.card_stats = summarize_line_stats(hand, &brick_stats, materials);
     oracle.card_stats = summarize_line_stats(hand, &oracle_stats, materials);
     let mut combined = crate::stats::DeckStatAccumulator::with_deck_and_materials(hand, materials);
@@ -520,6 +528,7 @@ fn solve_oracle_only(
     let started = Instant::now();
     let queue = oracle_queue(remaining, seed, ordered);
     let (pass, line_stats) = solve_pass(hand, go_first, max_turns, &queue, true, materials);
+    release_process_memory();
     SolveResult {
         sim_type: SimType::OracleOnly,
         max_damage: pass.max_damage,
@@ -1112,7 +1121,12 @@ fn apply_silent(state: State, action: Action) -> State {
     TAPE.with(|tape| apply_into(state, action, &mut tape.borrow_mut()))
 }
 
-/// Return freed heap pages to the OS after a heavy solve (glibc).
+/// Return freed heap pages to the OS after a heavy solve.
+///
+/// glibc-specific: `malloc_trim` only trims the *main arena*, while rayon
+/// workers allocate in per-thread arenas — expect modest returns, which is
+/// why this runs once per hand rather than per rollout. A musl base image
+/// has no such symbol and would fail to link.
 #[cfg(target_os = "linux")]
 fn release_process_memory() {
     unsafe {

@@ -1,6 +1,8 @@
 //! Peak RSS probe for oracle/Monte Carlo solves. Run with:
 //! `cargo run -p ga-fire-engine --example mc_rss --release`
 //!
+//! Linux-only dev tool: reads `/proc/self/status`.
+//!
 //! Useful when checking that Monte Carlo rollouts reuse one Search memo
 //! instead of stacking allocator arenas.
 
