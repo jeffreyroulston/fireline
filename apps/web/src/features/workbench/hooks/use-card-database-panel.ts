@@ -96,7 +96,11 @@ export function useCardDatabasePanel({
     { simType, kind: "evaluate" },
     0,
   );
-  const versionGroups = dbSource === "evaluate" ? (versionGroupsQuery.data ?? []) : [];
+  const versionGroups = useMemo(
+    () =>
+      dbSource === "evaluate" ? (versionGroupsQuery.data ?? []) : [],
+    [dbSource, versionGroupsQuery.data],
+  );
   const groupsLoading = versionGroupsQuery.isLoading;
 
   const currentEngine = useMemo(() => {
@@ -178,15 +182,30 @@ export function useCardDatabasePanel({
   );
 
   const catalogData = catalogQuery.data;
-  const contributors: CardDatabaseContributor[] =
-    catalogData && "contributors" in catalogData && dbSource === "evaluate"
-      ? (catalogData as CardDatabaseResponse).contributors
-      : [];
-  const swapSweepContributors: CardDatabaseRunContributor[] =
-    catalogData && "contributors" in catalogData && dbSource === "swap_sweep"
-      ? (catalogData as CardDatabaseSwapSweepResponse).contributors
-      : [];
-  const cards: CardDatabaseCard[] = catalogData?.cards ?? [];
+  const contributors = useMemo((): CardDatabaseContributor[] => {
+    if (
+      catalogData &&
+      "contributors" in catalogData &&
+      dbSource === "evaluate"
+    ) {
+      return (catalogData as CardDatabaseResponse).contributors;
+    }
+    return [];
+  }, [catalogData, dbSource]);
+  const swapSweepContributors = useMemo((): CardDatabaseRunContributor[] => {
+    if (
+      catalogData &&
+      "contributors" in catalogData &&
+      dbSource === "swap_sweep"
+    ) {
+      return (catalogData as CardDatabaseSwapSweepResponse).contributors;
+    }
+    return [];
+  }, [catalogData, dbSource]);
+  const cards = useMemo(
+    (): CardDatabaseCard[] => catalogData?.cards ?? [],
+    [catalogData?.cards],
+  );
   const totalRuns = catalogData?.totalRuns ?? 0;
   const totalSamples = catalogData?.totalSamples ?? 0;
   const loading = catalogQuery.isFetching;

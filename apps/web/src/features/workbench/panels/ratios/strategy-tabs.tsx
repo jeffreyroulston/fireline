@@ -1,5 +1,5 @@
 import { InfoPopover } from "@/components/info-popover";
-import { cn, pillTabListClass, pillTabVariants } from "@/lib/utils";
+import { pillTabListClass, pillTabVariants } from "@/lib/utils";
 import type { RatioStrategy } from "../../types";
 
 const RATIO_STRATEGIES: {

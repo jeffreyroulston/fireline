@@ -69,7 +69,10 @@ export function useHistoryPanel({
     deckId ? { deckId } : deckHash ? { deckHash } : undefined,
     dataEpoch,
   );
-  const runs = historyQuery.data ?? [];
+  const runs = useMemo(
+    () => historyQuery.data ?? [],
+    [historyQuery.data],
+  );
 
   const groupsQuery = useVersionGroupsQuery(
     {
@@ -79,7 +82,10 @@ export function useHistoryPanel({
     },
     dataEpoch,
   );
-  const groups = deckId || deckHash ? (groupsQuery.data ?? []) : [];
+  const groups = useMemo(
+    () => (deckId || deckHash ? (groupsQuery.data ?? []) : []),
+    [deckId, deckHash, groupsQuery.data],
+  );
 
   useEffect(() => {
     if (!deckId && !deckHash) {
@@ -181,7 +187,10 @@ export function useHistoryPanel({
     compareOpen && compareDeckId ? { deckId: compareDeckId } : undefined,
     dataEpoch,
   );
-  const compareRuns = compareOpen ? (compareHistoryQuery.data ?? []) : [];
+  const compareRuns = useMemo(
+    () => (compareOpen ? (compareHistoryQuery.data ?? []) : []),
+    [compareOpen, compareHistoryQuery.data],
+  );
 
   const compareGroupsQuery = useVersionGroupsQuery(
     {
@@ -191,8 +200,11 @@ export function useHistoryPanel({
     },
     dataEpoch,
   );
-  const compareGroups =
-    compareOpen && compareDeckId ? (compareGroupsQuery.data ?? []) : [];
+  const compareGroups = useMemo(
+    () =>
+      compareOpen && compareDeckId ? (compareGroupsQuery.data ?? []) : [],
+    [compareOpen, compareDeckId, compareGroupsQuery.data],
+  );
 
   useEffect(() => {
     if (!compareOpen || !compareDeckId) {

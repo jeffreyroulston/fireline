@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { WorkerStatusNav } from "@/components/worker-status-nav";
 import type { WorkerVersion } from "@/lib/api/shared";
-import { cn } from "@/lib/utils/cn";
 import { navTabVariants } from "@/lib/utils/variants";
 import { workbenchHref } from "../routes";
 import type { Tab } from "../types";

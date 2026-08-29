@@ -372,6 +372,8 @@ pub struct EventTape {
     last_memory: Vec<&'static str>,
     last_allies: Vec<&'static str>,
     has_snapshot: bool,
+    /// When false, skip zone snapshots and event storage (search expansion path).
+    recording: bool,
 }
 
 impl EventTape {
@@ -384,6 +386,21 @@ impl EventTape {
             last_memory: Vec::new(),
             last_allies: Vec::new(),
             has_snapshot: false,
+            recording: true,
+        }
+    }
+
+    /// Reused for search expansion so millions of apply calls do not allocate tapes.
+    pub fn silent() -> Self {
+        Self {
+            events: Vec::new(),
+            action_index: 0,
+            op: ActionOp::Start,
+            last_hand: Vec::new(),
+            last_memory: Vec::new(),
+            last_allies: Vec::new(),
+            has_snapshot: false,
+            recording: false,
         }
     }
 
@@ -410,11 +427,17 @@ impl EventTape {
     }
 
     pub fn begin_action(&mut self, op: ActionOp) {
+        if !self.recording {
+            return;
+        }
         self.op = op;
         self.action_index = self.action_index.saturating_add(1);
     }
 
     pub fn push(&mut self, state: State, phase: TapePhase, kind: EventKind, fields: EventFields) {
+        if !self.recording {
+            return;
+        }
         let hand = zone_ids(&state.hand);
         let memory = zone_ids(&state.memory);
         let allies = ally_ids(state);

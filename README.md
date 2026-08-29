@@ -86,7 +86,7 @@ Useful overrides:
 - `FIRELINE_PORT=8080` — bind the proxy to a different host port
 - `FIRELINE_IMAGE_TAG=latest` — GHCR tag for worker/api/web (default `latest`)
 - `WORKER_CONCURRENCY` / `API_CONCURRENCY` — cap how many simulations run at once (both default to `1` in Docker Compose; local dev defaults to `API_CONCURRENCY=1`, `WORKER_CONCURRENCY=2`)
-- `RAYON_NUM_THREADS` — cap Rayon hand parallelism inside the compute worker (defaults to all logical CPUs)
+- `RAYON_NUM_THREADS` — upper bound on Rayon hand parallelism (defaults to all logical CPUs). Monte Carlo / Oracle / Two-pass are further capped by free RAM (~3 GiB per concurrent hand) so 16 GiB machines do not OOM.
 
 ### Threading model
 
@@ -96,6 +96,8 @@ Two knobs control throughput:
 2. **Hand parallelism** (Rayon inside the engine): within one deck evaluation, unique opening hands are solved across available CPU threads.
 
 Docker Compose sets both run concurrency values to `1` so a single evaluation can use all cores. Local `cargo run -p ga-fire-worker` defaults to `2` concurrent worker requests; the data API defaults to dispatching `1` run at a time unless you set `API_CONCURRENCY`.
+
+Monte Carlo / Oracle / Two-pass enable Glimpse and keep a large search memo (often 1–3 GiB peak per concurrent hand). The engine caps those sims from `MemAvailable` (`free_ram / ~3 GiB`). Fire Brick still uses the full Rayon pool. On Linux, freed pages are returned to the OS after each solve (`malloc_trim`).
 
 Monte Carlo deck evaluations report hand-level progress only (`12/64 hands`) when hands run in parallel. Per-rollout ticks are reserved for the serial progress path.
 

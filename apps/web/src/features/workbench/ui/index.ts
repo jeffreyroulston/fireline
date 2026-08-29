@@ -14,6 +14,14 @@ export { PanelTopline } from "./panel-topline";
 export { PassLinePanel } from "./pass-line-panel";
 export { RunSettings } from "./run-settings";
 export { SectionHeading } from "./section-heading";
+export {
+  AverageDamageStat,
+  DistributionStatLabel,
+  DistributionSummary,
+  distributionStatItem,
+  DISTRIBUTION_STATS,
+} from "./distribution-stats";
+export type { DistributionStatKey } from "./distribution-stats";
 export { StatLine } from "./stat-line";
 export type { StatLineItem } from "./stat-line";
 export { TwoPassCompare } from "./two-pass-compare";

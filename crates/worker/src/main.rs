@@ -7,7 +7,7 @@ use axum::{
 };
 use ga_fire_engine::{
     Budget, DeckEvalRequest, DeckEvalResult, ENGINE_VERSION, EvalProgress, OptimizeProgress,
-    OptimizeRequest, OptimizeResult, SolveRequest, SolveResult, card_catalog,
+    OptimizeRequest, OptimizeResult, SimType, SolveRequest, SolveResult, card_catalog, hand_threads,
 };
 use serde::Serialize;
 use std::{net::SocketAddr, ops::ControlFlow, sync::Arc};
@@ -75,7 +75,10 @@ async fn main() {
     let addr: SocketAddr = format!("{host}:{port}")
         .parse()
         .expect("valid listen address");
-    tracing::info!("worker listening on {addr} (concurrency={concurrency})");
+    tracing::info!(
+        "worker listening on {addr} (concurrency={concurrency}, monte_carlo_hand_threads={})",
+        hand_threads(SimType::MonteCarlo)
+    );
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("bind listener");

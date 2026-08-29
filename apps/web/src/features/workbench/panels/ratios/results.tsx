@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CARDS, PLAYABLE_CARD_IDS, type CardId, type DeckCounts } from "@/lib/engine";
+import { CARDS, PLAYABLE_CARD_IDS, type DeckCounts } from "@/lib/engine";
 import { cn } from "@/lib/utils";
 import { SectionHeading } from "../../ui";
 import type { RatioRefineCriteria, RatioResult } from "../../types";

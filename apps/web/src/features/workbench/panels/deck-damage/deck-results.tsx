@@ -82,58 +82,60 @@ export function DeckResults({
 
   return (
     <aside className={resultRailClass} aria-live="polite">
-      <PooledDamagePanel
-        meta={
-          <strong>
-            {SIM_TYPE_LABELS[mode]} · {result.samples} opening hands
-          </strong>
-        }
-        distribution={distribution}
-        bars={bars}
-        simType={mode}
-        cardHighlights={barCardHighlights}
-        liveHands={result.hands}
-        showSendToSolver
-        onSendToHandSolver={onSendToHandSolver}
-        resetKey={`${mode}:${result.samples}:${result.mean}:${result.min}:${result.max}`}
-      />
-      {result.cardStats && result.cardStats.length > 0 && (
-        <CardLeaderboardPanel
-          selectedCardId={selectedLeaderboardCard}
-          onSelectedCardIdChange={setSelectedLeaderboardCard}
-          {...(isTwoPass &&
-          result.brickCardStats &&
-          result.brickCardStats.length > 0 &&
-          result.oracleCardStats &&
-          result.oracleCardStats.length > 0
-            ? {
-                twoPassLeaderboards: {
-                  combined: leaderboardFromCardStats(
-                    result.cardStats,
-                    result.samples * 2,
-                    { hands: result.hands, pass: "combined" },
-                  ),
-                  brick: leaderboardFromCardStats(
-                    result.brickCardStats,
-                    result.samples,
-                    { hands: result.hands, pass: "brick" },
-                  ),
-                  oracle: leaderboardFromCardStats(
-                    result.oracleCardStats,
-                    result.samples,
-                    { hands: result.hands, pass: "oracle" },
-                  ),
-                },
-              }
-            : {
-                leaderboard: leaderboardFromCardStats(
-                  result.cardStats,
-                  result.samples,
-                  { hands: result.hands },
-                ),
-              })}
+      <div className="grid gap-[22px]">
+        <PooledDamagePanel
+          meta={
+            <strong>
+              {SIM_TYPE_LABELS[mode]} · {result.samples} opening hands
+            </strong>
+          }
+          distribution={distribution}
+          bars={bars}
+          simType={mode}
+          cardHighlights={barCardHighlights}
+          liveHands={result.hands}
+          showSendToSolver
+          onSendToHandSolver={onSendToHandSolver}
+          resetKey={`${mode}:${result.samples}:${result.mean}:${result.min}:${result.max}`}
         />
-      )}
+        {result.cardStats && result.cardStats.length > 0 && (
+          <CardLeaderboardPanel
+            selectedCardId={selectedLeaderboardCard}
+            onSelectedCardIdChange={setSelectedLeaderboardCard}
+            {...(isTwoPass &&
+            result.brickCardStats &&
+            result.brickCardStats.length > 0 &&
+            result.oracleCardStats &&
+            result.oracleCardStats.length > 0
+              ? {
+                  twoPassLeaderboards: {
+                    combined: leaderboardFromCardStats(
+                      result.cardStats,
+                      result.samples * 2,
+                      { hands: result.hands, pass: "combined" },
+                    ),
+                    brick: leaderboardFromCardStats(
+                      result.brickCardStats,
+                      result.samples,
+                      { hands: result.hands, pass: "brick" },
+                    ),
+                    oracle: leaderboardFromCardStats(
+                      result.oracleCardStats,
+                      result.samples,
+                      { hands: result.hands, pass: "oracle" },
+                    ),
+                  },
+                }
+              : {
+                  leaderboard: leaderboardFromCardStats(
+                    result.cardStats,
+                    result.samples,
+                    { hands: result.hands },
+                  ),
+                })}
+          />
+        )}
+      </div>
     </aside>
   );
 }

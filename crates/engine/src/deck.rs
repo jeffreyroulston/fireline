@@ -19,6 +19,49 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 
+/// Observed peak RSS for one Monte Carlo / oracle hand is ~2–3 GiB on full
+/// queues. Cap concurrent heavy hands so 16 GiB machines stay alive.
+const MB_PER_HEAVY_HAND: u64 = 3072;
+
+fn mem_available_mb() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in status.lines() {
+        let Some(rest) = line.strip_prefix("MemAvailable:") else {
+            continue;
+        };
+        let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+        return Some(kb / 1024);
+    }
+    None
+}
+
+fn sim_uses_heavy_search(sim_type: SimType) -> bool {
+    matches!(
+        sim_type,
+        SimType::MonteCarlo | SimType::OracleOnly | SimType::TwoPass
+    )
+}
+
+/// Hand parallelism for deck eval. `RAYON_NUM_THREADS` is an upper bound.
+/// Monte Carlo / Oracle / Two-pass are also capped by free RAM.
+pub fn hand_threads(sim_type: SimType) -> usize {
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let requested = std::env::var("RAYON_NUM_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(cpus);
+    if !sim_uses_heavy_search(sim_type) {
+        return requested;
+    }
+    let by_ram = mem_available_mb()
+        .map(|mb| usize::try_from((mb / MB_PER_HEAVY_HAND).max(1)).unwrap_or(1))
+        .unwrap_or(1);
+    requested.min(by_ram)
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(TS))]
@@ -474,51 +517,58 @@ fn solve_unique_hands(
 
     let completed = AtomicU16::new(0);
     let cancelled = AtomicBool::new(false);
-    let cache: FxHashMap<_, _> = unique
-        .par_iter()
-        .filter_map(|&(sim_type, key, sample_index)| {
-            if cancelled.load(Ordering::Relaxed) {
-                return None;
-            }
-            let hands_done = completed.load(Ordering::Relaxed);
-            let solved = solve_one_unique_hand(
-                sim_type,
-                key,
-                sample_index,
-                request,
-                budget,
-                max_turns,
-                rollouts,
-                hands_done,
-                total,
-                on_progress,
-                report_in_hand_progress,
-            );
-            let (cache_key, sample) = match solved {
-                Ok(value) => value,
-                Err(_) => {
+    let threads = hand_threads(request.sim_type);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .map_err(|err| format!("rayon pool: {err}"))?;
+    let cache: FxHashMap<_, _> = pool.install(|| {
+        unique
+            .par_iter()
+            .filter_map(|&(sim_type, key, sample_index)| {
+                if cancelled.load(Ordering::Relaxed) {
+                    return None;
+                }
+                let hands_done = completed.load(Ordering::Relaxed);
+                let solved = solve_one_unique_hand(
+                    sim_type,
+                    key,
+                    sample_index,
+                    request,
+                    budget,
+                    max_turns,
+                    rollouts,
+                    hands_done,
+                    total,
+                    on_progress,
+                    report_in_hand_progress,
+                );
+                let (cache_key, sample) = match solved {
+                    Ok(value) => value,
+                    Err(_) => {
+                        cancelled.store(true, Ordering::Relaxed);
+                        return None;
+                    }
+                };
+                let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                if report_eval_progress(
+                    on_progress,
+                    EvalProgress {
+                        sample: n,
+                        total,
+                        rollout: 0,
+                        total_rollouts,
+                    },
+                )
+                .is_break()
+                {
                     cancelled.store(true, Ordering::Relaxed);
                     return None;
                 }
-            };
-            let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
-            if report_eval_progress(
-                on_progress,
-                EvalProgress {
-                    sample: n,
-                    total,
-                    rollout: 0,
-                    total_rollouts,
-                },
-            )
-            .is_break()
-            {
-                cancelled.store(true, Ordering::Relaxed);
-                return None;
-            }
-            Some((cache_key, sample))
-        })
-        .collect();
+                Some((cache_key, sample))
+            })
+            .collect()
+    });
     if cancelled.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
@@ -1208,4 +1258,18 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn heavy_hand_threads_respect_rayon_upper_bound() {
+        // SAFETY: test process is single-threaded around this env mutation.
+        unsafe {
+            std::env::set_var("RAYON_NUM_THREADS", "1");
+        }
+        assert_eq!(hand_threads(SimType::MonteCarlo), 1);
+        assert_eq!(hand_threads(SimType::FireBrick), 1);
+        unsafe {
+            std::env::remove_var("RAYON_NUM_THREADS");
+        }
+    }
 }
+

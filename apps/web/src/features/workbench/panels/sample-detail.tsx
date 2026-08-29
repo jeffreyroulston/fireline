@@ -2,9 +2,16 @@
 
 import type { ReactNode } from "react";
 import type { CardId, DamageDistribution, LineEvent, SimType, SolveResult } from "@/lib/engine";
-import type { SampleHand } from "../types";
+import { SIM_TYPE_LABELS, type SampleHand } from "../types";
 import { cn, buttonVariants } from "@/lib/utils";
-import { DamageBars, HandCard, OptimalLine, SectionHeading, TwoPassCompare } from "../ui";
+import {
+  DamageBars,
+  DamageReadout,
+  HandCard,
+  OptimalLine,
+  SectionHeading,
+  TwoPassCompare,
+} from "../ui";
 
 function showsDrawnStrip(mode: SimType): boolean {
   return mode === "oracle_only" || mode === "monte_carlo";
@@ -25,6 +32,56 @@ function lineEventsForDrawn(
     return sample.distribution.rollouts[mcIndex]?.events ?? sample.events;
   }
   return sample.events;
+}
+
+function sampleDamageReadout(
+  sample: SampleHand,
+  mode: SimType,
+  handNumber?: number,
+): { label: string; value: ReactNode; detail: ReactNode } {
+  const states = `${sample.nodes.toLocaleString()} states`;
+  const handPrefix = handNumber != null ? `HAND ${handNumber}` : null;
+
+  if (sample.twoPass) {
+    return {
+      label: handPrefix ?? "TWO-PASS",
+      value: (
+        <>
+          {sample.twoPass.brick.maxDamage}
+          <span className="mx-[0.08em] font-medium text-muted">/</span>
+          {sample.twoPass.oracle.maxDamage}
+        </>
+      ),
+      detail: (
+        <>
+          {handPrefix ? "Brick / Oracle · " : ""}
+          {states}
+        </>
+      ),
+    };
+  }
+
+  if (sample.distribution) {
+    return {
+      label: handPrefix ?? "P50 DAMAGE",
+      value: sample.distribution.p50,
+      detail: (
+        <>
+          {sample.distribution.min}–{sample.distribution.max} range · {states}
+        </>
+      ),
+    };
+  }
+
+  return {
+    label: handPrefix ?? "MAX DAMAGE",
+    value: sample.damage,
+    detail: (
+      <>
+        {SIM_TYPE_LABELS[mode]} · {states}
+      </>
+    ),
+  };
 }
 
 export function MonteCarloSampleDetail({
@@ -55,11 +112,21 @@ export function MonteCarloSampleDetail({
         }))}
       />
       {rollout && (
-        <OptimalLine
-          label={`ROLLOUT ${selected! + 1} · ${rollout.damage} DAMAGE`}
-          events={rollout.events}
-          resetKey={`sample-mc-${selected}-${rollout.damage}`}
-        />
+        <>
+          <div className="mt-5">
+            <DamageReadout
+              size="lg"
+              label={`ROLLOUT ${selected! + 1}`}
+              value={rollout.damage}
+              detail="DAMAGE"
+            />
+          </div>
+          <OptimalLine
+            label={`ROLLOUT ${selected! + 1}`}
+            events={rollout.events}
+            resetKey={`sample-mc-${selected}-${rollout.damage}`}
+          />
+        </>
       )}
     </div>
   );
@@ -73,6 +140,7 @@ export function LineInspector({
   onMcIndexChange,
   onSendToHandSolver,
   showSendToSolver = true,
+  showDamageReadout = true,
   resetKeyPrefix = "sample",
   title,
 }: {
@@ -83,6 +151,7 @@ export function LineInspector({
   onMcIndexChange: (index: number | null) => void;
   onSendToHandSolver?: (sample: SampleHand) => void;
   showSendToSolver?: boolean;
+  showDamageReadout?: boolean;
   resetKeyPrefix?: string;
   title?: ReactNode;
 }) {
@@ -91,25 +160,25 @@ export function LineInspector({
   const drawn = showsDrawnStrip(mode)
     ? drawnCardIds(lineEventsForDrawn(sample, mode, mcIndex))
     : [];
-  const damageLabel = sample.twoPass
-    ? `${sample.twoPass.brick.maxDamage} / ${sample.twoPass.oracle.maxDamage} DAMAGE`
-    : sample.distribution
-      ? `${sample.distribution.min}–${sample.distribution.max} (P50 ${sample.distribution.p50})`
-      : `${sample.damage} DAMAGE`;
+  const readout = sampleDamageReadout(sample, mode, handNumber);
 
   return (
     <div className="sample-detail mt-7 border-t border-border pt-6">
-      <SectionHeading
-        title={
-          title ?? (
-            <>
-              {handNumber != null ? `HAND ${handNumber} · ` : ""}
-              {damageLabel}
-            </>
-          )
-        }
-        meta={<strong>{sample.nodes.toLocaleString()} states</strong>}
-      />
+      {showDamageReadout ? (
+        <div className="mb-5">
+          <DamageReadout
+            size="lg"
+            label={readout.label}
+            value={readout.value}
+            detail={readout.detail}
+          />
+        </div>
+      ) : (
+        <SectionHeading
+          title={title ?? (handNumber != null ? `HAND ${handNumber}` : "OPENING HAND")}
+          meta={<strong>{sample.nodes.toLocaleString()} states</strong>}
+        />
+      )}
       <div className="pointer-events-none mb-3.5 grid min-h-0 grid-cols-7 gap-2" aria-label="Sampled opening hand">
         {sample.hand.map((id, index) => (
           <HandCard key={`${id}-${index}`} id={id} />

@@ -13,6 +13,7 @@ use crate::{
     version::ENGINE_VERSION,
 };
 use rustc_hash::FxHashMap;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::time::Instant;
@@ -54,6 +55,14 @@ impl Search {
         }
     }
 
+    /// Drop memo entries. Replacing the table avoids hashbrown retaining a
+    /// high-water allocation that the system allocator will not return to the OS.
+    fn reset(&mut self, glimpse_enabled: bool) {
+        self.memo = FxHashMap::with_capacity_and_hasher(16_384, Default::default());
+        self.nodes = 0;
+        self.glimpse_enabled = glimpse_enabled;
+    }
+
     fn visit(&mut self, state: State) -> Outcome {
         self.nodes += 1;
         if state.is_terminal() {
@@ -76,7 +85,7 @@ impl Search {
             influence: 0,
         };
         for action in actions(state, self.glimpse_enabled) {
-            let (next, _) = apply(state, action);
+            let next = apply_silent(state, action);
             let outcome = self.visit(next);
             if outcome.better(best) {
                 best = outcome;
@@ -311,13 +320,28 @@ pub fn solve_pass(
     glimpse_enabled: bool,
     materials: u16,
 ) -> (PassResult, crate::stats::LineCardStats) {
+    let mut search = Search::new(
+        State::with_queue_and_materials(hand, go_first, max_turns, queue, materials),
+        glimpse_enabled,
+    );
+    solve_pass_with(&mut search, hand, go_first, max_turns, queue, materials)
+}
+
+fn solve_pass_with(
+    search: &mut Search,
+    hand: &[Card],
+    go_first: bool,
+    max_turns: u8,
+    queue: &[Card],
+    materials: u16,
+) -> (PassResult, crate::stats::LineCardStats) {
     let mut initial = State::with_queue_and_materials(hand, go_first, max_turns, queue, materials);
     let opening_draw = if go_first {
         None
     } else {
         Some(initial.draw_unknown())
     };
-    let mut search = Search::new(initial, glimpse_enabled);
+    search.reset(search.glimpse_enabled);
     let best = search.visit(initial);
     let mut tape = EventTape::new();
     tape.push_start(initial, opening_draw);
@@ -326,7 +350,7 @@ pub fn solve_pass(
         line_stats.record_opening_draw(drawn);
     }
     search.reconstruct(initial, best, &mut tape, &mut line_stats);
-    (
+    let result = (
         PassResult {
             max_damage: best.damage,
             end_influence: best.influence,
@@ -336,7 +360,12 @@ pub fn solve_pass(
             card_stats: Vec::new(),
         },
         line_stats,
-    )
+    );
+    // Drop memo before returning so callers that keep Search can reset cleanly;
+    // trim helps parallel deck eval return pages between hands.
+    search.reset(search.glimpse_enabled);
+    release_process_memory();
+    result
 }
 
 fn summarize_line_stats(
@@ -368,6 +397,11 @@ fn solve_monte_carlo(
     let mut total_nodes = 0;
     let mut total_memo = 0;
     let mut stats_acc = crate::stats::DeckStatAccumulator::with_deck_and_materials(hand, materials);
+    // Reuse one Search shell; reset() drops the memo table each rollout.
+    let mut search = Search::new(
+        State::with_queue_and_materials(hand, go_first, max_turns, remaining, materials),
+        true,
+    );
 
     if on_rollout(0, rollouts).is_break() {
         return Err("cancelled".into());
@@ -376,7 +410,8 @@ fn solve_monte_carlo(
     for done in 1..=rollouts {
         let mut queue = remaining.to_vec();
         shuffle_cards(&mut queue, &mut rng);
-        let (pass, line_stats) = solve_pass(hand, go_first, max_turns, &queue, true, materials);
+        let (pass, line_stats) =
+            solve_pass_with(&mut search, hand, go_first, max_turns, &queue, materials);
         total_nodes += pass.nodes;
         total_memo += pass.memo_entries;
         damages.push(pass.max_damage);
@@ -388,6 +423,7 @@ fn solve_monte_carlo(
         });
         stats_acc.add_sample(hand, &line_stats);
         rollout_stats.push(line_stats);
+        release_process_memory();
         if on_rollout(done, rollouts).is_break() {
             return Err("cancelled".into());
         }
@@ -1097,11 +1133,37 @@ fn tape_phase(state: &State) -> TapePhase {
     }
 }
 
+#[allow(dead_code)] // used by unit tests
 fn apply(state: State, action: Action) -> (State, Vec<LineEvent>) {
     let mut tape = EventTape::new();
     let next = apply_into(state, action, &mut tape);
     (next, tape.events)
 }
+
+/// Search expansion: mutate the board without allocating combat-tape snapshots.
+fn apply_silent(state: State, action: Action) -> State {
+    thread_local! {
+        static TAPE: RefCell<EventTape> = RefCell::new(EventTape::silent());
+    }
+    TAPE.with(|tape| apply_into(state, action, &mut tape.borrow_mut()))
+}
+
+/// Return freed heap pages to the OS after a heavy solve (glibc).
+#[cfg(target_os = "linux")]
+fn release_process_memory() {
+    unsafe {
+        libc_malloc_trim(0);
+    }
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
+    #[link_name = "malloc_trim"]
+    fn libc_malloc_trim(pad: usize) -> i32;
+}
+
+#[cfg(not(target_os = "linux"))]
+fn release_process_memory() {}
 
 fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
     tape.begin_action(ActionOp::from_action(action));

@@ -60,6 +60,7 @@ fn run() -> Result<String, String> {
                 rollouts: 12,
                 seed: 42,
                 budget: Default::default(),
+                materials: BTreeMap::new(),
             };
             let result = solve(&request)?;
             if json {
