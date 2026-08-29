@@ -198,12 +198,11 @@ impl LineCardStats {
         for event in events {
             let delta = u32::from(event.damage.saturating_sub(prev));
             prev = event.damage;
-            if delta > 0 {
-                if event.kind == EventKind::OnDeath {
-                    if let Some(card) = event.card.and_then(card_from_id) {
-                        self.damage[card.index()] += delta;
-                    }
-                }
+            if delta > 0
+                && event.kind == EventKind::OnDeath
+                && let Some(card) = event.card.and_then(card_from_id)
+            {
+                self.damage[card.index()] += delta;
             }
             self.record_draw_event(event);
         }
@@ -250,10 +249,10 @@ impl LineCardStats {
                     self.record_draw_event(event);
                 }
                 _ => {
-                    if delta > 0 {
-                        if let Some(card) = current {
-                            self.damage[card.index()] += delta;
-                        }
+                    if delta > 0
+                        && let Some(card) = current
+                    {
+                        self.damage[card.index()] += delta;
                     }
                     self.record_draw_event(event);
                 }
@@ -314,8 +313,7 @@ impl LineCardStats {
                 drawn.insert(card.id(), self.drawn[index]);
             }
         }
-        for index in 0..MATERIAL_COUNT {
-            let id = MATERIAL_IDS[index];
+        for (index, &id) in MATERIAL_IDS.iter().enumerate() {
             if self.material_plays[index] > 0 {
                 plays.insert(id, self.material_plays[index]);
             }

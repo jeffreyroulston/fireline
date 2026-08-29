@@ -395,7 +395,7 @@ fn crossover(
 ) -> BTreeMap<String, u8> {
     let mut child = BTreeMap::new();
     for id in bounds.keys() {
-        let count = if rng.next() % 2 == 0 {
+        let count = if rng.next().is_multiple_of(2) {
             *left.get(id).unwrap_or(&0)
         } else {
             *right.get(id).unwrap_or(&0)
@@ -464,7 +464,7 @@ fn optimize_genetic(
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
 ) -> Result<(), String> {
     let mut rng = Rng::new(request.seed.wrapping_add(17));
-    let pop_size = ctx.target.min(POP_SIZE_CAP).max(4);
+    let pop_size = ctx.target.clamp(4, POP_SIZE_CAP);
     let mut population: Vec<(f64, BTreeMap<String, u8>)> = Vec::new();
     let mut seed_attempts = 0_u64;
 
@@ -628,7 +628,7 @@ fn optimize_swap_sweep(
         score: baseline_score,
         counts: request.base_deck.clone(),
         score_delta: None,
-        card_stats: baseline_eval.card_stats.clone(),
+        card_stats: baseline_eval.card_stats,
         candidate: None,
     });
     history.push(HistoryPoint {

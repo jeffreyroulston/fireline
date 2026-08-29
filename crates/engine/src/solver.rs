@@ -1,8 +1,9 @@
+#[cfg(test)]
+use crate::line_event::LineEvent;
 use crate::{
     cards::{ALL_CARDS, Card, parse_card},
     line_event::{
-        ActionOp, AttackBonuses, EventFields, EventKind, EventTape, LineEvent, TapePhase,
-        push_ally_gy_death,
+        ActionOp, AttackBonuses, EventFields, EventKind, EventTape, TapePhase, push_ally_gy_death,
     },
     model::{
         Action, DamageDistribution, EffectiveRequest, MAT_BLADE, MAT_DAGGER, MAT_HAMMER, MAT_RING,
@@ -194,9 +195,11 @@ pub fn solve_with_progress(
                 &remaining,
                 request.go_first,
                 max_turns,
-                rollouts,
-                request.seed,
-                materials,
+                MonteCarloConfig {
+                    rollouts,
+                    seed: request.seed,
+                    materials,
+                },
                 on_rollout,
             )?
         }
@@ -378,18 +381,26 @@ fn summarize_line_stats(
     acc.finish()
 }
 
+/// Knobs for a Monte Carlo solve, grouped to keep the signature readable.
+#[derive(Clone, Copy)]
+struct MonteCarloConfig {
+    rollouts: u16,
+    seed: u64,
+    materials: u16,
+}
+
 fn solve_monte_carlo(
     hand: &[Card],
     remaining: &[Card],
     go_first: bool,
     max_turns: u8,
-    rollouts: u16,
-    seed: u64,
-    materials: u16,
+    config: MonteCarloConfig,
     mut on_rollout: impl FnMut(u16, u16) -> ControlFlow<()>,
 ) -> Result<SolveResult, String> {
     let started = Instant::now();
-    let mut rng = Rng(seed);
+    let rollouts = config.rollouts;
+    let materials = config.materials;
+    let mut rng = Rng(config.seed);
     let mut damages = Vec::with_capacity(rollouts as usize);
     let mut samples = Vec::with_capacity(rollouts as usize);
     let mut sample_influences = Vec::with_capacity(rollouts as usize);
@@ -445,7 +456,7 @@ fn solve_monte_carlo(
         sim_type: SimType::MonteCarlo,
         max_damage: headline.damage,
         end_influence: headline_influence,
-        events: headline.events.clone(),
+        events: headline.events,
         nodes: total_nodes,
         memo_entries: total_memo,
         elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
@@ -874,36 +885,40 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
         if state.turn == 1 && state.has_material(MAT_DAGGER) {
             result.push(Action::MaterializeDagger);
         }
-        if state.turn >= 1 && state.champion_level == 0 && state.has_material(MAT_ZANDER) {
-            if state.memory_len > 0 || state.float_gy > 0 {
-                if glimpse_enabled && state.queue_pos < state.queue_len {
-                    let layouts = state.glimpse_layout_count();
-                    for layout in 0..layouts {
-                        result.push(Action::MaterializeZanderMemory {
-                            glimpse_layout: Some(layout),
-                        });
-                    }
-                } else {
+        if state.turn >= 1
+            && state.champion_level == 0
+            && state.has_material(MAT_ZANDER)
+            && (state.memory_len > 0 || state.float_gy > 0)
+        {
+            if glimpse_enabled && state.queue_pos < state.queue_len {
+                let layouts = state.glimpse_layout_count();
+                for layout in 0..layouts {
                     result.push(Action::MaterializeZanderMemory {
-                        glimpse_layout: None,
+                        glimpse_layout: Some(layout),
                     });
                 }
+            } else {
+                result.push(Action::MaterializeZanderMemory {
+                    glimpse_layout: None,
+                });
             }
         }
-        if state.turn >= 1 && !state.tristan_leveled && state.has_material(MAT_TRISTAN) {
-            if state.memory_len > 0 || state.float_gy > 0 {
-                if glimpse_enabled && state.queue_pos < state.queue_len {
-                    let layouts = state.glimpse_layout_count();
-                    for layout in 0..layouts {
-                        result.push(Action::MaterializeTristanMemory {
-                            glimpse_layout: Some(layout),
-                        });
-                    }
-                } else {
+        if state.turn >= 1
+            && !state.tristan_leveled
+            && state.has_material(MAT_TRISTAN)
+            && (state.memory_len > 0 || state.float_gy > 0)
+        {
+            if glimpse_enabled && state.queue_pos < state.queue_len {
+                let layouts = state.glimpse_layout_count();
+                for layout in 0..layouts {
                     result.push(Action::MaterializeTristanMemory {
-                        glimpse_layout: None,
+                        glimpse_layout: Some(layout),
                     });
                 }
+            } else {
+                result.push(Action::MaterializeTristanMemory {
+                    glimpse_layout: None,
+                });
             }
         }
         if state.turn >= 1
@@ -1132,7 +1147,7 @@ fn tape_phase(state: &State) -> TapePhase {
     }
 }
 
-#[allow(dead_code)] // used by unit tests
+#[cfg(test)]
 fn apply(state: State, action: Action) -> (State, Vec<LineEvent>) {
     let mut tape = EventTape::new();
     let next = apply_into(state, action, &mut tape);
@@ -1495,6 +1510,9 @@ fn apply_weapon_wield_self_damage(state: &mut State, weapon: Weapon, tape: &mut 
     }
 }
 
+// Hot search path: the payload mirrors Action::PlayAlly's fields, and grouping
+// them into a struct would add indirection without clarifying the call sites.
+#[expect(clippy::too_many_arguments)]
 fn play_ally(
     state: &mut State,
     card: Card,
@@ -1511,33 +1529,31 @@ fn play_ally(
     let immortal = arthur;
     let phase = tape_phase(state);
     let mut sacrificed = false;
-    if sacrifice && card == Card::PepperedChef {
-        if let Some(index) = (0..state.ally_len as usize).rev().find(|&index| {
+    if sacrifice
+        && card == Card::PepperedChef
+        && let Some(index) = (0..state.ally_len as usize).rev().find(|&index| {
             let victim = state.allies[index].card();
             victim != Card::Arthur
-        }) {
-            if let Some(victim) = state.remove_ally(index, true) {
-                sacrificed = true;
-                push_ally_gy_death(state, victim, phase, tape);
-                tape.push(*state, phase, EventKind::Sacrifice, EventFields::default());
-            }
-        }
+        })
+        && let Some(victim) = state.remove_ally(index, true)
+    {
+        sacrificed = true;
+        push_ally_gy_death(state, victim, phase, tape);
+        tape.push(*state, phase, EventKind::Sacrifice, EventFields::default());
     }
     // Unique: playing a second copy kills the one already on the board.
-    if card.is_unique() {
-        if let Some(index) =
+    if card.is_unique()
+        && let Some(index) =
             (0..state.ally_len as usize).find(|&index| state.allies[index].card() == card)
-        {
-            if let Some(victim) = state.remove_ally(index, true) {
-                push_ally_gy_death(state, victim, phase, tape);
-                tape.push(
-                    *state,
-                    phase,
-                    EventKind::UniqueDies,
-                    EventFields::card(victim),
-                );
-            }
-        }
+        && let Some(victim) = state.remove_ally(index, true)
+    {
+        push_ally_gy_death(state, victim, phase, tape);
+        tape.push(
+            *state,
+            phase,
+            EventKind::UniqueDies,
+            EventFields::card(victim),
+        );
     }
     state.add_ally(card, !arthur, immortal);
     let mut fields = EventFields::card(card).with_kindle(kindle);
@@ -1645,18 +1661,18 @@ fn attack_ally(state: &mut State, index: usize, tape: &mut EventTape) {
             EventFields::default(),
         );
     }
-    if matches!(card, Card::HastyMessenger | Card::RedHare) {
-        if let Some(discarded) = state.discard_for_effect() {
-            let drawn = state.draw_unknown();
-            tape.push(
-                *state,
-                TapePhase::Main,
-                EventKind::OnAttackDraw,
-                EventFields::default()
-                    .with_discarded(discarded)
-                    .with_drawn(drawn),
-            );
-        }
+    if matches!(card, Card::HastyMessenger | Card::RedHare)
+        && let Some(discarded) = state.discard_for_effect()
+    {
+        let drawn = state.draw_unknown();
+        tape.push(
+            *state,
+            TapePhase::Main,
+            EventKind::OnAttackDraw,
+            EventFields::default()
+                .with_discarded(discarded)
+                .with_drawn(drawn),
+        );
     }
     if card == Card::CorhaziCourier && state.is_assassin() {
         let drawn = state.draw_unknown();
@@ -2194,7 +2210,7 @@ mod tests {
         ];
         let (pass, stats) = solve_pass(&hand, false, 2, &[Card::IgnitedStab], false, ALL_MATERIALS);
         assert_eq!(
-            pass.events.first().and_then(|event| event.drawn.as_deref()),
+            pass.events.first().and_then(|event| event.drawn),
             Some("ignited_stab"),
             "{}",
             labels(&pass.events).join(" | ")
@@ -2230,10 +2246,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            result
-                .events
-                .first()
-                .and_then(|event| event.drawn.as_deref()),
+            result.events.first().and_then(|event| event.drawn),
             Some("brick"),
             "with no deck attached, the opening draw stays a Fire Brick: {}",
             labels(&result.events).join(" | ")
@@ -2268,10 +2281,7 @@ mod tests {
             materials: BTreeMap::new(),
         })
         .unwrap();
-        let drawn = result
-            .events
-            .first()
-            .and_then(|event| event.drawn.as_deref());
+        let drawn = result.events.first().and_then(|event| event.drawn);
         assert!(
             drawn.is_some(),
             "expected a real opening draw: {}",
@@ -2293,10 +2303,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             drawn,
-            again
-                .events
-                .first()
-                .and_then(|event| event.drawn.as_deref()),
+            again.events.first().and_then(|event| event.drawn),
             "same seed and deck must draw the same opening card"
         );
     }
@@ -2329,10 +2336,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            result
-                .events
-                .first()
-                .and_then(|event| event.drawn.as_deref()),
+            result.events.first().and_then(|event| event.drawn),
             Some("ignited_stab"),
             "an explicit remaining-deck order should be used as-is: {}",
             labels(&result.events).join(" | ")
@@ -3603,7 +3607,8 @@ mod tests {
             "End of Enemy End Phase",
             "Wake Up Phase",
         ];
-        let cases: [(&[Card], bool, u8, u8, &[&str]); 3] = [
+        type SolveCase<'a> = (&'a [Card], bool, u8, u8, &'a [&'a str]);
+        let cases: [SolveCase<'_>; 3] = [
             (&drill_three, true, 3, 21, &expected_drill_three),
             (&drill_one, true, 3, 24, &[]),
             (&ally_heavy, true, 3, 25, &[]),
@@ -3623,7 +3628,7 @@ mod tests {
         let (pass, _) = solve_pass(&drill_three, true, 3, &queue, true, ALL_MATERIALS);
         assert_eq!(pass.max_damage, 21);
         assert_eq!(
-            pass.events.first().map(|e| format_line_event(e)).as_deref(),
+            pass.events.first().map(format_line_event).as_deref(),
             Some("Start of Game")
         );
         assert!(

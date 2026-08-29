@@ -839,10 +839,10 @@ impl State {
             let ally = self.allies[index];
             if ally.immortal() || self.ally_has_stealth(ally) {
                 index += 1;
-            } else if let Some(card) = self.remove_ally(index, true) {
-                if let Some(tape) = tape.as_deref_mut() {
-                    crate::line_event::push_ally_gy_death(self, card, TapePhase::EnemyMain, tape);
-                }
+            } else if let Some(card) = self.remove_ally(index, true)
+                && let Some(tape) = tape.as_deref_mut()
+            {
+                crate::line_event::push_ally_gy_death(self, card, TapePhase::EnemyMain, tape);
             }
         }
     }
@@ -949,7 +949,7 @@ impl State {
                     tail
                 });
                 push_unique(&mut orders, {
-                    let mut tail = middle.clone();
+                    let mut tail = middle;
                     tail.push(c0);
                     tail
                 });
@@ -978,7 +978,7 @@ impl State {
                     tail
                 });
                 push_unique(&mut orders, {
-                    let mut tail = middle.clone();
+                    let mut tail = middle;
                     tail.push(c1);
                     tail.push(c0);
                     tail

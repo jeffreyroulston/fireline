@@ -352,29 +352,36 @@ fn drawn_from_key(key: [u8; CARD_COUNT]) -> Vec<Card> {
     drawn
 }
 
-fn solve_sample_hand(
-    drawn: &[Card],
-    request: &DeckEvalRequest,
-    budget: &crate::budget::Budget,
+/// Shared read-only inputs for solving sampled hands. Grouping them keeps the
+/// per-hand call sites readable and under the argument-count lint.
+struct SampleContext<'a, F: FnMut(EvalProgress) -> ControlFlow<()> + Send> {
+    request: &'a DeckEvalRequest,
+    budget: &'a crate::budget::Budget,
     max_turns: u8,
     rollouts: u16,
+    hands_total: u16,
+    on_progress: &'a Mutex<F>,
+    report_in_hand_progress: bool,
+}
+
+fn solve_sample_hand(
+    drawn: &[Card],
     sample_index: u16,
     hands_done: u16,
-    hands_total: u16,
-    on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
-    report_in_hand_progress: bool,
+    ctx: &SampleContext<'_, impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
 ) -> Result<SampleHand, String> {
+    let request = ctx.request;
     let total_rollouts = if request.sim_type == SimType::MonteCarlo {
-        rollouts
+        ctx.rollouts
     } else {
         1
     };
-    if report_in_hand_progress
+    if ctx.report_in_hand_progress
         && report_eval_progress(
-            on_progress,
+            ctx.on_progress,
             EvalProgress {
                 sample: hands_done,
-                total: hands_total,
+                total: ctx.hands_total,
                 rollout: 0,
                 total_rollouts,
             },
@@ -388,24 +395,24 @@ fn solve_sample_hand(
         &SolveRequest {
             hand: hand_ids,
             go_first: request.go_first,
-            max_turns,
+            max_turns: ctx.max_turns,
             sim_type: request.sim_type,
             deck: request.deck.clone(),
             queue: None,
-            rollouts,
+            rollouts: ctx.rollouts,
             seed: request.seed.wrapping_add(u64::from(sample_index) * 17),
-            budget: *budget,
+            budget: *ctx.budget,
             materials: request.materials.clone(),
         },
         |rollout, total_rollouts| {
-            if !report_in_hand_progress {
+            if !ctx.report_in_hand_progress {
                 return ControlFlow::Continue(());
             }
             report_eval_progress(
-                on_progress,
+                ctx.on_progress,
                 EvalProgress {
                     sample: hands_done,
-                    total: hands_total,
+                    total: ctx.hands_total,
                     rollout,
                     total_rollouts,
                 },
@@ -438,28 +445,11 @@ fn solve_one_unique_hand(
     sim_type: SimType,
     key: [u8; CARD_COUNT],
     sample_index: u16,
-    request: &DeckEvalRequest,
-    budget: &crate::budget::Budget,
-    max_turns: u8,
-    rollouts: u16,
     hands_done: u16,
-    hands_total: u16,
-    on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
-    report_in_hand_progress: bool,
+    ctx: &SampleContext<'_, impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
 ) -> Result<((SimType, [u8; CARD_COUNT]), SampleHand), String> {
     let drawn = drawn_from_key(key);
-    let mut sample = solve_sample_hand(
-        &drawn,
-        request,
-        budget,
-        max_turns,
-        rollouts,
-        sample_index,
-        hands_done,
-        hands_total,
-        on_progress,
-        report_in_hand_progress,
-    )?;
+    let mut sample = solve_sample_hand(&drawn, sample_index, hands_done, ctx)?;
     sample.hand = drawn.iter().map(|card| card.id()).collect();
     Ok(((sim_type, key), sample))
 }
@@ -487,23 +477,21 @@ fn solve_unique_hands(
         1
     };
     let report_in_hand_progress = !parallel;
+    let ctx = SampleContext {
+        request,
+        budget,
+        max_turns,
+        rollouts,
+        hands_total: total,
+        on_progress,
+        report_in_hand_progress,
+    };
     if !parallel {
         let mut cache = FxHashMap::default();
         for (index, &(sim_type, key, sample_index)) in unique.iter().enumerate() {
             let hands_done = u16::try_from(index).unwrap_or(u16::MAX);
-            let (cache_key, sample) = solve_one_unique_hand(
-                sim_type,
-                key,
-                sample_index,
-                request,
-                budget,
-                max_turns,
-                rollouts,
-                hands_done,
-                total,
-                on_progress,
-                report_in_hand_progress,
-            )?;
+            let (cache_key, sample) =
+                solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx)?;
             cache.insert(cache_key, sample);
             let n = u16::try_from(index + 1).unwrap_or(u16::MAX);
             if report_eval_progress(
@@ -538,19 +526,7 @@ fn solve_unique_hands(
                     return None;
                 }
                 let hands_done = completed.load(Ordering::Relaxed);
-                let solved = solve_one_unique_hand(
-                    sim_type,
-                    key,
-                    sample_index,
-                    request,
-                    budget,
-                    max_turns,
-                    rollouts,
-                    hands_done,
-                    total,
-                    on_progress,
-                    report_in_hand_progress,
-                );
+                let solved = solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx);
                 let (cache_key, sample) = match solved {
                     Ok(value) => value,
                     Err(_) => {
@@ -853,7 +829,7 @@ fn count_compositions(ranges: &[(u8, u8)], deck_size: u8) -> u64 {
             prefix[index + 1] = prefix[index] + u128::from(dp[index]);
         }
         let mut next = vec![0_u64; size + 1];
-        for sum in 0..=size {
+        for (sum, slot) in next.iter_mut().enumerate() {
             let right = sum as isize - isize::from(lo);
             let left = sum as isize - isize::from(hi);
             if right < 0 {
@@ -863,7 +839,7 @@ fn count_compositions(ranges: &[(u8, u8)], deck_size: u8) -> u64 {
             let right = (right as usize).min(size);
             if left <= right {
                 let total = prefix[right + 1] - prefix[left];
-                next[sum] = u64::try_from(total).unwrap_or(u64::MAX);
+                *slot = u64::try_from(total).unwrap_or(u64::MAX);
             }
         }
         dp = next;

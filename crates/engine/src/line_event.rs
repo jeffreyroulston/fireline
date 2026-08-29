@@ -760,7 +760,7 @@ pub fn format_line_event(event: &LineEvent) -> String {
                         | "uncanny_realization"
                 )
             ) {
-                card_name.clone()
+                card_name
             } else {
                 format!("Activate {card_name}")
             };
@@ -806,10 +806,10 @@ pub fn format_line_event(event: &LineEvent) -> String {
                     s = format!("{s} with {}", weapon_name(Some(w)));
                 }
             }
-            if let Some(kindle) = event.kindle {
-                if kindle > 0 {
-                    s = format!("{s} (Kindle {kindle})");
-                }
+            if let Some(kindle) = event.kindle
+                && kindle > 0
+            {
+                s = format!("{s} (Kindle {kindle})");
             }
             if let Some(bonuses) = &event.bonuses {
                 let mut parts = Vec::new();

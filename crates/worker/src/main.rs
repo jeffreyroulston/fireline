@@ -31,7 +31,9 @@ enum EvaluateStreamEvent {
         rollout: u16,
         total_rollouts: u16,
     },
-    Result(DeckEvalResult),
+    // Boxed: the result payload dwarfs the other variants (serde output is
+    // identical, so the wire contract is unchanged).
+    Result(Box<DeckEvalResult>),
     Error {
         message: String,
     },
@@ -41,7 +43,7 @@ enum EvaluateStreamEvent {
 #[serde(rename_all = "camelCase", tag = "kind")]
 enum OptimizeStreamEvent {
     Progress(OptimizeProgress),
-    Result(OptimizeResult),
+    Result(Box<OptimizeResult>),
     Error { message: String },
 }
 
@@ -140,7 +142,7 @@ async fn evaluate_handler(
         });
         match result {
             Ok(value) => {
-                let event = EvaluateStreamEvent::Result(value);
+                let event = EvaluateStreamEvent::Result(Box::new(value));
                 let _ = tx
                     .blocking_send(serde_json::to_string(&event).expect("serialize result") + "\n");
             }
@@ -177,7 +179,7 @@ async fn optimize_handler(
         });
         match result {
             Ok(value) => {
-                let event = OptimizeStreamEvent::Result(value);
+                let event = OptimizeStreamEvent::Result(Box::new(value));
                 let _ = tx
                     .blocking_send(serde_json::to_string(&event).expect("serialize result") + "\n");
             }
@@ -216,7 +218,7 @@ async fn stream_ndjson(
     let (tx, rx) = mpsc::channel::<String>(32);
     tokio::task::spawn_blocking(move || run(tx));
     let body = axum::body::Body::from_stream(
-        ReceiverStream::new(rx).map(|chunk| Ok::<_, std::convert::Infallible>(chunk)),
+        ReceiverStream::new(rx).map(Ok::<_, std::convert::Infallible>),
     );
     Ok(Response::builder()
         .header("Content-Type", "application/x-ndjson")
