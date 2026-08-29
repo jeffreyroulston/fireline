@@ -109,7 +109,10 @@ async fn solve_handler(
         .try_acquire()
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     request.budget = merge_budget(request.budget, state.budget);
-    ga_fire_engine::solve(&request)
+    // CPU-bound search; keep it off the async runtime threads.
+    tokio::task::spawn_blocking(move || ga_fire_engine::solve(&request))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map(Json)
         .map_err(|_| StatusCode::BAD_REQUEST)
 }
@@ -118,13 +121,16 @@ async fn evaluate_handler(
     State(state): State<AppState>,
     Json(mut request): Json<DeckEvalRequest>,
 ) -> Result<Response, StatusCode> {
-    let _permit = state
+    let permit = state
         .semaphore
         .clone()
         .try_acquire_owned()
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     request.budget = merge_budget(request.budget, state.budget);
     stream_ndjson(move |tx| {
+        // Held until the compute finishes so the concurrency limit covers the
+        // actual work, not just the response setup.
+        let _permit = permit;
         let result = ga_fire_engine::evaluate_with_progress(&request, |progress: EvalProgress| {
             let event = EvaluateStreamEvent::Progress {
                 sample: progress.sample,
@@ -132,26 +138,13 @@ async fn evaluate_handler(
                 rollout: progress.rollout,
                 total_rollouts: progress.total_rollouts,
             };
-            if tx
-                .blocking_send(serde_json::to_string(&event).expect("serialize progress") + "\n")
-                .is_err()
-            {
-                return ControlFlow::Break(());
-            }
-            ControlFlow::Continue(())
+            send_event(&tx, &event)
         });
-        match result {
-            Ok(value) => {
-                let event = EvaluateStreamEvent::Result(Box::new(value));
-                let _ = tx
-                    .blocking_send(serde_json::to_string(&event).expect("serialize result") + "\n");
-            }
-            Err(message) => {
-                let event = EvaluateStreamEvent::Error { message };
-                let _ = tx
-                    .blocking_send(serde_json::to_string(&event).expect("serialize error") + "\n");
-            }
-        }
+        let event = match result {
+            Ok(value) => EvaluateStreamEvent::Result(Box::new(value)),
+            Err(message) => EvaluateStreamEvent::Error { message },
+        };
+        let _ = send_event(&tx, &event);
     })
     .await
 }
@@ -160,37 +153,37 @@ async fn optimize_handler(
     State(state): State<AppState>,
     Json(mut request): Json<OptimizeRequest>,
 ) -> Result<Response, StatusCode> {
-    let _permit = state
+    let permit = state
         .semaphore
         .clone()
         .try_acquire_owned()
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     request.budget = merge_budget(request.budget, state.budget);
     stream_ndjson(move |tx| {
+        let _permit = permit;
         let result = ga_fire_engine::optimize_with_progress(&request, |progress| {
             let event = OptimizeStreamEvent::Progress(progress);
-            if tx
-                .blocking_send(serde_json::to_string(&event).expect("serialize progress") + "\n")
-                .is_err()
-            {
-                return ControlFlow::Break(());
-            }
-            ControlFlow::Continue(())
+            send_event(&tx, &event)
         });
-        match result {
-            Ok(value) => {
-                let event = OptimizeStreamEvent::Result(Box::new(value));
-                let _ = tx
-                    .blocking_send(serde_json::to_string(&event).expect("serialize result") + "\n");
-            }
-            Err(message) => {
-                let event = OptimizeStreamEvent::Error { message };
-                let _ = tx
-                    .blocking_send(serde_json::to_string(&event).expect("serialize error") + "\n");
-            }
-        }
+        let event = match result {
+            Ok(value) => OptimizeStreamEvent::Result(Box::new(value)),
+            Err(message) => OptimizeStreamEvent::Error { message },
+        };
+        let _ = send_event(&tx, &event);
     })
     .await
+}
+
+/// Serialize and send one NDJSON event. A serialization or send failure ends
+/// the stream instead of panicking the blocking task.
+fn send_event(tx: &mpsc::Sender<String>, event: &impl Serialize) -> ControlFlow<()> {
+    let Ok(line) = serde_json::to_string(event) else {
+        return ControlFlow::Break(());
+    };
+    if tx.blocking_send(format!("{line}\n")).is_err() {
+        return ControlFlow::Break(());
+    }
+    ControlFlow::Continue(())
 }
 
 fn default_worker_concurrency() -> usize {
