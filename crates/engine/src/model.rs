@@ -34,6 +34,8 @@ pub struct Ally(u32);
 impl Ally {
     const AWAKE: u32 = 1 << 8;
     const IMMORTAL: u32 = 1 << 9;
+    /// Granted stealth until end of turn (Corhazi Arsonist activation).
+    const STEALTH: u32 = 1 << 10;
     const BUFF_SHIFT: u32 = 16;
 
     pub fn new(card: Card, awake: bool, immortal: bool, attack_buff: u8) -> Self {
@@ -64,6 +66,11 @@ impl Ally {
     }
 
     #[inline]
+    pub fn stealth(self) -> bool {
+        self.0 & Self::STEALTH != 0
+    }
+
+    #[inline]
     pub fn attack_buff(self) -> u8 {
         (self.0 >> Self::BUFF_SHIFT) as u8
     }
@@ -81,6 +88,14 @@ impl Ally {
             self.0 |= Self::IMMORTAL;
         } else {
             self.0 &= !Self::IMMORTAL;
+        }
+    }
+
+    pub fn set_stealth(&mut self, stealth: bool) {
+        if stealth {
+            self.0 |= Self::STEALTH;
+        } else {
+            self.0 &= !Self::STEALTH;
         }
     }
 
@@ -633,11 +648,15 @@ impl State {
             .any(|ally| ally.card() == Card::Arthur)
     }
 
-    /// Stealth for cull: innate stealth, or Assassin class stealth once Zander has leveled.
+    /// Stealth for cull: innate stealth, Assassin class stealth once Zander has leveled,
+    /// a granted stealth-until-end-of-turn buff, or Lurking Assailant while awake.
     /// Not turn-gated — Tweedledum is culled on any turn while `champion_level == 0`.
     pub fn ally_has_stealth(self, ally: Ally) -> bool {
         let card = ally.card();
-        card.is_stealth() || (card.assassin_stealth() && self.is_assassin())
+        card.is_stealth()
+            || (card.assassin_stealth() && self.is_assassin())
+            || ally.stealth()
+            || (card == Card::LurkingAssailant && ally.awake())
     }
 
     pub fn ally_power(self, ally: Ally) -> u8 {
@@ -651,6 +670,10 @@ impl State {
         }
         if card == Card::CaptivatingCutthroat && self.is_assassin() {
             power += 1;
+        }
+        // Balance: +3 while hand and memory hold the same number of cards.
+        if card == Card::Gildas && self.hand_len == self.memory_len {
+            power += 3;
         }
         if card != Card::Arthur && self.arthur_rested() {
             power += 1;
@@ -678,6 +701,20 @@ impl State {
             self.draw_brick();
             Card::Brick
         }
+    }
+
+    /// Draw a card straight into the memory zone (Increasing Danger).
+    pub fn draw_to_memory(&mut self) -> Card {
+        let card = if self.queue_pos < self.queue_len {
+            let card = ALL_CARDS[self.queue[self.queue_pos as usize] as usize];
+            self.queue_pos += 1;
+            card
+        } else {
+            Card::Brick
+        };
+        self.memory[card.index()] = self.memory[card.index()].saturating_add(1);
+        self.memory_len = self.memory_len.saturating_add(1);
+        card
     }
 
     pub fn discard_brick(&mut self) -> bool {
@@ -769,6 +806,7 @@ impl State {
         for ally in &mut self.allies[..self.ally_len as usize] {
             ally.set_awake(true);
             ally.set_immortal(false);
+            ally.set_stealth(false);
             ally.set_attack_buff(0);
         }
         if self.dagger {
@@ -992,7 +1030,11 @@ pub enum Action {
         /// For Imbue cards: pay Fire-only (guarantees imbue when legal).
         /// When false, use normal reserve payment and imbue only if that payment is all Fire.
         imbue: bool,
+        /// Ally index sacrificed as an additional cost (Undeniable Truth).
+        sacrifice_ally: Option<u8>,
     },
+    /// Corhazi Arsonist: remove a preparation counter to gain stealth until end of turn.
+    ActivateArsonist(u8),
     BlazingThrow(Weapon),
     MercenaryBlade,
     BanishCrusaderRing,

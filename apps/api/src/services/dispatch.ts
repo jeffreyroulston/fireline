@@ -19,6 +19,13 @@ type EvaluateEvent =
       rollout?: number;
       totalRollouts?: number;
     }
+  | {
+      kind: "handProgress";
+      sampleIndex: number;
+      phase: "started" | "rollout" | "done";
+      rollout: number;
+      totalRollouts: number;
+    }
   | { kind: "result" } & DeckEvalResult
   | { kind: "error"; message: string };
 
@@ -146,6 +153,14 @@ export class RunDispatcher {
                 : {}),
             };
             runHub.publish(runId, payload);
+          } else if (event.kind === "handProgress") {
+            runHub.publish(runId, {
+              type: "handProgress" as const,
+              sampleIndex: event.sampleIndex,
+              phase: event.phase,
+              rollout: event.rollout,
+              totalRollouts: event.totalRollouts,
+            });
           } else if (event.kind === "error") {
             throw new Error(event.message);
           } else if (event.kind === "result") {

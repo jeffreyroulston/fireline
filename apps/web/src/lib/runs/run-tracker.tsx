@@ -19,6 +19,7 @@ import {
 } from "@/lib/api/client";
 import type { DeckResult, RatioResult } from "@/features/workbench/types";
 import {
+  applyHandProgress,
   dispatchSseEvent,
   mergeOptimizeProgress,
   readSse,
@@ -120,6 +121,7 @@ function initialProgressFromRow(row: ActiveRunRow): OptimizeProgress | null {
       handsSimulated: 0,
       totalHands: total,
       bestScore: 0,
+      hands: [],
       ...(row.rollouts != null && row.rollouts > 1
         ? { rolloutsDone: 0, totalRollouts: row.rollouts }
         : {}),
@@ -200,6 +202,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
                   rolloutsDone:
                     current.progress.totalRollouts ??
                     current.progress.rolloutsDone,
+                  hands: [],
                 }
               : current.progress,
           };
@@ -265,6 +268,28 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
                   progress: mergeOptimizeProgress(current.progress, update),
                 }));
               },
+              onHandProgress: (hand) => {
+                updateRun(runId, (current) => ({
+                  ...current,
+                  status: "running",
+                  progress: current.progress
+                    ? {
+                        ...current.progress,
+                        started: true,
+                        hands: applyHandProgress(current.progress.hands, hand),
+                      }
+                    : {
+                        decksScored: 0,
+                        totalDecks: 0,
+                        legalDecks: 0,
+                        handsSimulated: 0,
+                        totalHands: 0,
+                        bestScore: 0,
+                        started: true,
+                        hands: applyHandProgress(undefined, hand),
+                      },
+                }));
+              },
               onComplete: (result) => {
                 settledRef.current.add(runId);
                 applyComplete(runId, kind, result);
@@ -276,6 +301,9 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
                   status: "failed",
                   error: message,
                   completedAt: new Date().toISOString(),
+                  progress: current.progress
+                    ? { ...current.progress, hands: [] }
+                    : current.progress,
                 }));
                 detachStream(runId);
               },

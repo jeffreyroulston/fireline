@@ -272,6 +272,7 @@ export function useShellSolver({
       handsSimulated: 0,
       totalHands: samples,
       bestScore: 0,
+      hands: [],
       ...(simType === "monte_carlo"
         ? { rolloutsDone: 0, totalRollouts: rollouts }
         : {}),

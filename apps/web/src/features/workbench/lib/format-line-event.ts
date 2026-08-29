@@ -15,6 +15,13 @@ const PLAY_NO_ACTIVATE = new Set([
   "heated_vengeance",
   "vicious_slice",
   "uncanny_realization",
+  "incapacitate",
+  "undeniable_truth",
+  "ignite_fate",
+  "increasing_danger",
+  "reduce_to_ash",
+  "smoke_out",
+  "spark_alight",
 ]);
 
 function weaponName(id: string | null | undefined): string {
@@ -154,6 +161,15 @@ export function formatLineEvent(
           ? cardName
           : `Activate ${cardName}`;
 
+      if (event.card === "increasing_danger") {
+        s =
+          event.drawn && event.memoryDraw
+            ? `Increasing Danger (draw ${short(event.drawn)}, memory ${short(event.memoryDraw)})`
+            : "Increasing Danger";
+      }
+      if (event.card === "undeniable_truth" && event.drawn) {
+        s = `Undeniable Truth (draw ${short(event.drawn)}, +1 prep)`;
+      }
       if (event.prepared === true) {
         if (event.card === "ignited_stab") {
           s = "Ignited Stab (prepared)";
@@ -222,6 +238,8 @@ export function formatLineEvent(
         : "Banish Grand Crusader's Ring (draw)";
     case "sadiBounce":
       return "Sadi bounce for Prep";
+    case "arsonistStealth":
+      return "Corhazi Arsonist gains stealth (−1 prep)";
     case "onDeath":
       return event.drawn
         ? `${name(event.card)} On Death draw (${short(event.drawn)})`
@@ -229,7 +247,9 @@ export function formatLineEvent(
     case "uniqueDies":
       return `Unique: ${name(event.card)} dies`;
     case "sacrifice":
-      return "Peppered Chef sacrifice";
+      return event.card
+        ? `Sacrifice ${name(event.card)}`
+        : "Peppered Chef sacrifice";
     case "onEnterDamage":
       return event.card === "rococo"
         ? "Rococo On-Enter damage"

@@ -16,9 +16,10 @@ mod bindings;
 pub use budget::Budget;
 pub use cards::{CardDef, card_catalog};
 pub use deck::{
-    DeckEvalRequest, DeckEvalResult, EvalProgress, OptimizeProgress, OptimizeRequest,
-    OptimizeResult, Strategy, SwapConfig, count_legal_decks, evaluate, evaluate_with_progress,
-    evaluate_with_serial_progress, hand_threads, optimize, optimize_with_progress,
+    DeckEvalRequest, DeckEvalResult, EvalProgress, HandPhase, HandProgress, OptimizeProgress,
+    OptimizeRequest, OptimizeResult, Strategy, SwapConfig, count_legal_decks, evaluate,
+    evaluate_with_hand_progress, evaluate_with_progress, evaluate_with_serial_progress,
+    hand_threads, optimize, optimize_with_progress,
 };
 pub use error::{EngineError, Result};
 pub use line_event::{

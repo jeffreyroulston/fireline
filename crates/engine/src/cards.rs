@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "ts")]
 use ts_rs::TS;
 
-pub const CARD_COUNT: usize = 37;
+pub const CARD_COUNT: usize = 47;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,6 +46,16 @@ pub enum Card {
     DuchessSixOfHearts = 34,
     WanderingGlaivier = 35,
     FlagrantGuide = 36,
+    Gildas = 37,
+    Incapacitate = 38,
+    LurkingAssailant = 39,
+    UndeniableTruth = 40,
+    CorhaziArsonist = 41,
+    IgniteFate = 42,
+    IncreasingDanger = 43,
+    ReduceToAsh = 44,
+    SmokeOut = 45,
+    SparkAlight = 46,
 }
 
 impl Card {
@@ -93,6 +103,16 @@ impl Card {
             Self::DuchessSixOfHearts => "duchess_six_of_hearts",
             Self::WanderingGlaivier => "wandering_glaivier",
             Self::FlagrantGuide => "flagrant_guide",
+            Self::Gildas => "gildas",
+            Self::Incapacitate => "incapacitate",
+            Self::LurkingAssailant => "lurking_assailant",
+            Self::UndeniableTruth => "undeniable_truth",
+            Self::CorhaziArsonist => "corhazi_arsonist",
+            Self::IgniteFate => "ignite_fate",
+            Self::IncreasingDanger => "increasing_danger",
+            Self::ReduceToAsh => "reduce_to_ash",
+            Self::SmokeOut => "smoke_out",
+            Self::SparkAlight => "spark_alight",
         }
     }
 
@@ -135,6 +155,16 @@ impl Card {
             Self::DuchessSixOfHearts => "Duchess, Six of Hearts",
             Self::WanderingGlaivier => "Wandering Glaivier",
             Self::FlagrantGuide => "Flagrant Guide",
+            Self::Gildas => "Gildas, Chronicler of Aesa",
+            Self::Incapacitate => "Incapacitate",
+            Self::LurkingAssailant => "Lurking Assailant",
+            Self::UndeniableTruth => "Undeniable Truth",
+            Self::CorhaziArsonist => "Corhazi Arsonist",
+            Self::IgniteFate => "Ignite Fate",
+            Self::IncreasingDanger => "Increasing Danger",
+            Self::ReduceToAsh => "Reduce to Ash",
+            Self::SmokeOut => "Smoke Out",
+            Self::SparkAlight => "Spark Alight",
         }
     }
 
@@ -177,6 +207,16 @@ impl Card {
             Self::DuchessSixOfHearts => "Duc6H",
             Self::WanderingGlaivier => "WGlaiv",
             Self::FlagrantGuide => "FGuid",
+            Self::Gildas => "Gilda",
+            Self::Incapacitate => "Incap",
+            Self::LurkingAssailant => "Lurki",
+            Self::UndeniableTruth => "Unden",
+            Self::CorhaziArsonist => "Arson",
+            Self::IgniteFate => "IFate",
+            Self::IncreasingDanger => "IDang",
+            Self::ReduceToAsh => "RtAsh",
+            Self::SmokeOut => "Smoke",
+            Self::SparkAlight => "Spark",
         }
     }
 
@@ -185,7 +225,7 @@ impl Card {
             Self::WoodlandSquirrels => 0,
             Self::DuchessSixOfHearts => 6,
             Self::Brick => 9,
-            Self::Arthur => 4,
+            Self::Arthur | Self::Incapacitate => 4,
             Self::CorhaziCourier
             | Self::Sadi
             | Self::DazzlingCourtesan
@@ -200,7 +240,12 @@ impl Card {
             | Self::Demolition
             | Self::SurgingBolt
             | Self::WanderingGlaivier
-            | Self::FlagrantGuide => 3,
+            | Self::FlagrantGuide
+            | Self::Gildas
+            | Self::LurkingAssailant
+            | Self::CorhaziArsonist
+            | Self::IgniteFate
+            | Self::ReduceToAsh => 3,
             Self::KingdomInformant
             | Self::ClumsyApprentice
             | Self::SableRemnant
@@ -211,14 +256,18 @@ impl Card {
             | Self::PepperedChef
             | Self::PlantedExplosive
             | Self::XiaoQiao
-            | Self::ManicZealot => 2,
+            | Self::ManicZealot
+            | Self::IncreasingDanger
+            | Self::SparkAlight => 2,
             Self::IgnitedStab
             | Self::BlazingThrow
             | Self::MarchHare
             | Self::MarkTheTarget
             | Self::Rococo
             | Self::UncannyRealization
-            | Self::ViciousSlice => 1,
+            | Self::ViciousSlice
+            | Self::UndeniableTruth
+            | Self::SmokeOut => 1,
         }
     }
 
@@ -236,7 +285,9 @@ impl Card {
             | Self::PepperedChef
             | Self::Virgil
             | Self::ViciousSlice
-            | Self::WanderingGlaivier => 2,
+            | Self::WanderingGlaivier
+            | Self::LurkingAssailant
+            | Self::CorhaziArsonist => 2,
             Self::KingdomInformant
             | Self::ClumsyApprentice
             | Self::SableRemnant
@@ -247,7 +298,8 @@ impl Card {
             | Self::XiaoQiao
             | Self::ManicZealot
             | Self::WoodlandSquirrels
-            | Self::FlagrantGuide => 1,
+            | Self::FlagrantGuide
+            | Self::Gildas => 1,
             _ => 0,
         }
     }
@@ -277,6 +329,9 @@ impl Card {
                 | Self::DuchessSixOfHearts
                 | Self::WanderingGlaivier
                 | Self::FlagrantGuide
+                | Self::Gildas
+                | Self::LurkingAssailant
+                | Self::CorhaziArsonist
         )
     }
 
@@ -302,6 +357,13 @@ impl Card {
                 | Self::VermilionDecree
                 | Self::Demolition
                 | Self::SurgingBolt
+                | Self::Incapacitate
+                | Self::UndeniableTruth
+                | Self::IgniteFate
+                | Self::IncreasingDanger
+                | Self::ReduceToAsh
+                | Self::SmokeOut
+                | Self::SparkAlight
         )
     }
 
@@ -319,6 +381,10 @@ impl Card {
                 | Self::Virgil
                 | Self::ViciousSlice
                 | Self::WoodlandSquirrels
+                | Self::Gildas
+                | Self::Incapacitate
+                | Self::LurkingAssailant
+                | Self::UndeniableTruth
         )
     }
 
@@ -332,7 +398,16 @@ impl Card {
     }
 
     pub const fn is_fast(self) -> bool {
-        matches!(self, Self::Virgil | Self::Demolition)
+        matches!(
+            self,
+            Self::Virgil
+                | Self::Demolition
+                | Self::Incapacitate
+                | Self::UndeniableTruth
+                | Self::ReduceToAsh
+                | Self::SmokeOut
+                | Self::SparkAlight
+        )
     }
 
     pub const fn is_stealth(self) -> bool {
@@ -358,13 +433,14 @@ impl Card {
                 | Self::XiaoQiao
                 | Self::Virgil
                 | Self::DuchessSixOfHearts
+                | Self::Gildas
         )
     }
 
     pub const fn floating_memory(self) -> bool {
         matches!(
             self,
-            Self::KingdomInformant | Self::SableRemnant | Self::HotCake
+            Self::KingdomInformant | Self::SableRemnant | Self::HotCake | Self::IgniteFate
         )
     }
 
@@ -434,6 +510,8 @@ impl Card {
             Self::DuchessSixOfHearts => 2,
             Self::WanderingGlaivier => 1,
             Self::FlagrantGuide => 3,
+            Self::Gildas | Self::LurkingAssailant => 3,
+            Self::CorhaziArsonist => 2,
             _ => return None,
         })
     }
@@ -511,9 +589,19 @@ pub const ALL_CARDS: [Card; CARD_COUNT] = [
     Card::DuchessSixOfHearts,
     Card::WanderingGlaivier,
     Card::FlagrantGuide,
+    Card::Gildas,
+    Card::Incapacitate,
+    Card::LurkingAssailant,
+    Card::UndeniableTruth,
+    Card::CorhaziArsonist,
+    Card::IgniteFate,
+    Card::IncreasingDanger,
+    Card::ReduceToAsh,
+    Card::SmokeOut,
+    Card::SparkAlight,
 ];
 
-pub const PLAYABLE_CARDS: [Card; 36] = [
+pub const PLAYABLE_CARDS: [Card; 46] = [
     Card::Arthur,
     Card::KingdomInformant,
     Card::ClumsyApprentice,
@@ -550,6 +638,16 @@ pub const PLAYABLE_CARDS: [Card; 36] = [
     Card::DuchessSixOfHearts,
     Card::WanderingGlaivier,
     Card::FlagrantGuide,
+    Card::Gildas,
+    Card::Incapacitate,
+    Card::LurkingAssailant,
+    Card::UndeniableTruth,
+    Card::CorhaziArsonist,
+    Card::IgniteFate,
+    Card::IncreasingDanger,
+    Card::ReduceToAsh,
+    Card::SmokeOut,
+    Card::SparkAlight,
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -671,6 +769,16 @@ pub fn parse_card(value: &str) -> Option<Card> {
         "duchess_six_of_hearts" => Card::DuchessSixOfHearts,
         "wandering_glaivier" => Card::WanderingGlaivier,
         "flagrant_guide" => Card::FlagrantGuide,
+        "gildas" | "gildas_chronicler_of_aesa" => Card::Gildas,
+        "incapacitate" => Card::Incapacitate,
+        "lurking_assailant" => Card::LurkingAssailant,
+        "undeniable_truth" => Card::UndeniableTruth,
+        "corhazi_arsonist" => Card::CorhaziArsonist,
+        "ignite_fate" => Card::IgniteFate,
+        "increasing_danger" => Card::IncreasingDanger,
+        "reduce_to_ash" => Card::ReduceToAsh,
+        "smoke_out" => Card::SmokeOut,
+        "spark_alight" | "aenean_spark_alight" => Card::SparkAlight,
         _ => return None,
     })
 }

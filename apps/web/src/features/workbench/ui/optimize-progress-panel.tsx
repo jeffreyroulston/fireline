@@ -7,6 +7,7 @@ import {
   progressPercent,
   rolloutProgressPercent,
 } from "../lib/progress-percent";
+import { HandProgressBars } from "./hand-progress-bars";
 
 function resolveRolloutTotal(
   progress: OptimizeProgress | null | undefined,
@@ -50,10 +51,13 @@ export function OptimizeProgressPanel({
   /** Deck-damage MC runs: keep the rollout bar visible for the whole job. */
   monteCarloRollouts?: number;
 }) {
+  const hands = progress?.hands;
+  const showHandBars = (hands?.length ?? 0) > 0;
   const totalRollouts = resolveRolloutTotal(progress, monteCarloRollouts);
   const showRollouts =
-    (monteCarloRollouts ?? 0) > 1 || (progress?.totalRollouts ?? 0) > 1;
-  const handsPercent = showRollouts
+    !showHandBars &&
+    ((monteCarloRollouts ?? 0) > 1 || (progress?.totalRollouts ?? 0) > 1);
+  const handsPercent = showRollouts || showHandBars
     ? handProgressPercent(progress)
     : (percent ?? progressPercent(progress));
   const rolloutsPercent = showRollouts
@@ -92,6 +96,7 @@ export function OptimizeProgressPanel({
         </div>
         <ProgressBar percent={handsPercent} started={progress?.started} />
       </div>
+      {showHandBars && <HandProgressBars hands={hands} />}
       {showRollouts && (
         <div className="grid min-w-0 gap-1.5">
           <div className="flex flex-wrap gap-x-[18px] gap-y-2 font-mono text-[10px] tracking-[0.06em] text-muted uppercase">

@@ -1,5 +1,14 @@
 import type { DeckResult, RatioResult } from "@/features/workbench/types";
 
+export type HandPhase = "started" | "rollout" | "done";
+
+export interface HandProgress {
+  sampleIndex: number;
+  phase: HandPhase;
+  rolloutsDone: number;
+  totalRollouts: number;
+}
+
 export interface OptimizeProgress {
   decksScored: number;
   totalDecks: number;
@@ -11,6 +20,8 @@ export interface OptimizeProgress {
   rolloutsDone?: number;
   /** Monte Carlo: rollouts per opening hand. */
   totalRollouts?: number;
+  /** In-flight opening hands (evaluate runs with concurrent hand progress). */
+  hands?: HandProgress[];
   /** Set once the worker has begun processing (not just queued locally). */
   started?: boolean;
 }

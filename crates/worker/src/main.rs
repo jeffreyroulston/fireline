@@ -6,9 +6,9 @@ use axum::{
     routing::{get, post},
 };
 use ga_fire_engine::{
-    Budget, DeckEvalRequest, DeckEvalResult, ENGINE_VERSION, EvalProgress, OptimizeProgress,
-    OptimizeRequest, OptimizeResult, SimType, SolveRequest, SolveResult, card_catalog,
-    hand_threads,
+    Budget, DeckEvalRequest, DeckEvalResult, ENGINE_VERSION, EvalProgress, HandPhase, HandProgress,
+    OptimizeProgress, OptimizeRequest, OptimizeResult, SimType, SolveRequest, SolveResult,
+    card_catalog, hand_threads,
 };
 use serde::Serialize;
 use std::{net::SocketAddr, ops::ControlFlow, sync::Arc};
@@ -28,6 +28,12 @@ enum EvaluateStreamEvent {
     Progress {
         sample: u16,
         total: u16,
+        rollout: u16,
+        total_rollouts: u16,
+    },
+    HandProgress {
+        sample_index: u16,
+        phase: HandPhase,
         rollout: u16,
         total_rollouts: u16,
     },
@@ -131,15 +137,27 @@ async fn evaluate_handler(
         // Held until the compute finishes so the concurrency limit covers the
         // actual work, not just the response setup.
         let _permit = permit;
-        let result = ga_fire_engine::evaluate_with_progress(&request, |progress: EvalProgress| {
-            let event = EvaluateStreamEvent::Progress {
-                sample: progress.sample,
-                total: progress.total,
-                rollout: progress.rollout,
-                total_rollouts: progress.total_rollouts,
-            };
-            send_event(&tx, &event)
-        });
+        let result = ga_fire_engine::evaluate_with_hand_progress(
+            &request,
+            |progress: EvalProgress| {
+                let event = EvaluateStreamEvent::Progress {
+                    sample: progress.sample,
+                    total: progress.total,
+                    rollout: progress.rollout,
+                    total_rollouts: progress.total_rollouts,
+                };
+                send_event(&tx, &event)
+            },
+            |progress: HandProgress| {
+                let event = EvaluateStreamEvent::HandProgress {
+                    sample_index: progress.sample_index,
+                    phase: progress.phase,
+                    rollout: progress.rollout,
+                    total_rollouts: progress.total_rollouts,
+                };
+                send_event(&tx, &event)
+            },
+        );
         let event = match result {
             Ok(value) => EvaluateStreamEvent::Result(Box::new(value)),
             Err(error) => EvaluateStreamEvent::Error {

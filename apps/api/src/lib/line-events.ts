@@ -47,6 +47,7 @@ export function rowToLineEvent(row: {
     card: row.card_id,
     kindle: (payload.kindle as number | null | undefined) ?? null,
     drawn: row.drawn_id,
+    memoryDraw: (payload.memoryDraw as string | null | undefined) ?? null,
     discarded: row.discarded_id,
     prepared: (payload.prepared as boolean | null | undefined) ?? null,
     imbue: (payload.imbue as boolean | null | undefined) ?? null,

@@ -1,9 +1,10 @@
-import type { OptimizeProgress } from "./types";
+import type { HandPhase, HandProgress, OptimizeProgress } from "./types";
 
 export type { OptimizeProgress };
 
 export interface StreamHandlers {
   onProgress: (progress: OptimizeProgress) => void;
+  onHandProgress?: (hand: HandProgress) => void;
   onComplete: (result: unknown) => void;
   onError: (message: string) => void;
 }
@@ -16,6 +17,55 @@ function asNumber(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function asHandPhase(value: unknown): HandPhase | null {
+  if (value === "started" || value === "rollout" || value === "done") {
+    return value;
+  }
+  return null;
+}
+
+export function coerceHandProgress(
+  data: Record<string, unknown>,
+): HandProgress | null {
+  const sampleIndex = asNumber(data.sampleIndex);
+  const phase = asHandPhase(data.phase);
+  const rollout = asNumber(data.rollout);
+  const totalRollouts = asNumber(data.totalRollouts);
+  if (
+    sampleIndex == null ||
+    phase == null ||
+    rollout == null ||
+    totalRollouts == null
+  ) {
+    return null;
+  }
+  return {
+    sampleIndex,
+    phase,
+    rolloutsDone: rollout,
+    totalRollouts,
+  };
+}
+
+export function applyHandProgress(
+  current: HandProgress[] | undefined,
+  update: HandProgress,
+): HandProgress[] {
+  const hands = current ?? [];
+  if (update.phase === "done") {
+    return hands.filter((hand) => hand.sampleIndex !== update.sampleIndex);
+  }
+  const index = hands.findIndex(
+    (hand) => hand.sampleIndex === update.sampleIndex,
+  );
+  if (index < 0) {
+    return [...hands, update].sort((a, b) => a.sampleIndex - b.sampleIndex);
+  }
+  const next = hands.slice();
+  next[index] = update;
+  return next;
 }
 
 export function coerceOptimizeProgress(
@@ -62,6 +112,7 @@ export function mergeOptimizeProgress(
     ...current,
     ...update,
     totalRollouts: update.totalRollouts ?? current?.totalRollouts,
+    hands: update.hands ?? current?.hands,
     started: true,
   };
 }
@@ -102,6 +153,13 @@ export function dispatchSseEvent(
     const progress = coerceOptimizeProgress(data);
     if (progress) {
       handlers.onProgress(progress);
+    }
+    return false;
+  }
+  if (data.type === "handProgress") {
+    const hand = coerceHandProgress(data);
+    if (hand) {
+      handlers.onHandProgress?.(hand);
     }
     return false;
   }
