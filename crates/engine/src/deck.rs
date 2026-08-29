@@ -53,10 +53,15 @@ pub fn hand_threads(sim_type: SimType) -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|&n| n > 0)
         .unwrap_or(cpus);
+    hand_threads_with(sim_type, requested, mem_available_mb())
+}
+
+/// Pure core of [`hand_threads`], split out so tests stay off process env.
+fn hand_threads_with(sim_type: SimType, requested: usize, mem_available: Option<u64>) -> usize {
     if !sim_uses_heavy_search(sim_type) {
         return requested;
     }
-    let by_ram = mem_available_mb()
+    let by_ram = mem_available
         .map(|mb| usize::try_from((mb / MB_PER_HEAVY_HAND).max(1)).unwrap_or(1))
         .unwrap_or(1);
     requested.min(by_ram)
@@ -1260,16 +1265,17 @@ mod tests {
     }
 
     #[test]
-    fn heavy_hand_threads_respect_rayon_upper_bound() {
-        // SAFETY: test process is single-threaded around this env mutation.
-        unsafe {
-            std::env::set_var("RAYON_NUM_THREADS", "1");
-        }
-        assert_eq!(hand_threads(SimType::MonteCarlo), 1);
-        assert_eq!(hand_threads(SimType::FireBrick), 1);
-        unsafe {
-            std::env::remove_var("RAYON_NUM_THREADS");
-        }
+    fn heavy_hand_threads_are_capped_by_available_ram() {
+        // 4 GiB free allows one heavy hand; 8 GiB allows two.
+        assert_eq!(hand_threads_with(SimType::MonteCarlo, 8, Some(4096)), 1);
+        assert_eq!(hand_threads_with(SimType::MonteCarlo, 8, Some(8192)), 2);
+        assert_eq!(hand_threads_with(SimType::OracleOnly, 8, Some(4096)), 1);
+        assert_eq!(hand_threads_with(SimType::TwoPass, 8, Some(8192)), 2);
+        // Unknown memory (non-Linux) falls back to a single heavy hand.
+        assert_eq!(hand_threads_with(SimType::MonteCarlo, 8, None), 1);
+        // Light sims are never RAM-capped.
+        assert_eq!(hand_threads_with(SimType::FireBrick, 8, Some(1)), 8);
+        assert_eq!(hand_threads_with(SimType::FireBrick, 8, None), 8);
     }
 }
 

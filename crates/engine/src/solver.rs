@@ -423,7 +423,6 @@ fn solve_monte_carlo(
         });
         stats_acc.add_sample(hand, &line_stats);
         rollout_stats.push(line_stats);
-        release_process_memory();
         if on_rollout(done, rollouts).is_break() {
             return Err("cancelled".into());
         }
