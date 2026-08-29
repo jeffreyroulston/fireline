@@ -656,7 +656,7 @@ pub fn format_line_event(event: &LineEvent) -> String {
         }
     };
 
-    let mut label = match event.kind {
+    let label = match event.kind {
         EventKind::Start => {
             if let Some(drawn) = event.drawn {
                 format!("Start of Game (draw {})", short(Some(drawn)))
@@ -927,7 +927,6 @@ pub fn format_line_event(event: &LineEvent) -> String {
     // Corhazi fire ping: if discarded was fire and damage advanced, append.
     // We don't store a flag; leave base label. Stats walk drawn/discarded/damage.
 
-    let _ = &mut label;
     label
 }
 

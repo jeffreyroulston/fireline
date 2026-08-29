@@ -518,22 +518,19 @@ fn solve_unique_hands(
         .num_threads(threads)
         .build()
         .map_err(|err| format!("rayon pool: {err}"))?;
-    let cache: FxHashMap<_, _> = pool.install(|| {
+    // map + collect into Result short-circuits on the first failure, so real
+    // errors (e.g. unknown card) propagate instead of collapsing into
+    // "cancelled".
+    let cache = pool.install(|| {
         unique
             .par_iter()
-            .filter_map(|&(sim_type, key, sample_index)| {
+            .map(|&(sim_type, key, sample_index)| {
                 if cancelled.load(Ordering::Relaxed) {
-                    return None;
+                    return Err("cancelled".into());
                 }
                 let hands_done = completed.load(Ordering::Relaxed);
-                let solved = solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx);
-                let (cache_key, sample) = match solved {
-                    Ok(value) => value,
-                    Err(_) => {
-                        cancelled.store(true, Ordering::Relaxed);
-                        return None;
-                    }
-                };
+                let (cache_key, sample) =
+                    solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx)?;
                 let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
                 if report_eval_progress(
                     on_progress,
@@ -547,15 +544,12 @@ fn solve_unique_hands(
                 .is_break()
                 {
                     cancelled.store(true, Ordering::Relaxed);
-                    return None;
+                    return Err("cancelled".into());
                 }
-                Some((cache_key, sample))
+                Ok((cache_key, sample))
             })
-            .collect()
-    });
-    if cancelled.load(Ordering::Relaxed) {
-        return Err("cancelled".into());
-    }
+            .collect::<Result<FxHashMap<_, _>, String>>()
+    })?;
     Ok(cache)
 }
 

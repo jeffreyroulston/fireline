@@ -48,7 +48,7 @@ struct Search {
 }
 
 impl Search {
-    fn new(_initial: State, glimpse_enabled: bool) -> Self {
+    fn new(glimpse_enabled: bool) -> Self {
         Self {
             memo: FxHashMap::with_capacity_and_hasher(16_384, Default::default()),
             nodes: 0,
@@ -323,10 +323,7 @@ pub fn solve_pass(
     glimpse_enabled: bool,
     materials: u16,
 ) -> (PassResult, crate::stats::LineCardStats) {
-    let mut search = Search::new(
-        State::with_queue_and_materials(hand, go_first, max_turns, queue, materials),
-        glimpse_enabled,
-    );
+    let mut search = Search::new(glimpse_enabled);
     solve_pass_with(&mut search, hand, go_first, max_turns, queue, materials)
 }
 
@@ -409,10 +406,7 @@ fn solve_monte_carlo(
     let mut total_memo = 0;
     let mut stats_acc = crate::stats::DeckStatAccumulator::with_deck_and_materials(hand, materials);
     // Reuse one Search shell; reset() drops the memo table each rollout.
-    let mut search = Search::new(
-        State::with_queue_and_materials(hand, go_first, max_turns, remaining, materials),
-        true,
-    );
+    let mut search = Search::new(true);
 
     if on_rollout(0, rollouts).is_break() {
         return Err("cancelled".into());
