@@ -12,7 +12,7 @@ use crate::{
         Phase, SimType, SolveRequest, SolveResult, State, TwoPassResult, Weapon,
         resolve_materials_bitmask,
     },
-    version::ENGINE_VERSION,
+    random::{Rng, percentile, shuffle_cards},
 };
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
@@ -129,29 +129,6 @@ impl Search {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e3779b97f4a7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-        z ^ (z >> 31)
-    }
-
-    fn index(&mut self, len: usize) -> usize {
-        (self.next() as usize) % len.max(1)
-    }
-}
-
-fn shuffle_cards(values: &mut [Card], rng: &mut Rng) {
-    for index in (1..values.len()).rev() {
-        values.swap(index, rng.index(index + 1));
-    }
-}
-
 pub fn solve(request: &SolveRequest) -> Result<SolveResult> {
     solve_with_progress(request, |_, _| ControlFlow::Continue(()))
 }
@@ -235,20 +212,14 @@ pub fn solve_with_progress(
 
 fn solve_effective(request: &SolveRequest, max_turns: u8, rollouts: u16) -> EffectiveRequest {
     EffectiveRequest {
-        engine_version: ENGINE_VERSION,
         root_seed: request.seed,
         sim_type: Some(request.sim_type),
         deck: request.deck.clone(),
         go_first: Some(request.go_first),
         max_turns: Some(max_turns),
         rollouts: Some(rollouts),
-        samples: None,
-        metric: None,
-        bounds: BTreeMap::new(),
-        deck_size: None,
-        decks: None,
-        strategy: None,
         budget: request.budget,
+        ..Default::default()
     }
 }
 
@@ -259,20 +230,11 @@ fn hand_solve_effective(
     budget: crate::budget::Budget,
 ) -> EffectiveRequest {
     EffectiveRequest {
-        engine_version: ENGINE_VERSION,
-        root_seed: 0,
         sim_type: Some(sim_type),
-        deck: BTreeMap::new(),
         go_first: Some(go_first),
         max_turns: Some(max_turns),
-        rollouts: None,
-        samples: None,
-        metric: None,
-        bounds: BTreeMap::new(),
-        deck_size: None,
-        decks: None,
-        strategy: None,
         budget,
+        ..Default::default()
     }
 }
 
@@ -398,7 +360,7 @@ fn solve_monte_carlo(
     let started = Instant::now();
     let rollouts = config.rollouts;
     let materials = config.materials;
-    let mut rng = Rng(config.seed);
+    let mut rng = Rng::new(config.seed);
     let mut damages = Vec::with_capacity(rollouts as usize);
     let mut samples = Vec::with_capacity(rollouts as usize);
     let mut sample_influences = Vec::with_capacity(rollouts as usize);
@@ -484,7 +446,7 @@ fn oracle_queue(remaining: &[Card], seed: u64, ordered: bool) -> Vec<Card> {
         return remaining.to_vec();
     }
     let mut queue = remaining.to_vec();
-    let mut rng = Rng(seed);
+    let mut rng = Rng::new(seed);
     shuffle_cards(&mut queue, &mut rng);
     queue
 }
@@ -596,7 +558,7 @@ fn fire_brick_opening_queue(request: &SolveRequest, hand: &[Card]) -> Vec<Card> 
     let Ok(mut remaining) = remaining_deck(&request.deck, hand) else {
         return Vec::new();
     };
-    let mut rng = Rng(request.seed);
+    let mut rng = Rng::new(request.seed);
     shuffle_cards(&mut remaining, &mut rng);
     remaining.truncate(1);
     remaining
@@ -640,14 +602,6 @@ fn remaining_deck(deck: &BTreeMap<String, u8>, hand: &[Card]) -> Result<Vec<Card
         ));
     }
     Ok(remaining)
-}
-
-fn percentile(sorted: &[u8], percentile: usize) -> u8 {
-    if sorted.is_empty() {
-        return 0;
-    }
-    let index = ((percentile * sorted.len()) / 100).min(sorted.len() - 1);
-    sorted[index]
 }
 
 fn is_fast_phase(phase: Phase) -> bool {

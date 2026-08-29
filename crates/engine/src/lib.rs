@@ -5,6 +5,7 @@ pub mod error;
 pub mod line_event;
 pub mod model;
 pub mod optimize_strategies;
+mod random;
 pub mod solver;
 pub mod stats;
 pub mod version;

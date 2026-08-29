@@ -1,6 +1,6 @@
 use crate::budget::Budget;
 use crate::cards::{ALL_CARDS, CARD_COUNT, Card};
-use crate::version::EngineVersion;
+use crate::version::{ENGINE_VERSION, EngineVersion};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ts")]
@@ -1047,6 +1047,27 @@ pub struct EffectiveRequest {
     #[cfg_attr(feature = "ts", ts(type = "string | null"))]
     pub strategy: Option<&'static str>,
     pub budget: Budget,
+}
+
+impl Default for EffectiveRequest {
+    fn default() -> Self {
+        Self {
+            engine_version: ENGINE_VERSION,
+            root_seed: 0,
+            sim_type: None,
+            deck: BTreeMap::new(),
+            go_first: None,
+            max_turns: None,
+            rollouts: None,
+            samples: None,
+            metric: None,
+            bounds: BTreeMap::new(),
+            deck_size: None,
+            decks: None,
+            strategy: None,
+            budget: Budget::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]

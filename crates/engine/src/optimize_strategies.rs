@@ -1,12 +1,12 @@
 use crate::{
     deck::{
         DeckEvalRequest, DeckEvalResult, HistoryPoint, Metric, OptimizeProgress, OptimizeRequest,
-        OptimizeResult, RankedDeck, Rng, Strategy, consider_top, count_legal_decks, counts_key,
+        OptimizeResult, RankedDeck, Strategy, consider_top, count_legal_decks, counts_key,
         initial_counts, ranked_decks,
     },
     error::{EngineError, Result},
     model::{Bounds, EffectiveRequest, SimType},
-    version::ENGINE_VERSION,
+    random::Rng,
 };
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
@@ -40,7 +40,6 @@ fn metric_score(result: &DeckEvalResult, metric: Metric) -> f64 {
 
 fn build_effective(request: &OptimizeRequest, target: u32) -> EffectiveRequest {
     EffectiveRequest {
-        engine_version: ENGINE_VERSION,
         root_seed: request.seed,
         sim_type: Some(SimType::FireBrick),
         deck: if request.strategy == Strategy::SwapSweep {
@@ -61,6 +60,7 @@ fn build_effective(request: &OptimizeRequest, target: u32) -> EffectiveRequest {
         decks: Some(target),
         strategy: Some(strategy_label(request.strategy)),
         budget: request.budget,
+        ..Default::default()
     }
 }
 

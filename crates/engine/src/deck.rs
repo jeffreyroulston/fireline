@@ -6,8 +6,8 @@ use crate::{
         DamageDistribution, EffectiveRequest, SimType, SolveRequest, TwoPassResult,
         resolve_materials_bitmask,
     },
+    random::{Rng, percentile, shuffle_cards},
     solver::solve_with_progress,
-    version::ENGINE_VERSION,
 };
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -553,27 +553,6 @@ fn solve_unique_hands(
     Ok(cache)
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct Rng(u64);
-
-impl Rng {
-    pub(crate) fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-
-    pub(crate) fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e3779b97f4a7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-        z ^ (z >> 31)
-    }
-
-    pub(crate) fn index(&mut self, len: usize) -> usize {
-        (self.next() as usize) % len
-    }
-}
-
 pub fn evaluate(request: &DeckEvalRequest) -> Result<DeckEvalResult> {
     evaluate_with_progress(request, |_| ControlFlow::Continue(()))
 }
@@ -622,7 +601,7 @@ fn evaluate_hands(
     let mut draws = Vec::with_capacity(request.samples as usize);
     for sample_index in 0..request.samples {
         let mut shuffled = deck.clone();
-        shuffle(&mut shuffled, &mut rng);
+        shuffle_cards(&mut shuffled, &mut rng);
         let drawn = shuffled[..7].to_vec();
         draws.push(SampleDraw {
             key: hand_key(&drawn),
@@ -739,7 +718,6 @@ fn evaluate_hands(
         states_searched: total_nodes,
         elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
         effective: EffectiveRequest {
-            engine_version: ENGINE_VERSION,
             root_seed: request.seed,
             sim_type: Some(request.sim_type),
             deck: request.deck.clone(),
@@ -747,12 +725,8 @@ fn evaluate_hands(
             max_turns: Some(max_turns),
             rollouts: Some(rollouts),
             samples: Some(request.samples),
-            metric: None,
-            bounds: BTreeMap::new(),
-            deck_size: None,
-            decks: None,
-            strategy: None,
             budget,
+            ..Default::default()
         },
         card_stats: stats_acc.finish(),
         brick_card_stats: if is_two_pass {
@@ -928,20 +902,6 @@ pub(crate) fn initial_counts(
 }
 
 pub use crate::model::Bounds;
-
-fn shuffle(values: &mut [Card], rng: &mut Rng) {
-    for index in (1..values.len()).rev() {
-        values.swap(index, rng.index(index + 1));
-    }
-}
-
-fn percentile(sorted: &[u8], percentile: usize) -> u8 {
-    if sorted.is_empty() {
-        return 0;
-    }
-    let index = ((percentile * sorted.len()) / 100).min(sorted.len() - 1);
-    sorted[index]
-}
 
 #[cfg(test)]
 mod tests {
