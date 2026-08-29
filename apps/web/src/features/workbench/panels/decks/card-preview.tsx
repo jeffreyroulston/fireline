@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import type { CardDef } from "@/lib/engine/types";
 import { cn } from "@/lib/utils/cn";
 import {
@@ -43,7 +50,7 @@ export function DeckCardPreview({
     visibility: "hidden",
   });
 
-  function placePreview() {
+  const placePreview = useCallback(() => {
     const node = previewRef.current;
     if (!node) return;
     const { width, height } = node.getBoundingClientRect();
@@ -60,11 +67,11 @@ export function DeckCardPreview({
       maxHeight: `calc(100vh - ${CARD_PREVIEW_MARGIN * 2}px)`,
       visibility: "visible",
     });
-  }
+  }, [anchor]);
 
   useLayoutEffect(() => {
     placePreview();
-  }, [anchor]);
+  }, [placePreview]);
 
   useEffect(() => {
     function reposition() {
@@ -79,7 +86,7 @@ export function DeckCardPreview({
       window.removeEventListener("resize", reposition);
       window.removeEventListener("scroll", hide, true);
     };
-  }, [anchor, onClose]);
+  }, [placePreview, onClose]);
 
   const traits = cardTraitLines(card);
   const combat =

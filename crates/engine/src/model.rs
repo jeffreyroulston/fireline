@@ -1,6 +1,6 @@
 use crate::budget::Budget;
 use crate::cards::{ALL_CARDS, CARD_COUNT, Card};
-use crate::version::EngineVersion;
+use crate::version::{ENGINE_VERSION, EngineVersion};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "ts")]
@@ -170,65 +170,84 @@ impl Weapon {
 
 pub const WEAPON_COUNT: usize = 4;
 
-/// Search board position. Memo keys hash/compare all fields except `damage`
-/// and the unconsumed draw-queue suffix (`queue[queue_pos..queue_len]`).
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct State {
-    pub hand: [u8; CARD_COUNT],
-    pub memory: [u8; CARD_COUNT],
-    pub hand_len: u8,
-    pub memory_len: u8,
-    pub allies: [Ally; 10],
-    pub ally_len: u8,
-    pub turn: u8,
-    pub max_turns: u8,
-    pub phase: Phase,
-    pub damage: u8,
-    pub fire_gy: u8,
-    pub float_gy: u8,
-    pub gy_total: u8,
-    pub march_hare_gy: u8,
+/// Generates `State` together with its `PartialEq`/`Hash` impls from a single
+/// field list, so the search memo key can never drift out of sync with the
+/// struct: every listed field is hashed and compared.
+///
+/// Excluded from the key: `damage` (the memo stores the best *additional*
+/// damage from a position) and the consumed draw-queue prefix (only
+/// `queue[queue_pos..queue_len]` distinguishes positions).
+macro_rules! define_state {
+    ($($(#[$meta:meta])* $field:ident : $ty:ty),* $(,)?) => {
+        /// Search board position. See `define_state!` for the memo-key contract.
+        #[repr(C)]
+        #[derive(Clone, Copy, Debug)]
+        pub struct State {
+            $($(#[$meta])* pub $field: $ty,)*
+            pub damage: u8,
+            /// Fixed upcoming draws for Monte Carlo / oracle passes. Empty ⇒ fire bricks.
+            pub queue: [u8; DRAW_QUEUE_CAP],
+            pub queue_len: u8,
+        }
+
+        impl PartialEq for State {
+            fn eq(&self, other: &Self) -> bool {
+                $(self.$field == other.$field &&)* self.queue_suffix_eq(other)
+            }
+        }
+
+        impl Eq for State {}
+
+        impl Hash for State {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                $(self.$field.hash(state);)*
+                let pos = self.queue_pos as usize;
+                let len = self.queue_len as usize;
+                for index in pos..len {
+                    self.queue[index].hash(state);
+                }
+            }
+        }
+    };
+}
+
+define_state! {
+    hand: [u8; CARD_COUNT],
+    memory: [u8; CARD_COUNT],
+    hand_len: u8,
+    memory_len: u8,
+    allies: [Ally; 10],
+    ally_len: u8,
+    turn: u8,
+    max_turns: u8,
+    phase: Phase,
+    fire_gy: u8,
+    float_gy: u8,
+    gy_total: u8,
+    march_hare_gy: u8,
     /// Per-card graveyard counts (for Zander level-2 returns and precise banish).
-    pub gy: [u8; CARD_COUNT],
-    pub champion_level: u8,
+    gy: [u8; CARD_COUNT],
+    champion_level: u8,
     /// Tristan, Underhanded has leveled (agility recollect + fast activations at end of turn).
-    pub tristan_leveled: bool,
-    pub champion_awake: bool,
-    pub champion_damaged: bool,
-    pub prep: u8,
-    pub agility: u8,
+    tristan_leveled: bool,
+    champion_awake: bool,
+    champion_damaged: bool,
+    prep: u8,
+    agility: u8,
     /// Durability per weapon type on field (0 = not equipped). [Hammer, Blade, Soulknife, Ripper].
-    pub weapons: [u8; WEAPON_COUNT],
+    weapons: [u8; WEAPON_COUNT],
     /// Assassin's Ripper class bonus (+2 power until end of turn when attacking with Ripper).
-    pub weapon_power_bonus: u8,
-    pub dagger: bool,
-    pub dagger_ready: bool,
+    weapon_power_bonus: u8,
+    dagger: bool,
+    dagger_ready: bool,
     /// Grand Crusader's Ring materialized and on field (must banish from here, not the deck).
-    pub ring: bool,
-    pub amplify: bool,
-    pub materials: u16,
+    ring: bool,
+    amplify: bool,
+    materials: u16,
     /// Hot Cake items currently on the field.
-    pub hot_cake: u8,
-    pub go_first: bool,
-    pub queue_pos: u8,
-    /// Fixed upcoming draws for Monte Carlo / oracle passes. Empty ⇒ fire bricks.
-    pub queue: [u8; DRAW_QUEUE_CAP],
-    pub queue_len: u8,
-}
-
-impl PartialEq for State {
-    fn eq(&self, other: &Self) -> bool {
-        self.memo_key_eq(other)
-    }
-}
-
-impl Eq for State {}
-
-impl Hash for State {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.hash_memo_key(state);
-    }
+    hot_cake: u8,
+    go_first: bool,
+    queue_pos: u8,
 }
 
 impl State {
@@ -293,40 +312,6 @@ impl State {
         }
     }
 
-    fn memo_key_eq(&self, other: &Self) -> bool {
-        self.hand == other.hand
-            && self.memory == other.memory
-            && self.hand_len == other.hand_len
-            && self.memory_len == other.memory_len
-            && self.allies == other.allies
-            && self.ally_len == other.ally_len
-            && self.turn == other.turn
-            && self.max_turns == other.max_turns
-            && self.phase == other.phase
-            && self.fire_gy == other.fire_gy
-            && self.float_gy == other.float_gy
-            && self.gy_total == other.gy_total
-            && self.march_hare_gy == other.march_hare_gy
-            && self.gy == other.gy
-            && self.champion_level == other.champion_level
-            && self.tristan_leveled == other.tristan_leveled
-            && self.champion_awake == other.champion_awake
-            && self.champion_damaged == other.champion_damaged
-            && self.prep == other.prep
-            && self.agility == other.agility
-            && self.weapons == other.weapons
-            && self.weapon_power_bonus == other.weapon_power_bonus
-            && self.dagger == other.dagger
-            && self.dagger_ready == other.dagger_ready
-            && self.ring == other.ring
-            && self.amplify == other.amplify
-            && self.materials == other.materials
-            && self.hot_cake == other.hot_cake
-            && self.go_first == other.go_first
-            && self.queue_pos == other.queue_pos
-            && self.queue_suffix_eq(other)
-    }
-
     fn queue_suffix_eq(&self, other: &Self) -> bool {
         let pos = self.queue_pos as usize;
         let len = self.queue_len as usize;
@@ -341,44 +326,6 @@ impl State {
             }
         }
         true
-    }
-
-    fn hash_memo_key<H: Hasher>(&self, state: &mut H) {
-        self.hand.hash(state);
-        self.memory.hash(state);
-        self.hand_len.hash(state);
-        self.memory_len.hash(state);
-        self.allies.hash(state);
-        self.ally_len.hash(state);
-        self.turn.hash(state);
-        self.max_turns.hash(state);
-        self.phase.hash(state);
-        self.fire_gy.hash(state);
-        self.float_gy.hash(state);
-        self.gy_total.hash(state);
-        self.march_hare_gy.hash(state);
-        self.gy.hash(state);
-        self.champion_level.hash(state);
-        self.tristan_leveled.hash(state);
-        self.champion_awake.hash(state);
-        self.champion_damaged.hash(state);
-        self.prep.hash(state);
-        self.agility.hash(state);
-        self.weapons.hash(state);
-        self.weapon_power_bonus.hash(state);
-        self.dagger.hash(state);
-        self.dagger_ready.hash(state);
-        self.ring.hash(state);
-        self.amplify.hash(state);
-        self.materials.hash(state);
-        self.hot_cake.hash(state);
-        self.go_first.hash(state);
-        self.queue_pos.hash(state);
-        let pos = self.queue_pos as usize;
-        let len = self.queue_len as usize;
-        for index in pos..len {
-            self.queue[index].hash(state);
-        }
     }
 
     #[inline]
@@ -839,10 +786,10 @@ impl State {
             let ally = self.allies[index];
             if ally.immortal() || self.ally_has_stealth(ally) {
                 index += 1;
-            } else if let Some(card) = self.remove_ally(index, true) {
-                if let Some(tape) = tape.as_deref_mut() {
-                    crate::line_event::push_ally_gy_death(self, card, TapePhase::EnemyMain, tape);
-                }
+            } else if let Some(card) = self.remove_ally(index, true)
+                && let Some(tape) = tape.as_deref_mut()
+            {
+                crate::line_event::push_ally_gy_death(self, card, TapePhase::EnemyMain, tape);
             }
         }
     }
@@ -868,9 +815,7 @@ impl State {
     }
 
     pub fn has_weapon(self, weapon: Weapon) -> bool {
-        weapon
-            .slot()
-            .is_some_and(|slot| self.weapons[slot] > 0)
+        weapon.slot().is_some_and(|slot| self.weapons[slot] > 0)
     }
 
     pub fn any_weapon(self) -> bool {
@@ -878,10 +823,7 @@ impl State {
     }
 
     pub fn weapon_durability(self, weapon: Weapon) -> u8 {
-        weapon
-            .slot()
-            .map(|slot| self.weapons[slot])
-            .unwrap_or(0)
+        weapon.slot().map(|slot| self.weapons[slot]).unwrap_or(0)
     }
 
     pub fn weapon_power(self, weapon: Weapon) -> u8 {
@@ -929,11 +871,7 @@ impl State {
         }
     }
 
-    fn glimpse_tail_orders(
-        queue: [u8; DRAW_QUEUE_CAP],
-        pos: usize,
-        len: usize,
-    ) -> Vec<Vec<u8>> {
+    fn glimpse_tail_orders(queue: [u8; DRAW_QUEUE_CAP], pos: usize, len: usize) -> Vec<Vec<u8>> {
         let tail_len = len - pos;
         if tail_len == 0 {
             return vec![Vec::new()];
@@ -958,7 +896,7 @@ impl State {
                     tail
                 });
                 push_unique(&mut orders, {
-                    let mut tail = middle.clone();
+                    let mut tail = middle;
                     tail.push(c0);
                     tail
                 });
@@ -987,7 +925,7 @@ impl State {
                     tail
                 });
                 push_unique(&mut orders, {
-                    let mut tail = middle.clone();
+                    let mut tail = middle;
                     tail.push(c1);
                     tail.push(c0);
                     tail
@@ -1111,6 +1049,27 @@ pub struct EffectiveRequest {
     pub budget: Budget,
 }
 
+impl Default for EffectiveRequest {
+    fn default() -> Self {
+        Self {
+            engine_version: ENGINE_VERSION,
+            root_seed: 0,
+            sim_type: None,
+            deck: BTreeMap::new(),
+            go_first: None,
+            max_turns: None,
+            rollouts: None,
+            samples: None,
+            metric: None,
+            bounds: BTreeMap::new(),
+            deck_size: None,
+            decks: None,
+            strategy: None,
+            budget: Budget::default(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(TS))]
@@ -1167,11 +1126,7 @@ pub fn resolve_materials_bitmask(counts: &BTreeMap<String, u8>) -> u16 {
             _ => 0,
         };
     }
-    if mask == 0 {
-        ALL_MATERIALS
-    } else {
-        mask
-    }
+    if mask == 0 { ALL_MATERIALS } else { mask }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]

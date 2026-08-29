@@ -1,9 +1,13 @@
 use crate::{
     cards::{CARD_COUNT, Card},
+    error::{EngineError, Result},
     line_event::LineEvent,
-    model::{DamageDistribution, EffectiveRequest, SimType, SolveRequest, TwoPassResult, resolve_materials_bitmask},
+    model::{
+        DamageDistribution, EffectiveRequest, SimType, SolveRequest, TwoPassResult,
+        resolve_materials_bitmask,
+    },
+    random::{Rng, percentile, shuffle_cards},
     solver::solve_with_progress,
-    version::ENGINE_VERSION,
 };
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -13,11 +17,171 @@ use ts_rs::TS;
 
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Instant;
 
 use rayon::prelude::*;
+
+/// Observed peak RSS for one Monte Carlo / oracle hand is ~2–3 GiB on full
+/// queues. Cap concurrent heavy hands so 16 GiB machines stay alive.
+const MB_PER_HEAVY_HAND: u64 = 3072;
+
+/// Available memory in MiB, best-effort. Detection order: cgroup v2 limit
+/// (Docker / k8s, including Docker Desktop on WSL2) → cgroup v1 limit →
+/// /proc/meminfo (bare-metal Linux / WSL) → None (e.g. native Windows).
+///
+/// `/proc/meminfo` alone would report the *host* memory inside a container,
+/// over-subscribing relative to the container's actual limit.
+fn mem_available_mb() -> Option<u64> {
+    cgroup_available_mb().or_else(proc_meminfo_available_mb)
+}
+
+/// The cgroup memory limit is fixed for the container's lifetime, so it is
+/// discovered once; the current usage is read per call.
+fn cgroup_available_mb() -> Option<u64> {
+    static LIMIT: OnceLock<Option<u64>> = OnceLock::new();
+    let limit = (*LIMIT.get_or_init(cgroup_limit_bytes))?;
+    let current = cgroup_current_bytes().unwrap_or(0);
+    Some(limit.saturating_sub(current) / (1024 * 1024))
+}
+
+fn parse_cgroup_v2_limit(raw: &str) -> Option<u64> {
+    let raw = raw.trim();
+    if raw == "max" {
+        return None;
+    }
+    raw.parse().ok()
+}
+
+fn parse_cgroup_v1_limit(raw: &str) -> Option<u64> {
+    let bytes: u64 = raw.trim().parse().ok()?;
+    // A sentinel near 2^60 means unlimited.
+    (bytes < (1 << 60)).then_some(bytes)
+}
+
+fn cgroup_limit_bytes() -> Option<u64> {
+    if let Ok(raw) = std::fs::read_to_string("/sys/fs/cgroup/memory.max") {
+        return parse_cgroup_v2_limit(&raw);
+    }
+    if let Ok(raw) = std::fs::read_to_string("/sys/fs/cgroup/memory/memory.limit_in_bytes") {
+        return parse_cgroup_v1_limit(&raw);
+    }
+    None
+}
+
+fn cgroup_current_bytes() -> Option<u64> {
+    if let Ok(raw) = std::fs::read_to_string("/sys/fs/cgroup/memory.current") {
+        return raw.trim().parse().ok();
+    }
+    if let Ok(raw) = std::fs::read_to_string("/sys/fs/cgroup/memory/memory.usage_in_bytes") {
+        return raw.trim().parse().ok();
+    }
+    None
+}
+
+fn proc_meminfo_available_mb() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in status.lines() {
+        let Some(rest) = line.strip_prefix("MemAvailable:") else {
+            continue;
+        };
+        let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+        return Some(kb / 1024);
+    }
+    None
+}
+
+fn sim_uses_heavy_search(sim_type: SimType) -> bool {
+    matches!(
+        sim_type,
+        SimType::MonteCarlo | SimType::OracleOnly | SimType::TwoPass
+    )
+}
+
+/// Threads requested for hand parallelism: `RAYON_NUM_THREADS` if set and
+/// valid, else the CPU count.
+fn requested_threads() -> usize {
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    std::env::var("RAYON_NUM_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(cpus)
+}
+
+/// Hand parallelism for deck eval. `RAYON_NUM_THREADS` is an upper bound.
+/// Monte Carlo / Oracle / Two-pass are also capped by free RAM.
+pub fn hand_threads(sim_type: SimType) -> usize {
+    hand_threads_with(sim_type, requested_threads(), mem_available_mb())
+}
+
+/// Pure core of [`hand_threads`], split out so tests stay off process env.
+fn hand_threads_with(sim_type: SimType, requested: usize, mem_available: Option<u64>) -> usize {
+    if !sim_uses_heavy_search(sim_type) {
+        return requested;
+    }
+    match mem_available {
+        Some(mb) => requested.min(usize::try_from((mb / MB_PER_HEAVY_HAND).max(1)).unwrap_or(1)),
+        // No memory source (native Windows): trust the CPU count rather than
+        // forcing heavy sims to a single thread.
+        None => requested,
+    }
+}
+
+/// Shared pool for deck-eval hand parallelism, sized once from the CPU count
+/// (or `RAYON_NUM_THREADS`). The RAM-based cap is enforced by [`HandGate`]
+/// inside the pool instead of rebuilding differently-sized pools per request.
+fn shared_pool() -> Result<&'static rayon::ThreadPool> {
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    if let Some(pool) = POOL.get() {
+        return Ok(pool);
+    }
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(requested_threads())
+        .build()?;
+    // A concurrent request may win the race; dropping the loser joins its threads.
+    Ok(POOL.get_or_init(|| pool))
+}
+
+/// Bounds how many heavy hands run at once inside the shared pool.
+struct HandGate {
+    free: Mutex<usize>,
+    condvar: Condvar,
+}
+
+impl HandGate {
+    fn new(count: usize) -> Self {
+        Self {
+            free: Mutex::new(count.max(1)),
+            condvar: Condvar::new(),
+        }
+    }
+
+    fn acquire(&self) -> GatePermit<'_> {
+        let mut free = self.free.lock().unwrap_or_else(|err| err.into_inner());
+        while *free == 0 {
+            free = self
+                .condvar
+                .wait(free)
+                .unwrap_or_else(|err| err.into_inner());
+        }
+        *free -= 1;
+        GatePermit(self)
+    }
+}
+
+struct GatePermit<'a>(&'a HandGate);
+
+impl Drop for GatePermit<'_> {
+    fn drop(&mut self) {
+        let mut free = self.0.free.lock().unwrap_or_else(|err| err.into_inner());
+        *free += 1;
+        self.0.condvar.notify_one();
+    }
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -301,60 +465,67 @@ fn drawn_from_key(key: [u8; CARD_COUNT]) -> Vec<Card> {
     drawn
 }
 
-fn solve_sample_hand(
-    drawn: &[Card],
-    request: &DeckEvalRequest,
-    budget: &crate::budget::Budget,
+/// Shared read-only inputs for solving sampled hands. Grouping them keeps the
+/// per-hand call sites readable and under the argument-count lint.
+struct SampleContext<'a, F: FnMut(EvalProgress) -> ControlFlow<()> + Send> {
+    request: &'a DeckEvalRequest,
+    budget: &'a crate::budget::Budget,
     max_turns: u8,
     rollouts: u16,
+    hands_total: u16,
+    on_progress: &'a Mutex<F>,
+    report_in_hand_progress: bool,
+}
+
+fn solve_sample_hand(
+    drawn: &[Card],
     sample_index: u16,
     hands_done: u16,
-    hands_total: u16,
-    on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
-    report_in_hand_progress: bool,
-) -> Result<SampleHand, String> {
+    ctx: &SampleContext<'_, impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
+) -> Result<SampleHand> {
+    let request = ctx.request;
     let total_rollouts = if request.sim_type == SimType::MonteCarlo {
-        rollouts
+        ctx.rollouts
     } else {
         1
     };
-    if report_in_hand_progress
+    if ctx.report_in_hand_progress
         && report_eval_progress(
-            on_progress,
+            ctx.on_progress,
             EvalProgress {
                 sample: hands_done,
-                total: hands_total,
+                total: ctx.hands_total,
                 rollout: 0,
                 total_rollouts,
             },
         )
         .is_break()
     {
-        return Err("cancelled".into());
+        return Err(EngineError::Cancelled);
     }
     let hand_ids = drawn.iter().map(|card| card.id().to_string()).collect();
     let result = solve_with_progress(
         &SolveRequest {
             hand: hand_ids,
             go_first: request.go_first,
-            max_turns,
+            max_turns: ctx.max_turns,
             sim_type: request.sim_type,
             deck: request.deck.clone(),
             queue: None,
-            rollouts,
+            rollouts: ctx.rollouts,
             seed: request.seed.wrapping_add(u64::from(sample_index) * 17),
-            budget: *budget,
+            budget: *ctx.budget,
             materials: request.materials.clone(),
         },
         |rollout, total_rollouts| {
-            if !report_in_hand_progress {
+            if !ctx.report_in_hand_progress {
                 return ControlFlow::Continue(());
             }
             report_eval_progress(
-                on_progress,
+                ctx.on_progress,
                 EvalProgress {
                     sample: hands_done,
-                    total: hands_total,
+                    total: ctx.hands_total,
                     rollout,
                     total_rollouts,
                 },
@@ -387,28 +558,11 @@ fn solve_one_unique_hand(
     sim_type: SimType,
     key: [u8; CARD_COUNT],
     sample_index: u16,
-    request: &DeckEvalRequest,
-    budget: &crate::budget::Budget,
-    max_turns: u8,
-    rollouts: u16,
     hands_done: u16,
-    hands_total: u16,
-    on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
-    report_in_hand_progress: bool,
-) -> Result<((SimType, [u8; CARD_COUNT]), SampleHand), String> {
+    ctx: &SampleContext<'_, impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
+) -> Result<((SimType, [u8; CARD_COUNT]), SampleHand)> {
     let drawn = drawn_from_key(key);
-    let mut sample = solve_sample_hand(
-        &drawn,
-        request,
-        budget,
-        max_turns,
-        rollouts,
-        sample_index,
-        hands_done,
-        hands_total,
-        on_progress,
-        report_in_hand_progress,
-    )?;
+    let mut sample = solve_sample_hand(&drawn, sample_index, hands_done, ctx)?;
     sample.hand = drawn.iter().map(|card| card.id()).collect();
     Ok(((sim_type, key), sample))
 }
@@ -428,7 +582,7 @@ fn solve_unique_hands(
     rollouts: u16,
     on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
     parallel: bool,
-) -> Result<FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand>, String> {
+) -> Result<FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand>> {
     let total = request.samples.max(1);
     let total_rollouts = if request.sim_type == SimType::MonteCarlo {
         rollouts
@@ -436,23 +590,21 @@ fn solve_unique_hands(
         1
     };
     let report_in_hand_progress = !parallel;
+    let ctx = SampleContext {
+        request,
+        budget,
+        max_turns,
+        rollouts,
+        hands_total: total,
+        on_progress,
+        report_in_hand_progress,
+    };
     if !parallel {
         let mut cache = FxHashMap::default();
         for (index, &(sim_type, key, sample_index)) in unique.iter().enumerate() {
             let hands_done = u16::try_from(index).unwrap_or(u16::MAX);
-            let (cache_key, sample) = solve_one_unique_hand(
-                sim_type,
-                key,
-                sample_index,
-                request,
-                budget,
-                max_turns,
-                rollouts,
-                hands_done,
-                total,
-                on_progress,
-                report_in_hand_progress,
-            )?;
+            let (cache_key, sample) =
+                solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx)?;
             cache.insert(cache_key, sample);
             let n = u16::try_from(index + 1).unwrap_or(u16::MAX);
             if report_eval_progress(
@@ -466,7 +618,7 @@ fn solve_unique_hands(
             )
             .is_break()
             {
-                return Err("cancelled".into());
+                return Err(EngineError::Cancelled);
             }
         }
         return Ok(cache);
@@ -474,79 +626,47 @@ fn solve_unique_hands(
 
     let completed = AtomicU16::new(0);
     let cancelled = AtomicBool::new(false);
-    let cache: FxHashMap<_, _> = unique
-        .par_iter()
-        .filter_map(|&(sim_type, key, sample_index)| {
-            if cancelled.load(Ordering::Relaxed) {
-                return None;
-            }
-            let hands_done = completed.load(Ordering::Relaxed);
-            let solved = solve_one_unique_hand(
-                sim_type,
-                key,
-                sample_index,
-                request,
-                budget,
-                max_turns,
-                rollouts,
-                hands_done,
-                total,
-                on_progress,
-                report_in_hand_progress,
-            );
-            let (cache_key, sample) = match solved {
-                Ok(value) => value,
-                Err(_) => {
-                    cancelled.store(true, Ordering::Relaxed);
-                    return None;
+    // The shared pool is CPU-sized; the gate caps concurrent heavy hands to
+    // what free RAM allows right now.
+    let gate = HandGate::new(hand_threads(request.sim_type));
+    let pool = shared_pool()?;
+    // map + collect into Result short-circuits on the first failure, so real
+    // errors (e.g. unknown card) propagate instead of collapsing into
+    // "cancelled".
+    let cache = pool.install(|| {
+        unique
+            .par_iter()
+            .map(|&(sim_type, key, sample_index)| {
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err(EngineError::Cancelled);
                 }
-            };
-            let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
-            if report_eval_progress(
-                on_progress,
-                EvalProgress {
-                    sample: n,
-                    total,
-                    rollout: 0,
-                    total_rollouts,
-                },
-            )
-            .is_break()
-            {
-                cancelled.store(true, Ordering::Relaxed);
-                return None;
-            }
-            Some((cache_key, sample))
-        })
-        .collect();
-    if cancelled.load(Ordering::Relaxed) {
-        return Err("cancelled".into());
-    }
+                let _permit = gate.acquire();
+                let hands_done = completed.load(Ordering::Relaxed);
+                let (cache_key, sample) =
+                    solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx)?;
+                let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                if report_eval_progress(
+                    on_progress,
+                    EvalProgress {
+                        sample: n,
+                        total,
+                        rollout: 0,
+                        total_rollouts,
+                    },
+                )
+                .is_break()
+                {
+                    cancelled.store(true, Ordering::Relaxed);
+                    return Err(EngineError::Cancelled);
+                }
+                Ok((cache_key, sample))
+            })
+            .collect::<Result<FxHashMap<_, _>>>()
+    })?;
     Ok(cache)
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct Rng(u64);
-
-impl Rng {
-    pub(crate) fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-
-    pub(crate) fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e3779b97f4a7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-        z ^ (z >> 31)
-    }
-
-    pub(crate) fn index(&mut self, len: usize) -> usize {
-        (self.next() as usize) % len
-    }
-}
-
-pub fn evaluate(request: &DeckEvalRequest) -> Result<DeckEvalResult, String> {
+pub fn evaluate(request: &DeckEvalRequest) -> Result<DeckEvalResult> {
     evaluate_with_progress(request, |_| ControlFlow::Continue(()))
 }
 
@@ -556,14 +676,14 @@ pub fn evaluate(request: &DeckEvalRequest) -> Result<DeckEvalResult, String> {
 pub fn evaluate_with_serial_progress(
     request: &DeckEvalRequest,
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
-) -> Result<DeckEvalResult, String> {
+) -> Result<DeckEvalResult> {
     evaluate_hands(request, on_progress, false)
 }
 
 pub fn evaluate_with_progress(
     request: &DeckEvalRequest,
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
-) -> Result<DeckEvalResult, String> {
+) -> Result<DeckEvalResult> {
     evaluate_hands(request, on_progress, true)
 }
 
@@ -571,12 +691,14 @@ fn evaluate_hands(
     request: &DeckEvalRequest,
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
     parallel: bool,
-) -> Result<DeckEvalResult, String> {
+) -> Result<DeckEvalResult> {
     let started = Instant::now();
     let budget = request.budget;
     let deck = parse_counts(&request.deck)?;
     if deck.len() < 7 {
-        return Err("deck must contain at least seven recognized cards".into());
+        return Err(EngineError::invalid(
+            "deck must contain at least seven recognized cards",
+        ));
     }
     let max_turns = request
         .max_turns
@@ -592,7 +714,7 @@ fn evaluate_hands(
     let mut draws = Vec::with_capacity(request.samples as usize);
     for sample_index in 0..request.samples {
         let mut shuffled = deck.clone();
-        shuffle(&mut shuffled, &mut rng);
+        shuffle_cards(&mut shuffled, &mut rng);
         let drawn = shuffled[..7].to_vec();
         draws.push(SampleDraw {
             key: hand_key(&drawn),
@@ -623,7 +745,7 @@ fn evaluate_hands(
     )
     .is_break()
     {
-        return Err("cancelled".into());
+        return Err(EngineError::Cancelled);
     }
 
     let cache = solve_unique_hands(
@@ -635,6 +757,13 @@ fn evaluate_hands(
         &on_progress,
         parallel,
     )?;
+
+    let mut remaining_uses: FxHashMap<(SimType, [u8; CARD_COUNT]), u16> = FxHashMap::default();
+    for draw in &draws {
+        *remaining_uses
+            .entry((request.sim_type, draw.key))
+            .or_insert(0) += 1;
+    }
 
     let mut hands = Vec::with_capacity(draws.len());
     let mut damages = Vec::with_capacity(draws.len());
@@ -648,12 +777,24 @@ fn evaluate_hands(
     let mut oracle_stats_acc =
         crate::stats::DeckStatAccumulator::with_deck_and_materials(&deck, materials_mask);
 
+    let mut cache = cache;
     for draw in &draws {
         let cache_key = (request.sim_type, draw.key);
-        let mut sample = cache
-            .get(&cache_key)
-            .cloned()
-            .expect("every draw key was solved");
+        let last = remaining_uses
+            .get_mut(&cache_key)
+            .map(|n| {
+                *n = n.saturating_sub(1);
+                *n == 0
+            })
+            .unwrap_or(true);
+        let mut sample = if last {
+            cache.remove(&cache_key).expect("every draw key was solved")
+        } else {
+            cache
+                .get(&cache_key)
+                .cloned()
+                .expect("every draw key was solved")
+        };
         sample.hand = draw.drawn.iter().map(|card| card.id()).collect();
         total_nodes += sample.nodes;
         damages.push(sample.damage);
@@ -681,7 +822,7 @@ fn evaluate_hands(
     )
     .is_break()
     {
-        return Err("cancelled".into());
+        return Err(EngineError::Cancelled);
     }
 
     let mut sorted = damages.clone();
@@ -709,7 +850,6 @@ fn evaluate_hands(
         states_searched: total_nodes,
         elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
         effective: EffectiveRequest {
-            engine_version: ENGINE_VERSION,
             root_seed: request.seed,
             sim_type: Some(request.sim_type),
             deck: request.deck.clone(),
@@ -717,12 +857,8 @@ fn evaluate_hands(
             max_turns: Some(max_turns),
             rollouts: Some(rollouts),
             samples: Some(request.samples),
-            metric: None,
-            bounds: BTreeMap::new(),
-            deck_size: None,
-            decks: None,
-            strategy: None,
             budget,
+            ..Default::default()
         },
         card_stats: stats_acc.finish(),
         brick_card_stats: if is_two_pass {
@@ -738,12 +874,12 @@ fn evaluate_hands(
     })
 }
 
-pub fn optimize(request: &OptimizeRequest) -> Result<OptimizeResult, String> {
+pub fn optimize(request: &OptimizeRequest) -> Result<OptimizeResult> {
     optimize_with_progress(request, |_| ControlFlow::Continue(()))
 }
 
 /// Number of legal count vectors inside `bounds` that sum to `deck_size`.
-pub fn count_legal_decks(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Result<u64, String> {
+pub fn count_legal_decks(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Result<u64> {
     validate_bounds(bounds, deck_size)?;
     let ranges = bounds
         .values()
@@ -755,7 +891,7 @@ pub fn count_legal_decks(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Re
 pub fn optimize_with_progress(
     request: &OptimizeRequest,
     on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
-) -> Result<OptimizeResult, String> {
+) -> Result<OptimizeResult> {
     crate::optimize_strategies::optimize_with_progress(request, on_progress)
 }
 
@@ -763,23 +899,25 @@ pub(crate) fn counts_key(counts: &BTreeMap<String, u8>) -> Vec<u8> {
     counts.values().copied().collect()
 }
 
-fn validate_bounds(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Result<(), String> {
+fn validate_bounds(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Result<()> {
     if bounds.is_empty() {
-        return Err("bounds must include at least one card".into());
+        return Err(EngineError::invalid(
+            "bounds must include at least one card",
+        ));
     }
     for id in bounds.keys() {
-        crate::cards::parse_card(id).ok_or_else(|| format!("unknown card: {id}"))?;
+        crate::cards::parse_card(id).ok_or_else(|| EngineError::UnknownCard(id.clone()))?;
     }
     let min_total: u16 = bounds.values().map(|bound| u16::from(bound.min)).sum();
     let max_total: u16 = bounds.values().map(|bound| u16::from(bound.max)).sum();
     if u16::from(deck_size) < min_total || u16::from(deck_size) > max_total {
-        return Err(format!(
+        return Err(EngineError::invalid(format!(
             "deck size must be between bound totals {min_total} and {max_total}"
-        ));
+        )));
     }
     for bound in bounds.values() {
         if bound.min > bound.max {
-            return Err("each card minimum must be <= maximum".into());
+            return Err(EngineError::invalid("each card minimum must be <= maximum"));
         }
     }
     Ok(())
@@ -795,7 +933,7 @@ fn count_compositions(ranges: &[(u8, u8)], deck_size: u8) -> u64 {
             prefix[index + 1] = prefix[index] + u128::from(dp[index]);
         }
         let mut next = vec![0_u64; size + 1];
-        for sum in 0..=size {
+        for (sum, slot) in next.iter_mut().enumerate() {
             let right = sum as isize - isize::from(lo);
             let left = sum as isize - isize::from(hi);
             if right < 0 {
@@ -805,7 +943,7 @@ fn count_compositions(ranges: &[(u8, u8)], deck_size: u8) -> u64 {
             let right = (right as usize).min(size);
             if left <= right {
                 let total = prefix[right + 1] - prefix[left];
-                next[sum] = u64::try_from(total).unwrap_or(u64::MAX);
+                *slot = u64::try_from(total).unwrap_or(u64::MAX);
             }
         }
         dp = next;
@@ -860,10 +998,11 @@ pub(crate) fn ranked_decks(
         .collect()
 }
 
-fn parse_counts(counts: &BTreeMap<String, u8>) -> Result<Vec<Card>, String> {
+fn parse_counts(counts: &BTreeMap<String, u8>) -> Result<Vec<Card>> {
     let mut deck = Vec::new();
     for (id, &count) in counts {
-        let card = crate::cards::parse_card(id).ok_or_else(|| format!("unknown card: {id}"))?;
+        let card =
+            crate::cards::parse_card(id).ok_or_else(|| EngineError::UnknownCard(id.clone()))?;
         deck.extend(std::iter::repeat_n(card, count as usize));
     }
     Ok(deck)
@@ -873,7 +1012,7 @@ pub(crate) fn initial_counts(
     bounds: &BTreeMap<String, Bounds>,
     deck_size: u8,
     rng: &mut Rng,
-) -> Result<BTreeMap<String, u8>, String> {
+) -> Result<BTreeMap<String, u8>> {
     validate_bounds(bounds, deck_size)?;
     let min_total: u16 = bounds.values().map(|bound| u16::from(bound.min)).sum();
     let mut counts = bounds
@@ -895,20 +1034,6 @@ pub(crate) fn initial_counts(
 }
 
 pub use crate::model::Bounds;
-
-fn shuffle(values: &mut [Card], rng: &mut Rng) {
-    for index in (1..values.len()).rev() {
-        values.swap(index, rng.index(index + 1));
-    }
-}
-
-fn percentile(sorted: &[u8], percentile: usize) -> u8 {
-    if sorted.is_empty() {
-        return 0;
-    }
-    let index = ((percentile * sorted.len()) / 100).min(sorted.len() - 1);
-    sorted[index]
-}
 
 #[cfg(test)]
 mod tests {
@@ -1206,6 +1331,64 @@ mod tests {
             } else {
                 assert_eq!(stat.damage_when_seen_sum, 0);
             }
+        }
+    }
+
+    #[test]
+    fn heavy_hand_threads_are_capped_by_available_ram() {
+        // 4 GiB free allows one heavy hand; 8 GiB allows two.
+        assert_eq!(hand_threads_with(SimType::MonteCarlo, 8, Some(4096)), 1);
+        assert_eq!(hand_threads_with(SimType::MonteCarlo, 8, Some(8192)), 2);
+        assert_eq!(hand_threads_with(SimType::OracleOnly, 8, Some(4096)), 1);
+        assert_eq!(hand_threads_with(SimType::TwoPass, 8, Some(8192)), 2);
+        // No memory source (native Windows) falls back to the CPU count.
+        assert_eq!(hand_threads_with(SimType::MonteCarlo, 8, None), 8);
+        // Light sims are never RAM-capped.
+        assert_eq!(hand_threads_with(SimType::FireBrick, 8, Some(1)), 8);
+        assert_eq!(hand_threads_with(SimType::FireBrick, 8, None), 8);
+    }
+
+    #[test]
+    fn cgroup_v2_max_is_unlimited() {
+        assert_eq!(parse_cgroup_v2_limit("max\n"), None);
+        assert_eq!(parse_cgroup_v2_limit("  max  "), None);
+    }
+
+    #[test]
+    fn cgroup_v2_limit_parses_bytes() {
+        assert_eq!(parse_cgroup_v2_limit("17179869184\n"), Some(17_179_869_184));
+    }
+
+    #[test]
+    fn cgroup_v1_sentinel_is_unlimited() {
+        assert_eq!(parse_cgroup_v1_limit("9223372036854771712\n"), None);
+        assert_eq!(parse_cgroup_v1_limit("17179869184\n"), Some(17_179_869_184));
+    }
+
+    #[test]
+    fn duplicate_opening_hands_keep_independent_sample_records() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 7),
+            ("kingdom_informant".into(), 1),
+            ("clumsy_apprentice".into(), 1),
+        ]);
+        let result = evaluate(&DeckEvalRequest {
+            deck,
+            samples: 8,
+            go_first: true,
+            max_turns: 1,
+            seed: 1,
+            sim_type: SimType::FireBrick,
+            rollouts: 1,
+            budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
+        })
+        .unwrap();
+        assert_eq!(result.hands.len(), 8);
+        // A 9-card deck with 7 Arthur copies repeats opening hands; each
+        // sample still carries its own drawn-card list.
+        for sample in &result.hands {
+            assert_eq!(sample.hand.len(), 7);
         }
     }
 }

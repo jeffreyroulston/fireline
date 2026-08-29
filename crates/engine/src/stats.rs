@@ -78,7 +78,11 @@ impl LineCardStats {
     ) {
         let before_damage = before.damage;
         match action {
-            Action::PlayAlly { card, flagrant_level, .. } => {
+            Action::PlayAlly {
+                card,
+                flagrant_level,
+                ..
+            } => {
                 self.plays[card.index()] += 1;
                 if let Some(mat) = flagrant_level {
                     if mat == crate::model::MAT_ZANDER {
@@ -194,12 +198,11 @@ impl LineCardStats {
         for event in events {
             let delta = u32::from(event.damage.saturating_sub(prev));
             prev = event.damage;
-            if delta > 0 {
-                if event.kind == EventKind::OnDeath {
-                    if let Some(card) = event.card.and_then(card_from_id) {
-                        self.damage[card.index()] += delta;
-                    }
-                }
+            if delta > 0
+                && event.kind == EventKind::OnDeath
+                && let Some(card) = event.card.and_then(card_from_id)
+            {
+                self.damage[card.index()] += delta;
             }
             self.record_draw_event(event);
         }
@@ -246,10 +249,10 @@ impl LineCardStats {
                     self.record_draw_event(event);
                 }
                 _ => {
-                    if delta > 0 {
-                        if let Some(card) = current {
-                            self.damage[card.index()] += delta;
-                        }
+                    if delta > 0
+                        && let Some(card) = current
+                    {
+                        self.damage[card.index()] += delta;
                     }
                     self.record_draw_event(event);
                 }
@@ -310,8 +313,7 @@ impl LineCardStats {
                 drawn.insert(card.id(), self.drawn[index]);
             }
         }
-        for index in 0..MATERIAL_COUNT {
-            let id = MATERIAL_IDS[index];
+        for (index, &id) in MATERIAL_IDS.iter().enumerate() {
             if self.material_plays[index] > 0 {
                 plays.insert(id, self.material_plays[index]);
             }
@@ -708,7 +710,12 @@ mod tests {
         let mut after = before;
         after.damage = 3;
         let mut stats = LineCardStats::default();
-        stats.record_action(Action::AttackWithWeapon(Weapon::ImpactHammer), before, after, &[]);
+        stats.record_action(
+            Action::AttackWithWeapon(Weapon::ImpactHammer),
+            before,
+            after,
+            &[],
+        );
         assert_eq!(stats.material_attacks[MAT_HAMMER], 1);
         assert_eq!(stats.material_damage[MAT_HAMMER], 3);
         let sparse = stats.to_sparse();

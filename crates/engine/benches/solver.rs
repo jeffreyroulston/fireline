@@ -1,5 +1,9 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use ga_fire_engine::{cards::Card, model::PassResult, solve_pass};
+use ga_fire_engine::{
+    cards::Card,
+    model::{ALL_MATERIALS, PassResult},
+    solve_pass,
+};
 use std::hint::black_box;
 
 const DRILL_THREE: [Card; 7] = [
@@ -39,14 +43,14 @@ fn bench_with_stats(name: &str, c: &mut Criterion, mut solve: impl FnMut() -> Pa
 
 fn fire_brick_drill_three(c: &mut Criterion) {
     bench_with_stats("fire_brick_drill_three", c, || {
-        let (pass, _) = solve_pass(black_box(&DRILL_THREE), true, 3, &[], false);
+        let (pass, _) = solve_pass(black_box(&DRILL_THREE), true, 3, &[], false, ALL_MATERIALS);
         pass
     });
 }
 
 fn fire_brick_ally_heavy(c: &mut Criterion) {
     bench_with_stats("fire_brick_ally_heavy", c, || {
-        let (pass, _) = solve_pass(black_box(&ALLY_HEAVY), true, 3, &[], false);
+        let (pass, _) = solve_pass(black_box(&ALLY_HEAVY), true, 3, &[], false, ALL_MATERIALS);
         pass
     });
 }
@@ -54,7 +58,14 @@ fn fire_brick_ally_heavy(c: &mut Criterion) {
 fn oracle_full_queue(c: &mut Criterion) {
     let queue = full_oracle_queue();
     bench_with_stats("oracle_full_queue_drill_three", c, || {
-        let (pass, _) = solve_pass(black_box(&DRILL_THREE), true, 3, black_box(&queue), true);
+        let (pass, _) = solve_pass(
+            black_box(&DRILL_THREE),
+            true,
+            3,
+            black_box(&queue),
+            true,
+            ALL_MATERIALS,
+        );
         pass
     });
 }

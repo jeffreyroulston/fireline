@@ -248,7 +248,10 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
                       >
                         <div className="mb-1 flex items-baseline justify-between gap-2.5 font-display text-[15px] tracking-[0.03em] uppercase">
                           <strong>{KIND_LABELS[run.kind]}</strong>
-                          <StatusBadge status="complete" />
+                          <StatusBadge
+                            status={run.status}
+                            errorMessage={run.error}
+                          />
                         </div>
                         <p className="mb-1.5 font-mono text-[11px] text-muted">
                           {run.deckName}

@@ -2,6 +2,9 @@
 
 import type { DeckCounts } from "@/lib/engine";
 import type { SavedDeck } from "@/lib/decks";
+import { isUnsuccessfulTerminalStatus } from "@/lib/runs/types";
+import { cn } from "@/lib/utils/cn";
+import { errorBannerClass } from "@/lib/utils/ui-classes";
 import { ActionBar, PanelTopline } from "../ui";
 import {
   CutBudgetPanel,
@@ -47,6 +50,12 @@ export function RatiosTab({
   onCancelOptimize,
   onSaveDecklist,
 }: RatiosTabProps) {
+  const optimizeFailed =
+    Boolean(optimizeRun) &&
+    isUnsuccessfulTerminalStatus(optimizeRun?.status ?? "");
+  const ratioResult =
+    optimizeFailed || optimizeBusy ? null : (optimizeRun?.ratioResult ?? null);
+
   return (
     <div className="grid w-full">
       <PanelTopline kicker="DECK REFINEMENT">
@@ -124,15 +133,19 @@ export function RatiosTab({
             : null
         }
       />
-      {ratio.ratioStrategy === "swapSweep" && optimizeRun?.ratioResult ? (
+      {optimizeFailed && !optimizeBusy ? (
+        <p className={cn(errorBannerClass, "mt-[30px]")} role="alert">
+          {optimizeRun?.error?.trim() || "Ratio lab run failed."}
+        </p>
+      ) : ratio.ratioStrategy === "swapSweep" && ratioResult ? (
         <SwapSweepResults
-          result={optimizeRun.ratioResult}
+          result={ratioResult}
           samples={ratio.ratioSamples}
           onSaveDecklist={onSaveDecklist}
         />
       ) : (
         <RatioResults
-          result={optimizeRun?.ratioResult ?? null}
+          result={ratioResult}
           criteria={ratio.ratioCriteria}
           samples={ratio.ratioSamples}
           onSaveDecklist={onSaveDecklist}

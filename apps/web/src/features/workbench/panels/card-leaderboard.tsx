@@ -44,7 +44,7 @@ const historyLeaderboardTableWrapClass = cn(
 
 const historyLeaderboardPanelClass = cn(
   historyPanelClass,
-  "mt-[18px] pb-2",
+  "pb-2",
 );
 
 const historyLeaderboardSelectableClass =

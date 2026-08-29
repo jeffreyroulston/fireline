@@ -12,3 +12,6 @@ path = "src/main.rs"
 clap = { version = "4", features = ["derive"] }
 ga-fire-engine = { path = "../engine" }
 serde_json = "1"
+
+[lints]
+workspace = true

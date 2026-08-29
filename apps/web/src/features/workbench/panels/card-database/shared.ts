@@ -1,5 +1,5 @@
 import type { VersionGroup } from "@/lib/api/client";
-import { cn, buttonVariants, chipVariants } from "@/lib/utils";
+import { cn, chipVariants } from "@/lib/utils";
 import {
   typeChipDisplay,
   typeChipDisplayMuted,

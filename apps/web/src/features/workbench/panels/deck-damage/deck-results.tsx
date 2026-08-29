@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils/cn";
+import { errorBannerClass } from "@/lib/utils/ui-classes";
 import {
   DamageReadout,
 } from "../../ui";
@@ -26,10 +27,14 @@ const resultRailClass = cn(
 export function DeckResults({
   result,
   busy,
+  failed = false,
+  errorMessage = null,
   onSendToHandSolver,
 }: {
   result: DeckResult | null;
   busy: boolean;
+  failed?: boolean;
+  errorMessage?: string | null;
   onSendToHandSolver: (sample: SampleHand) => void;
 }) {
   const [selectedLeaderboardCard, setSelectedLeaderboardCard] = useState<
@@ -49,6 +54,17 @@ export function DeckResults({
     [sampleHighlights, selectedLeaderboardCard],
   );
 
+  if (failed && !busy) {
+    return (
+      <aside className={resultRailClass} aria-live="polite">
+        <DamageReadout label="EXPECTED DAMAGE" value="—" />
+        <p className={cn(errorBannerClass, "mt-4")} role="alert">
+          {errorMessage?.trim() || "Deck simulation failed."}
+        </p>
+      </aside>
+    );
+  }
+
   if (!result) {
     if (!busy) return null;
 
@@ -66,58 +82,60 @@ export function DeckResults({
 
   return (
     <aside className={resultRailClass} aria-live="polite">
-      <PooledDamagePanel
-        meta={
-          <strong>
-            {SIM_TYPE_LABELS[mode]} · {result.samples} opening hands
-          </strong>
-        }
-        distribution={distribution}
-        bars={bars}
-        simType={mode}
-        cardHighlights={barCardHighlights}
-        liveHands={result.hands}
-        showSendToSolver
-        onSendToHandSolver={onSendToHandSolver}
-        resetKey={`${mode}:${result.samples}:${result.mean}:${result.min}:${result.max}`}
-      />
-      {result.cardStats && result.cardStats.length > 0 && (
-        <CardLeaderboardPanel
-          selectedCardId={selectedLeaderboardCard}
-          onSelectedCardIdChange={setSelectedLeaderboardCard}
-          {...(isTwoPass &&
-          result.brickCardStats &&
-          result.brickCardStats.length > 0 &&
-          result.oracleCardStats &&
-          result.oracleCardStats.length > 0
-            ? {
-                twoPassLeaderboards: {
-                  combined: leaderboardFromCardStats(
-                    result.cardStats,
-                    result.samples * 2,
-                    { hands: result.hands, pass: "combined" },
-                  ),
-                  brick: leaderboardFromCardStats(
-                    result.brickCardStats,
-                    result.samples,
-                    { hands: result.hands, pass: "brick" },
-                  ),
-                  oracle: leaderboardFromCardStats(
-                    result.oracleCardStats,
-                    result.samples,
-                    { hands: result.hands, pass: "oracle" },
-                  ),
-                },
-              }
-            : {
-                leaderboard: leaderboardFromCardStats(
-                  result.cardStats,
-                  result.samples,
-                  { hands: result.hands },
-                ),
-              })}
+      <div className="grid gap-[22px]">
+        <PooledDamagePanel
+          meta={
+            <strong>
+              {SIM_TYPE_LABELS[mode]} · {result.samples} opening hands
+            </strong>
+          }
+          distribution={distribution}
+          bars={bars}
+          simType={mode}
+          cardHighlights={barCardHighlights}
+          liveHands={result.hands}
+          showSendToSolver
+          onSendToHandSolver={onSendToHandSolver}
+          resetKey={`${mode}:${result.samples}:${result.mean}:${result.min}:${result.max}`}
         />
-      )}
+        {result.cardStats && result.cardStats.length > 0 && (
+          <CardLeaderboardPanel
+            selectedCardId={selectedLeaderboardCard}
+            onSelectedCardIdChange={setSelectedLeaderboardCard}
+            {...(isTwoPass &&
+            result.brickCardStats &&
+            result.brickCardStats.length > 0 &&
+            result.oracleCardStats &&
+            result.oracleCardStats.length > 0
+              ? {
+                  twoPassLeaderboards: {
+                    combined: leaderboardFromCardStats(
+                      result.cardStats,
+                      result.samples * 2,
+                      { hands: result.hands, pass: "combined" },
+                    ),
+                    brick: leaderboardFromCardStats(
+                      result.brickCardStats,
+                      result.samples,
+                      { hands: result.hands, pass: "brick" },
+                    ),
+                    oracle: leaderboardFromCardStats(
+                      result.oracleCardStats,
+                      result.samples,
+                      { hands: result.hands, pass: "oracle" },
+                    ),
+                  },
+                }
+              : {
+                  leaderboard: leaderboardFromCardStats(
+                    result.cardStats,
+                    result.samples,
+                    { hands: result.hands },
+                  ),
+                })}
+          />
+        )}
+      </div>
     </aside>
   );
 }

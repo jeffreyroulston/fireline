@@ -4,8 +4,10 @@ import { useEffect, useState } from "react";
 import type { CardId, SolveResult } from "@/lib/engine";
 import { cn } from "@/lib/utils/cn";
 import {
+  AverageDamageStat,
   DamageReadout,
-  StatLine,
+  DistributionSummary,
+  distributionStatItem,
 } from "../../ui";
 import {
   CardLeaderboardPanel,
@@ -96,25 +98,24 @@ export function ResultRail({
         calculating={busy}
       />
       {isMonteCarlo && distribution && (
-        <StatLine
+        <DistributionSummary
           items={[
-            { label: "MEAN", value: distribution.mean.toFixed(1) },
-            {
-              label: "P10",
-              value:
-                distribution.p10 ??
+            distributionStatItem(
+              "p10",
+              distribution.p10 ??
                 percentileFromValues(distribution.damages, 10),
-            },
-            { label: "P90", value: distribution.p90 },
-            {
-              label: "RANGE",
-              value: (
-                <>
-                  {distribution.min}–{distribution.max}
-                </>
-              ),
-            },
+            ),
+            distributionStatItem("p90", distribution.p90),
+            distributionStatItem(
+              "range",
+              <>
+                {distribution.min}–{distribution.max}
+              </>,
+            ),
           ]}
+          average={
+            <AverageDamageStat value={distribution.mean.toFixed(1)} />
+          }
         />
       )}
       {result.cardStats && result.cardStats.length > 0 && (
@@ -150,6 +151,7 @@ export function ResultRail({
         mcIndex={mcIndex}
         onMcIndexChange={setMcIndex}
         showSendToSolver={false}
+        showDamageReadout={false}
         resetKeyPrefix="solve"
       />
     </aside>

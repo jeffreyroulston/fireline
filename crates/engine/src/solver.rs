@@ -1,8 +1,10 @@
+use crate::error::{EngineError, Result};
+#[cfg(test)]
+use crate::line_event::LineEvent;
 use crate::{
     cards::{ALL_CARDS, Card, parse_card},
     line_event::{
-        ActionOp, AttackBonuses, EventFields, EventKind, EventTape, LineEvent, TapePhase,
-        push_ally_gy_death,
+        ActionOp, AttackBonuses, EventFields, EventKind, EventTape, TapePhase, push_ally_gy_death,
     },
     model::{
         Action, DamageDistribution, EffectiveRequest, MAT_BLADE, MAT_DAGGER, MAT_HAMMER, MAT_RING,
@@ -10,9 +12,10 @@ use crate::{
         Phase, SimType, SolveRequest, SolveResult, State, TwoPassResult, Weapon,
         resolve_materials_bitmask,
     },
-    version::ENGINE_VERSION,
+    random::{Rng, percentile, shuffle_cards},
 };
 use rustc_hash::FxHashMap;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::time::Instant;
@@ -46,12 +49,20 @@ struct Search {
 }
 
 impl Search {
-    fn new(_initial: State, glimpse_enabled: bool) -> Self {
+    fn new(glimpse_enabled: bool) -> Self {
         Self {
             memo: FxHashMap::with_capacity_and_hasher(16_384, Default::default()),
             nodes: 0,
             glimpse_enabled,
         }
+    }
+
+    /// Drop memo entries. Replacing the table avoids hashbrown retaining a
+    /// high-water allocation that the system allocator will not return to the OS.
+    fn reset(&mut self, glimpse_enabled: bool) {
+        self.memo = FxHashMap::with_capacity_and_hasher(16_384, Default::default());
+        self.nodes = 0;
+        self.glimpse_enabled = glimpse_enabled;
     }
 
     fn visit(&mut self, state: State) -> Outcome {
@@ -76,7 +87,7 @@ impl Search {
             influence: 0,
         };
         for action in actions(state, self.glimpse_enabled) {
-            let (next, _) = apply(state, action);
+            let next = apply_silent(state, action);
             let outcome = self.visit(next);
             if outcome.better(best) {
                 best = outcome;
@@ -118,30 +129,7 @@ impl Search {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e3779b97f4a7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-        z ^ (z >> 31)
-    }
-
-    fn index(&mut self, len: usize) -> usize {
-        (self.next() as usize) % len.max(1)
-    }
-}
-
-fn shuffle_cards(values: &mut [Card], rng: &mut Rng) {
-    for index in (1..values.len()).rev() {
-        values.swap(index, rng.index(index + 1));
-    }
-}
-
-pub fn solve(request: &SolveRequest) -> Result<SolveResult, String> {
+pub fn solve(request: &SolveRequest) -> Result<SolveResult> {
     solve_with_progress(request, |_, _| ControlFlow::Continue(()))
 }
 
@@ -149,15 +137,15 @@ pub fn solve(request: &SolveRequest) -> Result<SolveResult, String> {
 pub fn solve_with_progress(
     request: &SolveRequest,
     on_rollout: impl FnMut(u16, u16) -> ControlFlow<()>,
-) -> Result<SolveResult, String> {
+) -> Result<SolveResult> {
     if request.hand.len() < 2 || request.hand.len() > 16 {
-        return Err("hand must contain 2–16 cards".to_string());
+        return Err(EngineError::invalid("hand must contain 2–16 cards"));
     }
     let hand = request
         .hand
         .iter()
-        .map(|card| parse_card(card).ok_or_else(|| format!("unknown card: {card}")))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|card| parse_card(card).ok_or_else(|| EngineError::UnknownCard(card.clone())))
+        .collect::<Result<Vec<_>>>()?;
     let max_turns = request
         .max_turns
         .clamp(request.budget.max_turns_min, request.budget.max_turns_max);
@@ -185,9 +173,11 @@ pub fn solve_with_progress(
                 &remaining,
                 request.go_first,
                 max_turns,
-                rollouts,
-                request.seed,
-                materials,
+                MonteCarloConfig {
+                    rollouts,
+                    seed: request.seed,
+                    materials,
+                },
                 on_rollout,
             )?
         }
@@ -222,20 +212,14 @@ pub fn solve_with_progress(
 
 fn solve_effective(request: &SolveRequest, max_turns: u8, rollouts: u16) -> EffectiveRequest {
     EffectiveRequest {
-        engine_version: ENGINE_VERSION,
         root_seed: request.seed,
         sim_type: Some(request.sim_type),
         deck: request.deck.clone(),
         go_first: Some(request.go_first),
         max_turns: Some(max_turns),
         rollouts: Some(rollouts),
-        samples: None,
-        metric: None,
-        bounds: BTreeMap::new(),
-        deck_size: None,
-        decks: None,
-        strategy: None,
         budget: request.budget,
+        ..Default::default()
     }
 }
 
@@ -246,20 +230,11 @@ fn hand_solve_effective(
     budget: crate::budget::Budget,
 ) -> EffectiveRequest {
     EffectiveRequest {
-        engine_version: ENGINE_VERSION,
-        root_seed: 0,
         sim_type: Some(sim_type),
-        deck: BTreeMap::new(),
         go_first: Some(go_first),
         max_turns: Some(max_turns),
-        rollouts: None,
-        samples: None,
-        metric: None,
-        bounds: BTreeMap::new(),
-        deck_size: None,
-        decks: None,
-        strategy: None,
         budget,
+        ..Default::default()
     }
 }
 
@@ -311,13 +286,25 @@ pub fn solve_pass(
     glimpse_enabled: bool,
     materials: u16,
 ) -> (PassResult, crate::stats::LineCardStats) {
+    let mut search = Search::new(glimpse_enabled);
+    solve_pass_with(&mut search, hand, go_first, max_turns, queue, materials)
+}
+
+fn solve_pass_with(
+    search: &mut Search,
+    hand: &[Card],
+    go_first: bool,
+    max_turns: u8,
+    queue: &[Card],
+    materials: u16,
+) -> (PassResult, crate::stats::LineCardStats) {
     let mut initial = State::with_queue_and_materials(hand, go_first, max_turns, queue, materials);
     let opening_draw = if go_first {
         None
     } else {
         Some(initial.draw_unknown())
     };
-    let mut search = Search::new(initial, glimpse_enabled);
+    search.reset(search.glimpse_enabled);
     let best = search.visit(initial);
     let mut tape = EventTape::new();
     tape.push_start(initial, opening_draw);
@@ -326,7 +313,7 @@ pub fn solve_pass(
         line_stats.record_opening_draw(drawn);
     }
     search.reconstruct(initial, best, &mut tape, &mut line_stats);
-    (
+    let result = (
         PassResult {
             max_damage: best.damage,
             end_influence: best.influence,
@@ -336,7 +323,11 @@ pub fn solve_pass(
             card_stats: Vec::new(),
         },
         line_stats,
-    )
+    );
+    // Drop the memo before returning so callers that keep the Search shell
+    // reuse a clean table; trimming happens once per hand, not per pass.
+    search.reset(search.glimpse_enabled);
+    result
 }
 
 fn summarize_line_stats(
@@ -349,18 +340,26 @@ fn summarize_line_stats(
     acc.finish()
 }
 
+/// Knobs for a Monte Carlo solve, grouped to keep the signature readable.
+#[derive(Clone, Copy)]
+struct MonteCarloConfig {
+    rollouts: u16,
+    seed: u64,
+    materials: u16,
+}
+
 fn solve_monte_carlo(
     hand: &[Card],
     remaining: &[Card],
     go_first: bool,
     max_turns: u8,
-    rollouts: u16,
-    seed: u64,
-    materials: u16,
+    config: MonteCarloConfig,
     mut on_rollout: impl FnMut(u16, u16) -> ControlFlow<()>,
-) -> Result<SolveResult, String> {
+) -> Result<SolveResult> {
     let started = Instant::now();
-    let mut rng = Rng(seed);
+    let rollouts = config.rollouts;
+    let materials = config.materials;
+    let mut rng = Rng::new(config.seed);
     let mut damages = Vec::with_capacity(rollouts as usize);
     let mut samples = Vec::with_capacity(rollouts as usize);
     let mut sample_influences = Vec::with_capacity(rollouts as usize);
@@ -368,15 +367,18 @@ fn solve_monte_carlo(
     let mut total_nodes = 0;
     let mut total_memo = 0;
     let mut stats_acc = crate::stats::DeckStatAccumulator::with_deck_and_materials(hand, materials);
+    // Reuse one Search shell; reset() drops the memo table each rollout.
+    let mut search = Search::new(true);
 
     if on_rollout(0, rollouts).is_break() {
-        return Err("cancelled".into());
+        return Err(EngineError::Cancelled);
     }
 
     for done in 1..=rollouts {
         let mut queue = remaining.to_vec();
         shuffle_cards(&mut queue, &mut rng);
-        let (pass, line_stats) = solve_pass(hand, go_first, max_turns, &queue, true, materials);
+        let (pass, line_stats) =
+            solve_pass_with(&mut search, hand, go_first, max_turns, &queue, materials);
         total_nodes += pass.nodes;
         total_memo += pass.memo_entries;
         damages.push(pass.max_damage);
@@ -389,9 +391,12 @@ fn solve_monte_carlo(
         stats_acc.add_sample(hand, &line_stats);
         rollout_stats.push(line_stats);
         if on_rollout(done, rollouts).is_break() {
-            return Err("cancelled".into());
+            return Err(EngineError::Cancelled);
         }
     }
+    // The memo was reset after every rollout; return the freed pages once per
+    // hand so parallel deck eval does not stack arenas across hands.
+    release_process_memory();
 
     let mut sorted = damages.clone();
     sorted.sort_unstable();
@@ -402,15 +407,20 @@ fn solve_monte_carlo(
         .iter()
         .position(|sample| sample.damage == p50)
         .unwrap_or(0);
+    // The median tape is cloned because the distribution keeps every rollout's
+    // events on the wire; the headline stats are moved out instead.
     let headline = samples[median_index].clone();
     let headline_influence = sample_influences.get(median_index).copied().unwrap_or(0);
-    let headline_stats = rollout_stats.get(median_index).cloned().unwrap_or_default();
+    let headline_stats = rollout_stats
+        .into_iter()
+        .nth(median_index)
+        .unwrap_or_default();
 
     Ok(SolveResult {
         sim_type: SimType::MonteCarlo,
         max_damage: headline.damage,
         end_influence: headline_influence,
-        events: headline.events.clone(),
+        events: headline.events,
         nodes: total_nodes,
         memo_entries: total_memo,
         elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
@@ -443,21 +453,21 @@ fn oracle_queue(remaining: &[Card], seed: u64, ordered: bool) -> Vec<Card> {
         return remaining.to_vec();
     }
     let mut queue = remaining.to_vec();
-    let mut rng = Rng(seed);
+    let mut rng = Rng::new(seed);
     shuffle_cards(&mut queue, &mut rng);
     queue
 }
 
-fn remaining_for_solve(request: &SolveRequest, hand: &[Card]) -> Result<Vec<Card>, String> {
+fn remaining_for_solve(request: &SolveRequest, hand: &[Card]) -> Result<Vec<Card>> {
     Ok(remaining_queue(request, hand)?.0)
 }
 
-fn remaining_queue(request: &SolveRequest, hand: &[Card]) -> Result<(Vec<Card>, bool), String> {
+fn remaining_queue(request: &SolveRequest, hand: &[Card]) -> Result<(Vec<Card>, bool)> {
     if let Some(ids) = &request.queue {
         let cards = ids
             .iter()
-            .map(|id| parse_card(id).ok_or_else(|| format!("unknown card in queue: {id}")))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|id| parse_card(id).ok_or_else(|| EngineError::UnknownQueueCard(id.clone())))
+            .collect::<Result<Vec<_>>>()?;
         return Ok((cards, true));
     }
     Ok((remaining_deck(&request.deck, hand)?, false))
@@ -476,6 +486,7 @@ fn solve_two_pass(
     let (mut brick, brick_stats) = solve_pass(hand, go_first, max_turns, &[], false, materials);
     let queue = oracle_queue(remaining, seed, ordered);
     let (mut oracle, oracle_stats) = solve_pass(hand, go_first, max_turns, &queue, true, materials);
+    release_process_memory();
     brick.card_stats = summarize_line_stats(hand, &brick_stats, materials);
     oracle.card_stats = summarize_line_stats(hand, &oracle_stats, materials);
     let mut combined = crate::stats::DeckStatAccumulator::with_deck_and_materials(hand, materials);
@@ -517,6 +528,7 @@ fn solve_oracle_only(
     let started = Instant::now();
     let queue = oracle_queue(remaining, seed, ordered);
     let (pass, line_stats) = solve_pass(hand, go_first, max_turns, &queue, true, materials);
+    release_process_memory();
     SolveResult {
         sim_type: SimType::OracleOnly,
         max_damage: pass.max_damage,
@@ -555,22 +567,21 @@ fn fire_brick_opening_queue(request: &SolveRequest, hand: &[Card]) -> Vec<Card> 
     let Ok(mut remaining) = remaining_deck(&request.deck, hand) else {
         return Vec::new();
     };
-    let mut rng = Rng(request.seed);
+    let mut rng = Rng::new(request.seed);
     shuffle_cards(&mut remaining, &mut rng);
     remaining.truncate(1);
     remaining
 }
 
-fn remaining_deck(deck: &BTreeMap<String, u8>, hand: &[Card]) -> Result<Vec<Card>, String> {
+fn remaining_deck(deck: &BTreeMap<String, u8>, hand: &[Card]) -> Result<Vec<Card>> {
     if deck.is_empty() {
-        return Err(
-            "Monte Carlo, Two-pass, and Oracle need a maindeck so unknown draws can be sampled"
-                .into(),
-        );
+        return Err(EngineError::invalid(
+            "Monte Carlo, Two-pass, and Oracle need a maindeck so unknown draws can be sampled",
+        ));
     }
     let mut counts = BTreeMap::new();
     for (id, &count) in deck {
-        let card = parse_card(id).ok_or_else(|| format!("unknown card in deck: {id}"))?;
+        let card = parse_card(id).ok_or_else(|| EngineError::UnknownDeckCard(id.clone()))?;
         *counts.entry(card).or_insert(0_u8) += count;
     }
 
@@ -595,17 +606,11 @@ fn remaining_deck(deck: &BTreeMap<String, u8>, hand: &[Card]) -> Result<Vec<Card
         remaining.extend(std::iter::repeat_n(card, count as usize));
     }
     if remaining.is_empty() {
-        return Err("no cards remain in the deck after removing the opening hand".into());
+        return Err(EngineError::invalid(
+            "no cards remain in the deck after removing the opening hand",
+        ));
     }
     Ok(remaining)
-}
-
-fn percentile(sorted: &[u8], percentile: usize) -> u8 {
-    if sorted.is_empty() {
-        return 0;
-    }
-    let index = ((percentile * sorted.len()) / 100).min(sorted.len() - 1);
-    sorted[index]
 }
 
 fn is_fast_phase(phase: Phase) -> bool {
@@ -839,36 +844,40 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
         if state.turn == 1 && state.has_material(MAT_DAGGER) {
             result.push(Action::MaterializeDagger);
         }
-        if state.turn >= 1 && state.champion_level == 0 && state.has_material(MAT_ZANDER) {
-            if state.memory_len > 0 || state.float_gy > 0 {
-                if glimpse_enabled && state.queue_pos < state.queue_len {
-                    let layouts = state.glimpse_layout_count();
-                    for layout in 0..layouts {
-                        result.push(Action::MaterializeZanderMemory {
-                            glimpse_layout: Some(layout),
-                        });
-                    }
-                } else {
+        if state.turn >= 1
+            && state.champion_level == 0
+            && state.has_material(MAT_ZANDER)
+            && (state.memory_len > 0 || state.float_gy > 0)
+        {
+            if glimpse_enabled && state.queue_pos < state.queue_len {
+                let layouts = state.glimpse_layout_count();
+                for layout in 0..layouts {
                     result.push(Action::MaterializeZanderMemory {
-                        glimpse_layout: None,
+                        glimpse_layout: Some(layout),
                     });
                 }
+            } else {
+                result.push(Action::MaterializeZanderMemory {
+                    glimpse_layout: None,
+                });
             }
         }
-        if state.turn >= 1 && !state.tristan_leveled && state.has_material(MAT_TRISTAN) {
-            if state.memory_len > 0 || state.float_gy > 0 {
-                if glimpse_enabled && state.queue_pos < state.queue_len {
-                    let layouts = state.glimpse_layout_count();
-                    for layout in 0..layouts {
-                        result.push(Action::MaterializeTristanMemory {
-                            glimpse_layout: Some(layout),
-                        });
-                    }
-                } else {
+        if state.turn >= 1
+            && !state.tristan_leveled
+            && state.has_material(MAT_TRISTAN)
+            && (state.memory_len > 0 || state.float_gy > 0)
+        {
+            if glimpse_enabled && state.queue_pos < state.queue_len {
+                let layouts = state.glimpse_layout_count();
+                for layout in 0..layouts {
                     result.push(Action::MaterializeTristanMemory {
-                        glimpse_layout: None,
+                        glimpse_layout: Some(layout),
                     });
                 }
+            } else {
+                result.push(Action::MaterializeTristanMemory {
+                    glimpse_layout: None,
+                });
             }
         }
         if state.turn >= 1
@@ -1097,11 +1106,42 @@ fn tape_phase(state: &State) -> TapePhase {
     }
 }
 
+#[cfg(test)]
 fn apply(state: State, action: Action) -> (State, Vec<LineEvent>) {
     let mut tape = EventTape::new();
     let next = apply_into(state, action, &mut tape);
     (next, tape.events)
 }
+
+/// Search expansion: mutate the board without allocating combat-tape snapshots.
+fn apply_silent(state: State, action: Action) -> State {
+    thread_local! {
+        static TAPE: RefCell<EventTape> = RefCell::new(EventTape::silent());
+    }
+    TAPE.with(|tape| apply_into(state, action, &mut tape.borrow_mut()))
+}
+
+/// Return freed heap pages to the OS after a heavy solve.
+///
+/// glibc-specific: `malloc_trim` only trims the *main arena*, while rayon
+/// workers allocate in per-thread arenas — expect modest returns, which is
+/// why this runs once per hand rather than per rollout. A musl base image
+/// has no such symbol and would fail to link.
+#[cfg(target_os = "linux")]
+fn release_process_memory() {
+    unsafe {
+        libc_malloc_trim(0);
+    }
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
+    #[link_name = "malloc_trim"]
+    fn libc_malloc_trim(pad: usize) -> i32;
+}
+
+#[cfg(not(target_os = "linux"))]
+fn release_process_memory() {}
 
 fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
     tape.begin_action(ActionOp::from_action(action));
@@ -1434,6 +1474,9 @@ fn apply_weapon_wield_self_damage(state: &mut State, weapon: Weapon, tape: &mut 
     }
 }
 
+// Hot search path: the payload mirrors Action::PlayAlly's fields, and grouping
+// them into a struct would add indirection without clarifying the call sites.
+#[expect(clippy::too_many_arguments)]
 fn play_ally(
     state: &mut State,
     card: Card,
@@ -1450,33 +1493,31 @@ fn play_ally(
     let immortal = arthur;
     let phase = tape_phase(state);
     let mut sacrificed = false;
-    if sacrifice && card == Card::PepperedChef {
-        if let Some(index) = (0..state.ally_len as usize).rev().find(|&index| {
+    if sacrifice
+        && card == Card::PepperedChef
+        && let Some(index) = (0..state.ally_len as usize).rev().find(|&index| {
             let victim = state.allies[index].card();
             victim != Card::Arthur
-        }) {
-            if let Some(victim) = state.remove_ally(index, true) {
-                sacrificed = true;
-                push_ally_gy_death(state, victim, phase, tape);
-                tape.push(*state, phase, EventKind::Sacrifice, EventFields::default());
-            }
-        }
+        })
+        && let Some(victim) = state.remove_ally(index, true)
+    {
+        sacrificed = true;
+        push_ally_gy_death(state, victim, phase, tape);
+        tape.push(*state, phase, EventKind::Sacrifice, EventFields::default());
     }
     // Unique: playing a second copy kills the one already on the board.
-    if card.is_unique() {
-        if let Some(index) =
+    if card.is_unique()
+        && let Some(index) =
             (0..state.ally_len as usize).find(|&index| state.allies[index].card() == card)
-        {
-            if let Some(victim) = state.remove_ally(index, true) {
-                push_ally_gy_death(state, victim, phase, tape);
-                tape.push(
-                    *state,
-                    phase,
-                    EventKind::UniqueDies,
-                    EventFields::card(victim),
-                );
-            }
-        }
+        && let Some(victim) = state.remove_ally(index, true)
+    {
+        push_ally_gy_death(state, victim, phase, tape);
+        tape.push(
+            *state,
+            phase,
+            EventKind::UniqueDies,
+            EventFields::card(victim),
+        );
     }
     state.add_ally(card, !arthur, immortal);
     let mut fields = EventFields::card(card).with_kindle(kindle);
@@ -1584,18 +1625,18 @@ fn attack_ally(state: &mut State, index: usize, tape: &mut EventTape) {
             EventFields::default(),
         );
     }
-    if matches!(card, Card::HastyMessenger | Card::RedHare) {
-        if let Some(discarded) = state.discard_for_effect() {
-            let drawn = state.draw_unknown();
-            tape.push(
-                *state,
-                TapePhase::Main,
-                EventKind::OnAttackDraw,
-                EventFields::default()
-                    .with_discarded(discarded)
-                    .with_drawn(drawn),
-            );
-        }
+    if matches!(card, Card::HastyMessenger | Card::RedHare)
+        && let Some(discarded) = state.discard_for_effect()
+    {
+        let drawn = state.draw_unknown();
+        tape.push(
+            *state,
+            TapePhase::Main,
+            EventKind::OnAttackDraw,
+            EventFields::default()
+                .with_discarded(discarded)
+                .with_drawn(drawn),
+        );
     }
     if card == Card::CorhaziCourier && state.is_assassin() {
         let drawn = state.draw_unknown();
@@ -1795,13 +1836,23 @@ fn level_tristan(state: &mut State, tape: &mut EventTape, phase: TapePhase) {
     state.tristan_leveled = true;
     state.champion_level = 1;
     state.prep = state.prep.saturating_add(1);
-    tape.push(*state, phase, EventKind::LevelTristan, EventFields::default());
+    tape.push(
+        *state,
+        phase,
+        EventKind::LevelTristan,
+        EventFields::default(),
+    );
 }
 
 fn level_zander(state: &mut State, tape: &mut EventTape, phase: TapePhase) {
     state.champion_level = 1;
     state.prep = state.prep.saturating_add(1);
-    tape.push(*state, phase, EventKind::LevelZander, EventFields::default());
+    tape.push(
+        *state,
+        phase,
+        EventKind::LevelZander,
+        EventFields::default(),
+    );
 }
 
 fn level_zander2(
@@ -1812,7 +1863,12 @@ fn level_zander2(
 ) {
     state.champion_level = 2;
     state.prep = state.prep.saturating_add(2);
-    tape.push(*state, phase, EventKind::LevelZander2, EventFields::default());
+    tape.push(
+        *state,
+        phase,
+        EventKind::LevelZander2,
+        EventFields::default(),
+    );
     if let Some(card) = gy_return {
         state.prep = state.prep.saturating_sub(1);
         state.remove_one_from_gy(card);
@@ -1999,7 +2055,10 @@ mod tests {
         assert!(state.glimpse_layout_count() >= 2);
         let mut reordered = state;
         reordered.apply_glimpse_layout(1);
-        assert_eq!(reordered.queue[reordered.queue_pos as usize], Card::IgnitedStab as u8);
+        assert_eq!(
+            reordered.queue[reordered.queue_pos as usize],
+            Card::IgnitedStab as u8
+        );
     }
 
     #[test]
@@ -2113,16 +2172,9 @@ mod tests {
             Card::RedHare,
             Card::PepperedChef,
         ];
-        let (pass, stats) = solve_pass(
-            &hand,
-            false,
-            2,
-            &[Card::IgnitedStab],
-            false,
-            ALL_MATERIALS,
-        );
+        let (pass, stats) = solve_pass(&hand, false, 2, &[Card::IgnitedStab], false, ALL_MATERIALS);
         assert_eq!(
-            pass.events.first().and_then(|event| event.drawn.as_deref()),
+            pass.events.first().and_then(|event| event.drawn),
             Some("ignited_stab"),
             "{}",
             labels(&pass.events).join(" | ")
@@ -2158,10 +2210,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            result
-                .events
-                .first()
-                .and_then(|event| event.drawn.as_deref()),
+            result.events.first().and_then(|event| event.drawn),
             Some("brick"),
             "with no deck attached, the opening draw stays a Fire Brick: {}",
             labels(&result.events).join(" | ")
@@ -2196,10 +2245,7 @@ mod tests {
             materials: BTreeMap::new(),
         })
         .unwrap();
-        let drawn = result
-            .events
-            .first()
-            .and_then(|event| event.drawn.as_deref());
+        let drawn = result.events.first().and_then(|event| event.drawn);
         assert!(
             drawn.is_some(),
             "expected a real opening draw: {}",
@@ -2221,10 +2267,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             drawn,
-            again
-                .events
-                .first()
-                .and_then(|event| event.drawn.as_deref()),
+            again.events.first().and_then(|event| event.drawn),
             "same seed and deck must draw the same opening card"
         );
     }
@@ -2257,10 +2300,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            result
-                .events
-                .first()
-                .and_then(|event| event.drawn.as_deref()),
+            result.events.first().and_then(|event| event.drawn),
             Some("ignited_stab"),
             "an explicit remaining-deck order should be used as-is: {}",
             labels(&result.events).join(" | ")
@@ -2715,7 +2755,9 @@ mod tests {
 
         let legal = actions(after_pass, false);
         assert!(
-            !legal.iter().any(|action| matches!(action, Action::TristanRecollect)),
+            !legal
+                .iter()
+                .any(|action| matches!(action, Action::TristanRecollect)),
             "recollect needs 3 memory cards: {legal:?}"
         );
         assert!(
@@ -2971,7 +3013,9 @@ mod tests {
         assert_eq!(after.prep, 1, "{steps:?}");
         assert_eq!(after.memory_len, 3, "{steps:?}");
         assert!(
-            !steps.iter().any(|step| step.kind.as_str() == "floatForZander"),
+            !steps
+                .iter()
+                .any(|step| step.kind.as_str() == "floatForZander"),
             "Flagrant Guide level should not pay memory: {steps:?}"
         );
         assert!(
@@ -3073,17 +3117,15 @@ mod tests {
             s.champion_level = 0;
             s
         };
-        assert!(
-            !actions(unleveled, false).iter().any(|action| {
-                matches!(
-                    action,
-                    Action::PlayAlly {
-                        flagrant_level: Some(MAT_ZANDER_2),
-                        ..
-                    }
-                )
-            })
-        );
+        assert!(!actions(unleveled, false).iter().any(|action| {
+            matches!(
+                action,
+                Action::PlayAlly {
+                    flagrant_level: Some(MAT_ZANDER_2),
+                    ..
+                }
+            )
+        }));
     }
 
     #[test]
@@ -3118,9 +3160,9 @@ mod tests {
         assert!(after.has(Card::IgnitedStab), "{steps:?}");
         assert_eq!(after.gy_count(Card::IgnitedStab), 0, "{steps:?}");
         assert!(
-            steps.iter().any(|step| {
-                format_line_event(step) == "Zander, Deft Executor (+2 prep)"
-            }),
+            steps
+                .iter()
+                .any(|step| { format_line_event(step) == "Zander, Deft Executor (+2 prep)" }),
             "{steps:?}"
         );
         assert!(
@@ -3152,9 +3194,9 @@ mod tests {
         assert_eq!(after.memory_len, 0);
         assert_eq!(after.phase, Phase::Main);
         assert!(
-            steps.iter().any(|step| {
-                format_line_event(step) == "Materialize Assassin's Ripper"
-            }),
+            steps
+                .iter()
+                .any(|step| { format_line_event(step) == "Materialize Assassin's Ripper" }),
             "{steps:?}"
         );
     }
@@ -3190,9 +3232,9 @@ mod tests {
         let (after, steps) = apply(state, Action::AttackWithWeapon(Weapon::AssassinsRipper));
         assert_eq!(after.damage, 3, "{steps:?}");
         assert!(
-            steps.iter().any(|step| {
-                format_line_event(step) == "Attack with Assassin's Ripper"
-            }),
+            steps
+                .iter()
+                .any(|step| { format_line_event(step) == "Attack with Assassin's Ripper" }),
             "{steps:?}"
         );
     }
@@ -3292,9 +3334,9 @@ mod tests {
         assert_eq!(after_blade.phase, Phase::Main);
         assert!(after_blade.has_weapon(Weapon::MercenaryBlade));
         assert!(
-            steps.iter().any(|step| {
-                format_line_event(step) == "Materialize Mercenary's Blade (prep)"
-            }),
+            steps
+                .iter()
+                .any(|step| { format_line_event(step) == "Materialize Mercenary's Blade (prep)" }),
             "{steps:?}"
         );
     }
@@ -3325,9 +3367,9 @@ mod tests {
         assert!(!after_mate.has_material(MAT_RING));
         assert_eq!(after_mate.phase, Phase::Main);
         assert!(
-            mate_steps.iter().any(|step| {
-                format_line_event(step) == "Materialize Grand Crusader's Ring"
-            }),
+            mate_steps
+                .iter()
+                .any(|step| { format_line_event(step) == "Materialize Grand Crusader's Ring" }),
             "{mate_steps:?}"
         );
 
@@ -3529,7 +3571,8 @@ mod tests {
             "End of Enemy End Phase",
             "Wake Up Phase",
         ];
-        let cases: [(&[Card], bool, u8, u8, &[&str]); 3] = [
+        type SolveCase<'a> = (&'a [Card], bool, u8, u8, &'a [&'a str]);
+        let cases: [SolveCase<'_>; 3] = [
             (&drill_three, true, 3, 21, &expected_drill_three),
             (&drill_one, true, 3, 24, &[]),
             (&ally_heavy, true, 3, 25, &[]),
@@ -3549,7 +3592,7 @@ mod tests {
         let (pass, _) = solve_pass(&drill_three, true, 3, &queue, true, ALL_MATERIALS);
         assert_eq!(pass.max_damage, 21);
         assert_eq!(
-            pass.events.first().map(|e| format_line_event(e)).as_deref(),
+            pass.events.first().map(format_line_event).as_deref(),
             Some("Start of Game")
         );
         assert!(
@@ -4086,7 +4129,7 @@ mod tests {
             materials: BTreeMap::new(),
         });
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("need a maindeck"),);
+        assert!(result.unwrap_err().to_string().contains("need a maindeck"));
     }
 
     #[test]
@@ -4125,7 +4168,7 @@ mod tests {
 
     #[test]
     fn tristan_assassin_matches_zander_on_b1a069b5_hand() {
-        use crate::model::{resolve_materials_bitmask, ALL_MATERIALS};
+        use crate::model::{ALL_MATERIALS, resolve_materials_bitmask};
         use std::collections::BTreeMap;
 
         let hand = [
@@ -4163,4 +4206,3 @@ mod tests {
         );
     }
 }
-

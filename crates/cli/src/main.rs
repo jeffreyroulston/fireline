@@ -60,8 +60,9 @@ fn run() -> Result<String, String> {
                 rollouts: 12,
                 seed: 42,
                 budget: Default::default(),
+                materials: BTreeMap::new(),
             };
-            let result = solve(&request)?;
+            let result = solve(&request).map_err(|error| error.to_string())?;
             if json {
                 return serde_json::to_string(&result).map_err(|error| error.to_string());
             }
@@ -95,11 +96,11 @@ fn run() -> Result<String, String> {
         }
         Command::Evaluate { request } => {
             let input = fs::read_to_string(request).map_err(|error| error.to_string())?;
-            evaluate_json(&input)
+            evaluate_json(&input).map_err(|error| error.to_string())
         }
         Command::Optimize { request } => {
             let input = fs::read_to_string(request).map_err(|error| error.to_string())?;
-            optimize_json(&input)
+            optimize_json(&input).map_err(|error| error.to_string())
         }
     }
 }

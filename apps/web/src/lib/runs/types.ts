@@ -47,6 +47,8 @@ export interface TrackedRun {
   deckResult: DeckResult | null;
   ratioResult: RatioResult | null;
   error: string | null;
+  /** ISO timestamp when available; used to pick the latest terminal run per deck. */
+  completedAt: string | null;
 }
 
 export interface QueueRunItem {
@@ -73,6 +75,19 @@ export function isTerminalRunStatus(status: string): boolean {
     status === "interrupted" ||
     status === "cancelled"
   );
+}
+
+/** Failed / interrupted / cancelled — keep these ahead of stale complete results. */
+export function isUnsuccessfulTerminalStatus(status: string): boolean {
+  return (
+    status === "failed" ||
+    status === "interrupted" ||
+    status === "cancelled"
+  );
+}
+
+export function isFinishedQueueStatus(status: string): boolean {
+  return status === "complete" || isUnsuccessfulTerminalStatus(status);
 }
 
 export function queueSummaryLabel(

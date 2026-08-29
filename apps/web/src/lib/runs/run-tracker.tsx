@@ -44,7 +44,9 @@ import type {
 } from "./types";
 import {
   aggregateWorkerState,
+  isFinishedQueueStatus,
   isLiveRunStatus,
+  isUnsuccessfulTerminalStatus,
   queueSummaryLabel,
 } from "./types";
 
@@ -101,6 +103,7 @@ function trackedRunFromItem(
     deckResult: existing?.deckResult ?? null,
     ratioResult: existing?.ratioResult ?? null,
     error: row.error_message ?? existing?.error ?? null,
+    completedAt: row.completed_at ?? existing?.completedAt ?? null,
   };
 }
 
@@ -189,6 +192,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
             ...current,
             status: "complete",
             deckResult: result as DeckResult,
+            completedAt: new Date().toISOString(),
             progress: current.progress
               ? {
                   ...current.progress,
@@ -213,6 +217,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
           ...current,
           status: "complete",
           ratioResult: ratio,
+          completedAt: new Date().toISOString(),
           progress: current.progress
             ? {
                 ...current.progress,
@@ -270,6 +275,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
                   ...current,
                   status: "failed",
                   error: message,
+                  completedAt: new Date().toISOString(),
                 }));
                 detachStream(runId);
               },
@@ -284,6 +290,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
               ...current,
               status: "failed",
               error: "Lost connection to the run stream.",
+              completedAt: new Date().toISOString(),
             }));
             detachStream(runId);
           }
@@ -298,6 +305,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
               error instanceof Error
                 ? error.message
                 : "Lost connection to the run stream.",
+            completedAt: new Date().toISOString(),
           }));
           detachStream(runId);
         }
@@ -309,9 +317,21 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
   const hydrateCompletedRun = useCallback(
     async (runId: string) => {
       const response = (await fetchRun(runId)) as FetchRunResponse;
+      if (response.run.status !== "complete") {
+        updateRun(runId, (current) => ({
+          ...current,
+          status: response.run.status,
+          error: response.run.error_message ?? current.error,
+          completedAt: response.run.completed_at ?? current.completedAt,
+          deckResult: null,
+          ratioResult: null,
+        }));
+        return;
+      }
       updateRun(runId, (current) => ({
         ...current,
         status: "complete",
+        completedAt: response.run.completed_at ?? current.completedAt,
         deckResult:
           current.kind === "evaluate" ? hydrateDeckResult(response) : null,
         ratioResult:
@@ -359,6 +379,15 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
             trackedRunFromItem(item, existing?.progress ?? null, existing),
           );
         }
+        // Keep local failures until dismissed so a sync cannot revive stale results.
+        for (const [id, run] of current) {
+          if (next.has(id) || dismissed.has(id)) {
+            continue;
+          }
+          if (isUnsuccessfulTerminalStatus(run.status)) {
+            next.set(id, run);
+          }
+        }
         return next;
       });
 
@@ -377,6 +406,9 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
 
       for (const item of queue.finished) {
         if (dismissed.has(item.run.id)) {
+          continue;
+        }
+        if (item.run.status !== "complete") {
           continue;
         }
         const existing = runsRef.current.get(item.run.id);
@@ -447,6 +479,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
         deckResult: null,
         ratioResult: null,
         error: null,
+        completedAt: null,
       };
       setRuns((current) => {
         const next = new Map(current);
@@ -511,7 +544,9 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
   const clearQueue = useCallback(async () => {
     const snapshot = runsMapToArray(runsRef.current);
     const live = snapshot.filter((run) => isLiveRunStatus(run.status));
-    const finished = snapshot.filter((run) => run.status === "complete");
+    const finished = snapshot.filter((run) =>
+      isFinishedQueueStatus(run.status),
+    );
 
     await Promise.all(live.map((run) => cancelRun(run.id)));
 
@@ -542,7 +577,8 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
   const finishedRuns = useMemo(
     () =>
       runsArray.filter(
-        (run) => run.status === "complete" && !dismissedRunIds.has(run.id),
+        (run) =>
+          isFinishedQueueStatus(run.status) && !dismissedRunIds.has(run.id),
       ),
     [dismissedRunIds, runsArray],
   );
@@ -567,11 +603,22 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
       if (live.length > 0) {
         return live[live.length - 1] ?? null;
       }
-      const complete = matches.filter((run) => run.status === "complete");
-      if (complete.length > 0) {
-        return complete[0] ?? null;
+      const terminal = matches.filter((run) =>
+        isFinishedQueueStatus(run.status),
+      );
+      if (terminal.length === 0) {
+        return null;
       }
-      return null;
+      // Latest terminal run wins, so a failure replaces prior results and a
+      // later success replaces a failure.
+      return [...terminal].sort((a, b) => {
+        const aAt = a.completedAt ?? "";
+        const bAt = b.completedAt ?? "";
+        if (aAt !== bAt) {
+          return bAt.localeCompare(aAt);
+        }
+        return b.id.localeCompare(a.id);
+      })[0] ?? null;
     },
     [runsArray],
   );

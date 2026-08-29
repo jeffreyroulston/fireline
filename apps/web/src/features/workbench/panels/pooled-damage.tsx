@@ -13,7 +13,13 @@ import {
 } from "./pooled-damage-bars";
 import { cn } from "@/lib/utils/cn";
 import { statSpanClass } from "@/lib/utils/stat-classes";
-import { SectionHeading, StatLine } from "../ui";
+import {
+  AverageDamageStat,
+  DistributionStatLabel,
+  DistributionSummary,
+  SectionHeading,
+  distributionStatItem,
+} from "../ui";
 import {
   damageMatchesRange,
   parseDamageRange,
@@ -119,19 +125,11 @@ function CompareStatLine({
   compare: PooledDistribution;
 }) {
   return (
-    <div className={historyCompareStatLineClass}>
-      <span className={statSpanClass("mean")}>
-        <small>MEAN</small>
-        <b className={historyComparePairClass}>
-          <em className="is-baseline">{baseline.mean.toFixed(1)}</em>
-          <em className="is-compare">{compare.mean.toFixed(1)}</em>
-        </b>
-        <i className={cn(historyDeltaClass, deltaToneClass(compare.mean - baseline.mean))}>
-          {formatSigned(compare.mean - baseline.mean, 1)}
-        </i>
-      </span>
+    <div className={cn(historyCompareStatLineClass, "border-b border-border")}>
       <span className={statSpanClass("p10")}>
-        <small>P10</small>
+        <small>
+          <DistributionStatLabel stat="p10" />
+        </small>
         <b className={historyComparePairClass}>
           <em className="is-baseline">{baseline.p10}</em>
           <em className="is-compare">{compare.p10}</em>
@@ -141,7 +139,9 @@ function CompareStatLine({
         </i>
       </span>
       <span className={statSpanClass("p50")}>
-        <small>P50</small>
+        <small>
+          <DistributionStatLabel stat="p50" />
+        </small>
         <b className={historyComparePairClass}>
           <em className="is-baseline">{baseline.p50}</em>
           <em className="is-compare">{compare.p50}</em>
@@ -151,7 +151,9 @@ function CompareStatLine({
         </i>
       </span>
       <span className={statSpanClass("p90")}>
-        <small>P90</small>
+        <small>
+          <DistributionStatLabel stat="p90" />
+        </small>
         <b className={historyComparePairClass}>
           <em className="is-baseline">{baseline.p90}</em>
           <em className="is-compare">{compare.p90}</em>
@@ -161,7 +163,9 @@ function CompareStatLine({
         </i>
       </span>
       <span className={statSpanClass("range")}>
-        <small>RANGE</small>
+        <small>
+          <DistributionStatLabel stat="range" />
+        </small>
         <b className={historyComparePairClass}>
           <em className="is-baseline">
             {baseline.min}–{baseline.max}
@@ -180,7 +184,9 @@ function CompareStatLine({
         </i>
       </span>
       <span className={statSpanClass("influence")}>
-        <small>END INF</small>
+        <small>
+          <DistributionStatLabel stat="influence" />
+        </small>
         <b className={historyComparePairClass}>
           <em className="is-baseline">
             {formatOptionalStat(baseline.meanEndInfluence, 1)}
@@ -209,6 +215,25 @@ function CompareStatLine({
             : "—"}
         </i>
       </span>
+      <AverageDamageStat
+        className="ml-auto py-0"
+        value={
+          <span className="grid gap-0.5 [&_em]:font-display [&_em]:text-[clamp(32px,4vw,48px)] [&_em]:font-semibold [&_em]:not-italic [&_em]:leading-[1.05] [&_.is-baseline]:text-primary-dark [&_.is-compare]:text-secondary-dark">
+            <em className="is-baseline">{baseline.mean.toFixed(1)}</em>
+            <em className="is-compare">{compare.mean.toFixed(1)}</em>
+          </span>
+        }
+        after={
+          <i
+            className={cn(
+              historyDeltaClass,
+              deltaToneClass(compare.mean - baseline.mean),
+            )}
+          >
+            {formatSigned(compare.mean - baseline.mean, 1)}
+          </i>
+        }
+      />
     </div>
   );
 }
@@ -292,9 +317,12 @@ export function PooledDamagePanel({
   const mcIndex = fetched.mcIndex;
   const setMcIndex = fetched.setMcIndex;
 
+  const firstBarKey = bars[0]?.key;
+  const lastBarKey = bars.at(-1)?.key;
+
   useEffect(() => {
     setSelectedKey(null);
-  }, [resetKey, bars.length, bars[0]?.key, bars.at(-1)?.key]);
+  }, [resetKey, bars.length, firstBarKey, lastBarKey]);
 
   useEffect(() => {
     setMcIndex(null);
@@ -327,7 +355,7 @@ export function PooledDamagePanel({
       : null;
 
   return (
-    <section className={cn(historyPanelClass, "mb-[18px]")}>
+    <section className={historyPanelClass}>
       <SectionHeading
         className={historyPooledHeadingClass}
         title={title}
@@ -348,25 +376,25 @@ export function PooledDamagePanel({
           />
         </>
       ) : (
-        <StatLine
+        <DistributionSummary
           items={[
-            { label: "MEAN", value: distribution.mean.toFixed(1) },
-            { label: "P10", value: distribution.p10 },
-            { label: "P50", value: distribution.p50 },
-            { label: "P90", value: distribution.p90 },
-            {
-              label: "RANGE",
-              value: (
-                <>
-                  {distribution.min}–{distribution.max}
-                </>
-              ),
-            },
-            {
-              label: "END INF",
-              value: formatOptionalStat(distribution.meanEndInfluence, 1),
-            },
+            distributionStatItem("p10", distribution.p10),
+            distributionStatItem("p50", distribution.p50),
+            distributionStatItem("p90", distribution.p90),
+            distributionStatItem(
+              "range",
+              <>
+                {distribution.min}–{distribution.max}
+              </>,
+            ),
+            distributionStatItem(
+              "influence",
+              formatOptionalStat(distribution.meanEndInfluence, 1),
+            ),
           ]}
+          average={
+            <AverageDamageStat value={distribution.mean.toFixed(1)} />
+          }
         />
       )}
 

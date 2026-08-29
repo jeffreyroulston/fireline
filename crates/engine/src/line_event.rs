@@ -372,6 +372,8 @@ pub struct EventTape {
     last_memory: Vec<&'static str>,
     last_allies: Vec<&'static str>,
     has_snapshot: bool,
+    /// When false, skip zone snapshots and event storage (search expansion path).
+    recording: bool,
 }
 
 impl EventTape {
@@ -384,6 +386,21 @@ impl EventTape {
             last_memory: Vec::new(),
             last_allies: Vec::new(),
             has_snapshot: false,
+            recording: true,
+        }
+    }
+
+    /// Reused for search expansion so millions of apply calls do not allocate tapes.
+    pub fn silent() -> Self {
+        Self {
+            events: Vec::new(),
+            action_index: 0,
+            op: ActionOp::Start,
+            last_hand: Vec::new(),
+            last_memory: Vec::new(),
+            last_allies: Vec::new(),
+            has_snapshot: false,
+            recording: false,
         }
     }
 
@@ -410,11 +427,17 @@ impl EventTape {
     }
 
     pub fn begin_action(&mut self, op: ActionOp) {
+        if !self.recording {
+            return;
+        }
         self.op = op;
         self.action_index = self.action_index.saturating_add(1);
     }
 
     pub fn push(&mut self, state: State, phase: TapePhase, kind: EventKind, fields: EventFields) {
+        if !self.recording {
+            return;
+        }
         let hand = zone_ids(&state.hand);
         let memory = zone_ids(&state.memory);
         let allies = ally_ids(state);
@@ -485,12 +508,7 @@ impl EventTape {
 }
 
 /// Record On Death effects after an ally is sent to the graveyard.
-pub fn push_ally_gy_death(
-    state: &mut State,
-    card: Card,
-    phase: TapePhase,
-    tape: &mut EventTape,
-) {
+pub fn push_ally_gy_death(state: &mut State, card: Card, phase: TapePhase, tape: &mut EventTape) {
     if card.on_death_damage() > 0 {
         tape.push(*state, phase, EventKind::OnDeath, EventFields::card(card));
     } else if card.on_death_draw() {
@@ -638,7 +656,7 @@ pub fn format_line_event(event: &LineEvent) -> String {
         }
     };
 
-    let mut label = match event.kind {
+    let label = match event.kind {
         EventKind::Start => {
             if let Some(drawn) = event.drawn {
                 format!("Start of Game (draw {})", short(Some(drawn)))
@@ -677,10 +695,9 @@ pub fn format_line_event(event: &LineEvent) -> String {
             }
         }
         EventKind::LevelZander2 => "Zander, Deft Executor (+2 prep)".to_string(),
-        EventKind::ZanderGyReturn => format!(
-            "Zander return {} from GY (−1 prep)",
-            short(event.drawn)
-        ),
+        EventKind::ZanderGyReturn => {
+            format!("Zander return {} from GY (−1 prep)", short(event.drawn))
+        }
         EventKind::FloatForTristan => {
             if event.from_memory {
                 "Mem Cost for Tristan Lvl 1 (from Mem)".to_string()
@@ -743,7 +760,7 @@ pub fn format_line_event(event: &LineEvent) -> String {
                         | "uncanny_realization"
                 )
             ) {
-                card_name.clone()
+                card_name
             } else {
                 format!("Activate {card_name}")
             };
@@ -789,10 +806,10 @@ pub fn format_line_event(event: &LineEvent) -> String {
                     s = format!("{s} with {}", weapon_name(Some(w)));
                 }
             }
-            if let Some(kindle) = event.kindle {
-                if kindle > 0 {
-                    s = format!("{s} (Kindle {kindle})");
-                }
+            if let Some(kindle) = event.kindle
+                && kindle > 0
+            {
+                s = format!("{s} (Kindle {kindle})");
             }
             if let Some(bonuses) = &event.bonuses {
                 let mut parts = Vec::new();
@@ -849,9 +866,7 @@ pub fn format_line_event(event: &LineEvent) -> String {
         }
         EventKind::OnEnterLevel => {
             let self_dmg = event.kindle.unwrap_or(6);
-            format!(
-                "Flagrant Guide On-Enter level (self {self_dmg})",
-            )
+            format!("Flagrant Guide On-Enter level (self {self_dmg})",)
         }
         EventKind::Immortalize => "Immortalize the King".to_string(),
         EventKind::HotCakeSacrifice => "Hot Cake sacrifice (+3 next attack)".to_string(),
@@ -912,7 +927,6 @@ pub fn format_line_event(event: &LineEvent) -> String {
     // Corhazi fire ping: if discarded was fire and damage advanced, append.
     // We don't store a flag; leave base label. Stats walk drawn/discarded/damage.
 
-    let _ = &mut label;
     label
 }
 

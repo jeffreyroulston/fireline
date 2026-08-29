@@ -91,23 +91,34 @@ export function WorkbenchDeckProvider({
   const { deckId: routeDeckId } = parseWorkbenchPath(pathname);
   const queryClient = useQueryClient();
 
+  // Empty SSR bootstrap usually means the server fetch failed (swallowed to
+  // []). Treat that as "no data yet" so the client refetches and the picker
+  // shows Loading instead of "No saved decks".
   const decksQuery = useQuery({
     queryKey: queryKeys.decks,
     queryFn: async () => (await loadDecksFromApi()).decks,
-    initialData: initialDecks,
+    ...(initialDecks.length > 0 ? { initialData: initialDecks } : {}),
     staleTime: 30_000,
   });
 
   const materialDecksQuery = useQuery({
     queryKey: queryKeys.materialDecks,
     queryFn: loadMaterialDecksFromApi,
-    initialData: initialMaterialDecks,
+    ...(initialMaterialDecks.length > 0
+      ? { initialData: initialMaterialDecks }
+      : {}),
     staleTime: 30_000,
   });
 
-  const decks = decksQuery.data ?? [];
-  const materialDecks = materialDecksQuery.data ?? [];
-  const decksHydrated = decksQuery.isSuccess;
+  const decks = useMemo(
+    () => decksQuery.data ?? [],
+    [decksQuery.data],
+  );
+  const materialDecks = useMemo(
+    () => materialDecksQuery.data ?? [],
+    [materialDecksQuery.data],
+  );
+  const decksHydrated = decksQuery.isSuccess || decksQuery.isError;
 
   const setDecks = useCallback(
     (updater: (current: SavedDeck[]) => SavedDeck[]) => {
