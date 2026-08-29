@@ -1,3 +1,7 @@
+# Default stack pulls published images from GHCR (see scripts/update.*).
+# Local rebuild from source: docker compose up --build
+# (build: + image: means --build tags the result as the GHCR image name.)
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -15,6 +19,7 @@ services:
     restart: unless-stopped
 
   worker:
+    image: ghcr.io/jeffreyroulston/fireline-worker:${FIRELINE_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.worker
@@ -31,6 +36,7 @@ services:
     restart: unless-stopped
 
   api:
+    image: ghcr.io/jeffreyroulston/fireline-api:${FIRELINE_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.api
@@ -59,6 +65,7 @@ services:
     restart: unless-stopped
 
   web:
+    image: ghcr.io/jeffreyroulston/fireline-web:${FIRELINE_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.web
