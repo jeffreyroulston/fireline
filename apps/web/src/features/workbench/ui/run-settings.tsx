@@ -50,8 +50,6 @@ export function RunSettings({
           >
             <option value={2}>2 turns</option>
             <option value={3}>3 turns</option>
-            <option value={4}>4 turns</option>
-            <option value={5}>5 turns</option>
           </select>
         </label>
       </div>

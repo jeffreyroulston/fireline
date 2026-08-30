@@ -43,14 +43,16 @@ fn bench_with_stats(name: &str, c: &mut Criterion, mut solve: impl FnMut() -> Pa
 
 fn fire_brick_drill_three(c: &mut Criterion) {
     bench_with_stats("fire_brick_drill_three", c, || {
-        let (pass, _) = solve_pass(black_box(&DRILL_THREE), true, 3, &[], false, ALL_MATERIALS);
+        let (pass, _) = solve_pass(black_box(&DRILL_THREE), true, 3, &[], false, ALL_MATERIALS)
+            .expect("solve_pass");
         pass
     });
 }
 
 fn fire_brick_ally_heavy(c: &mut Criterion) {
     bench_with_stats("fire_brick_ally_heavy", c, || {
-        let (pass, _) = solve_pass(black_box(&ALLY_HEAVY), true, 3, &[], false, ALL_MATERIALS);
+        let (pass, _) = solve_pass(black_box(&ALLY_HEAVY), true, 3, &[], false, ALL_MATERIALS)
+            .expect("solve_pass");
         pass
     });
 }
@@ -65,7 +67,8 @@ fn oracle_full_queue(c: &mut Criterion) {
             black_box(&queue),
             true,
             ALL_MATERIALS,
-        );
+        )
+        .expect("solve_pass");
         pass
     });
 }

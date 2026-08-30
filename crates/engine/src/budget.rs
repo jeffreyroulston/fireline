@@ -25,7 +25,7 @@ impl Budget {
             max_turns_min: 2,
             max_turns_max: 5,
             max_solve_rollouts: 48,
-            max_eval_rollouts: 24,
+            max_eval_rollouts: 48,
             max_optimize_decks: 5000,
         }
     }

@@ -87,6 +87,9 @@ Useful overrides:
 - `FIRELINE_IMAGE_TAG=latest` — GHCR tag for worker/api/web (default `latest`)
 - `WORKER_CONCURRENCY` / `API_CONCURRENCY` — cap how many simulations run at once (both default to `1` in Docker Compose; local dev defaults to `API_CONCURRENCY=1`, `WORKER_CONCURRENCY=2`)
 - `RAYON_NUM_THREADS` — upper bound on Rayon hand parallelism (defaults to all logical CPUs). Monte Carlo / Oracle / Two-pass are further capped by free RAM (~3 GiB per concurrent hand) so 16 GiB machines do not OOM.
+- `GA_FIRE_HAND_MEM_MB` — per-hand search memo budget in MiB (worker default `3072` ≈ 4M memo entries). Raise on a high-RAM machine via a gitignored root `.env` (see `.env.example`); Compose passes it through only when set, so other builds keep the default.
+- `GA_FIRE_MEM_TOTAL_MB` / `GA_FIRE_MEM_RESERVE_MB` / `GA_FIRE_MEM_PARK_MB` — optional pressure thresholds (MiB). Total auto-detects from cgroup/`MemTotal` when unset.
+- `WORKER_LOG_RUNS=1` — worker run diagnostics: logs each hand's start/finish and samples process RSS every 2 s (with in-flight hands) for deck evaluations. Use when a run dies mid-stream to see which hand was active and how fast memory climbed.
 
 ### Threading model
 

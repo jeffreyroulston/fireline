@@ -23,6 +23,7 @@ import { buttonVariants } from "@/lib/utils/variants";
 import { DeckPicker, MaterialDeckPicker, SectionHeading } from "../../ui";
 import { MainDeckCardGrid, MaterialDeckCardGrid } from "./card-grids";
 import { DeckCardCatalog } from "./deck-card-catalog";
+import { DeckTextListDetails } from "./deck-text-list-details";
 
 const toolbarClass =
   "mt-[18px] flex items-end gap-3 max-[620px]:flex-col max-[620px]:items-stretch";
@@ -177,15 +178,7 @@ export function DecksManage({
   return (
     <div className="flex flex-col gap-9">
       <div className="min-w-0">
-        <SectionHeading
-          title="DECKS"
-          meta={
-            <strong>
-              {recognizedDeckCount} recognized
-              {underSize ? ` · need ${MIN_VALID_DECK_SIZE}+` : ""}
-            </strong>
-          }
-        />
+        <SectionHeading title="DECKS" />
         <div className={toolbarClass}>
           <DeckPicker
             label="Saved deck"
@@ -289,6 +282,7 @@ export function DecksManage({
           onAdd={addCard}
           onRemove={removeCard}
         />
+        {locked && <DeckTextListDetails deckText={deckText} readOnly />}
         {!locked && (
           <DeckCardCatalog
             counts={deckCounts}

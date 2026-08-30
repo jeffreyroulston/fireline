@@ -354,6 +354,119 @@ impl State {
         self.hand_len.saturating_add(self.memory_len)
     }
 
+    /// Upper bound on **deck cards** this position can still pull onto the board
+    /// (into hand or memory) from:
+    /// 1. remaining Mate recollect draws (`recollect()` always `draw_unknown`s once),
+    /// 2. draw engines currently in hand or memory (gated by rough playability),
+    /// 3. board sources already in play (Crusader Ring; Hasty/Red Hare / Corhazi
+    ///    attack draws when those allies can attack).
+    ///
+    /// Optimistic: counts each legal-looking engine once per copy without
+    /// simulating payment contention between them. Not part of the memo key.
+    pub fn draw_potential(self) -> u8 {
+        self.recollect_draw_potential()
+            .saturating_add(self.zone_draw_potential())
+            .saturating_add(self.board_draw_potential())
+    }
+
+    /// Deck draws still owed by Mate exits: current Mate if still open, plus
+    /// one per future turn (`max_turns - turn` windows left when in Mate).
+    pub fn recollect_draw_potential(self) -> u8 {
+        if self.is_terminal() {
+            return 0;
+        }
+        match self.phase {
+            Phase::Materialize => self.max_turns.saturating_sub(self.turn),
+            Phase::Main | Phase::Agility => self.max_turns.saturating_sub(self.turn.saturating_add(1)),
+        }
+    }
+
+    /// Draw engines sitting in hand or memory (memory becomes hand at recollect).
+    fn zone_draw_potential(self) -> u8 {
+        let mut total = 0_u8;
+        for card in ALL_CARDS {
+            let copies = self.hand[card.index()].saturating_add(self.memory[card.index()]);
+            if copies == 0 {
+                continue;
+            }
+            let per = self.deck_draws_if_played(card);
+            if per == 0 {
+                continue;
+            }
+            total = total.saturating_add(per.saturating_mul(copies));
+        }
+        total
+    }
+
+    /// How many deck cards one play of `card` would add, given current board
+    /// (0 if the engine cannot fire in this state).
+    fn deck_draws_if_played(self, card: Card) -> u8 {
+        match card {
+            Card::IncreasingDanger => {
+                // Cost 2; need the card plus two reserve fodder somewhere in hand.
+                // Memory copies are assumed available after the next recollect.
+                if self.hand_len.saturating_add(self.memory_len) > 2 {
+                    2
+                } else {
+                    0
+                }
+            }
+            Card::UndeniableTruth => {
+                // Cost 1 + sacrifice an ally.
+                if self.ally_len > 0 && self.hand_len.saturating_add(self.memory_len) > 1 {
+                    1
+                } else {
+                    0
+                }
+            }
+            Card::VermilionDecree => {
+                // Only the imbued path draws; need Fire available for imbue.
+                if self.fire_gy > 0 || self.hand.iter().enumerate().any(|(i, &n)| {
+                    n > 0 && ALL_CARDS[i].is_fire() && ALL_CARDS[i] != Card::VermilionDecree
+                }) || self.memory.iter().enumerate().any(|(i, &n)| {
+                    n > 0 && ALL_CARDS[i].is_fire()
+                }) {
+                    1
+                } else {
+                    0
+                }
+            }
+            Card::ClumsyApprentice => 1,
+            _ => 0,
+        }
+    }
+
+    /// Draws already sitting on the board (not in hand/memory piles).
+    fn board_draw_potential(self) -> u8 {
+        let mut total = 0_u8;
+        // Grand Crusader's Ring: while still in the material deck, each future
+        // Mate window can materialize+banish it for a draw. It never sits on
+        // the field waiting — banishing is folded into MaterializeRing.
+        if self.has_material(MAT_RING) {
+            total = total.saturating_add(self.recollect_draw_potential());
+        }
+        let can_attack = !(self.go_first && self.turn == 0);
+        for index in 0..self.ally_len as usize {
+            let ally = self.allies[index];
+            if !can_attack || !ally.awake() {
+                continue;
+            }
+            match ally.card() {
+                Card::HastyMessenger | Card::RedHare => {
+                    // On-attack discard+draw; need something to discard.
+                    if self.hand_len > 0 {
+                        total = total.saturating_add(1);
+                    }
+                }
+                Card::CorhaziCourier if self.is_assassin() => {
+                    total = total.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+        total
+    }
+
     #[inline]
     pub const fn is_assassin(self) -> bool {
         self.champion_level >= 1
@@ -890,9 +1003,44 @@ impl State {
     }
 
     /// Number of distinct deck-tail orders after Glimpse min(2, remaining).
+    ///
+    /// With two peeked cards the engine explores at most five layouts: both on
+    /// top (two orders), one top / one bottom (two), and both on bottom once
+    /// (original relative order — bottom order is not chosen separately).
+    /// Prefer [`glimpse_relevant_layouts`] when expanding search actions — it
+    /// collapses layouts that agree on the next [`draw_potential`] queue cards.
     pub fn glimpse_layout_count(self) -> u8 {
         Self::glimpse_tail_orders(self.queue, self.queue_pos as usize, self.queue_len as usize)
             .len() as u8
+    }
+
+    /// Glimpse layout indices worth exploring given [`draw_potential`].
+    ///
+    /// - `draw_potential == 0`: empty — skip Glimpse (`glimpse_layout: None`).
+    /// - `draw_potential == 1`: only the next drawn card matters, so layouts that
+    ///   share the same top card collapse (e.g. `A,B,mid` with `A,mid,B`).
+    /// - Higher potentials keep layouts that differ in the first K queue cards.
+    ///
+    /// Indices refer to [`glimpse_tail_orders`] / [`apply_glimpse_layout`].
+    pub fn glimpse_relevant_layouts(self) -> Vec<u8> {
+        let draws = self.draw_potential();
+        if draws == 0 || self.queue_pos >= self.queue_len {
+            return Vec::new();
+        }
+        let orders =
+            Self::glimpse_tail_orders(self.queue, self.queue_pos as usize, self.queue_len as usize);
+        let prefix_len = usize::from(draws);
+        let mut seen: Vec<Vec<u8>> = Vec::new();
+        let mut indices = Vec::new();
+        for (index, order) in orders.iter().enumerate() {
+            let key: Vec<u8> = order.iter().copied().take(prefix_len).collect();
+            if seen.iter().any(|existing| existing == &key) {
+                continue;
+            }
+            seen.push(key);
+            indices.push(index as u8);
+        }
+        indices
     }
 
     /// Reorder `queue[queue_pos..queue_len]` per a Glimpse layout index.
@@ -942,8 +1090,10 @@ impl State {
             2 => {
                 let c0 = glimpse[0];
                 let c1 = glimpse[1];
+                // Both on top (either order).
                 push_unique(&mut orders, vec![c0, c1]);
                 push_unique(&mut orders, vec![c1, c0]);
+                // One on top, one on bottom.
                 push_unique(&mut orders, {
                     let mut tail = vec![c0];
                     tail.extend_from_slice(&middle);
@@ -956,16 +1106,12 @@ impl State {
                     tail.push(c0);
                     tail
                 });
-                push_unique(&mut orders, {
-                    let mut tail = middle.clone();
-                    tail.push(c0);
-                    tail.push(c1);
-                    tail
-                });
+                // Both on bottom: relative order is fixed (as glimpsed). The
+                // swapped bottom order is not a separate legal choice.
                 push_unique(&mut orders, {
                     let mut tail = middle;
-                    tail.push(c1);
                     tail.push(c0);
+                    tail.push(c1);
                     tail
                 });
             }
@@ -986,10 +1132,8 @@ pub enum Action {
         /// `Some(layout)` when oracle / Monte Carlo may reorder the deck tail via Glimpse 2.
         glimpse_layout: Option<u8>,
     },
-    MaterializeTristanMemory {
-        /// `Some(layout)` when oracle / Monte Carlo may reorder the deck tail via Glimpse 2.
-        glimpse_layout: Option<u8>,
-    },
+    /// Tristan levels from memory without Glimpse (unlike Zander).
+    MaterializeTristanMemory,
     TristanRecollect,
     SkipAgility,
     MaterializeSoulknife,
@@ -1213,6 +1357,7 @@ pub struct PassResult {
 )]
 pub struct McRollout {
     pub damage: u8,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<crate::line_event::LineEvent>,
     pub nodes: u64,
 }

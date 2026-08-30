@@ -7,10 +7,15 @@ use axum::{
 };
 use ga_fire_engine::{
     Budget, DeckEvalRequest, DeckEvalResult, ENGINE_VERSION, EvalProgress, HandPhase, HandProgress,
-    OptimizeProgress, OptimizeRequest, OptimizeResult, SimType, SolveRequest, SolveResult,
-    card_catalog, hand_threads,
+    OptimizeProgress, OptimizeRequest, OptimizeResult, PressureLevel, SimType, SolveRequest,
+    SolveResult, card_catalog, current_pressure, evaluate_with_hand_progress_cancel, hand_threads,
+    memory_config, new_cancel_flag, request_cancel,
 };
 use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Instant;
 use std::{net::SocketAddr, ops::ControlFlow, sync::Arc};
 use tokio::sync::{Semaphore, mpsc};
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
@@ -41,6 +46,13 @@ enum EvaluateStreamEvent {
         rollout: u16,
         total_rollouts: u16,
     },
+    #[serde(rename_all = "camelCase")]
+    MemoryPressure {
+        level: PressureLevel,
+    },
+    /// Keep the API→worker NDJSON body alive during long silent Oracle hands
+    /// (undici defaults to a 300s idle body timeout).
+    Heartbeat,
     // Boxed: the result payload dwarfs the other variants (serde output is
     // identical, so the wire contract is unchanged).
     Result(Box<DeckEvalResult>),
@@ -53,9 +65,16 @@ enum EvaluateStreamEvent {
 #[serde(rename_all = "camelCase", tag = "kind")]
 enum OptimizeStreamEvent {
     Progress(OptimizeProgress),
+    #[serde(rename_all = "camelCase")]
+    MemoryPressure { level: PressureLevel },
+    Heartbeat,
     Result(Box<OptimizeResult>),
     Error { message: String },
 }
+
+/// Idle gap between heartbeat NDJSON lines. Must stay well under the API
+/// client's undici `bodyTimeout` (default 300s).
+const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[tokio::main]
 async fn main() {
@@ -88,9 +107,15 @@ async fn main() {
     let addr: SocketAddr = format!("{host}:{port}")
         .parse()
         .expect("valid listen address");
+    let mem = memory_config();
     tracing::info!(
-        "worker listening on {addr} (concurrency={concurrency}, monte_carlo_hand_threads={})",
-        hand_threads(SimType::MonteCarlo)
+        concurrency,
+        monte_carlo_hand_threads = hand_threads(SimType::MonteCarlo),
+        hand_mem_mb = mem.hand_mem_mb,
+        reserve_mb = mem.reserve_mb,
+        park_mb = mem.park_mb,
+        mem_total_mb = mem.total_mb,
+        "worker listening on {addr}"
     );
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -137,11 +162,31 @@ async fn evaluate_handler(
         .try_acquire_owned()
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     request.budget = merge_budget(request.budget, state.budget);
+    let logger = RunLogger::start(format!(
+        "evaluate {:?} samples={} rollouts={} max_turns={} hand_threads={}",
+        request.sim_type,
+        request.samples,
+        request.rollouts,
+        request.max_turns,
+        hand_threads(request.sim_type),
+    ));
     stream_ndjson(move |tx| {
         // Held until the compute finishes so the concurrency limit covers the
         // actual work, not just the response setup.
         let _permit = permit;
-        let result = ga_fire_engine::evaluate_with_hand_progress(
+        let hand_logger = logger.clone();
+        let cancel = new_cancel_flag();
+        let pressure_stop = Arc::new(AtomicBool::new(false));
+        spawn_disconnect_watch(tx.clone(), cancel.clone(), pressure_stop.clone());
+        spawn_pressure_watch(tx.clone(), pressure_stop.clone(), cancel.clone());
+        spawn_heartbeat_watch(
+            tx.clone(),
+            pressure_stop.clone(),
+            cancel.clone(),
+            EvaluateStreamEvent::Heartbeat,
+        );
+        let cancel_for_progress = cancel.clone();
+        let result = evaluate_with_hand_progress_cancel(
             &request,
             |progress: EvalProgress| {
                 let event = EvaluateStreamEvent::Progress {
@@ -150,18 +195,29 @@ async fn evaluate_handler(
                     rollout: progress.rollout,
                     total_rollouts: progress.total_rollouts,
                 };
-                send_event(&tx, &event)
+                send_event_or_cancel(&tx, &event, &cancel_for_progress)
             },
             |progress: HandProgress| {
+                if let Some(log) = &hand_logger {
+                    log.hand_event(&progress);
+                }
                 let event = EvaluateStreamEvent::HandProgress {
                     sample_index: progress.sample_index,
                     phase: progress.phase,
                     rollout: progress.rollout,
                     total_rollouts: progress.total_rollouts,
                 };
-                send_event(&tx, &event)
+                send_event_or_cancel(&tx, &event, &cancel_for_progress)
             },
+            cancel,
         );
+        pressure_stop.store(true, Ordering::Relaxed);
+        if let Some(log) = &logger {
+            match &result {
+                Ok(_) => log.finish("ok"),
+                Err(error) => log.finish(&format!("error: {error}")),
+            }
+        }
         let event = match result {
             Ok(value) => EvaluateStreamEvent::Result(Box::new(value)),
             Err(error) => EvaluateStreamEvent::Error {
@@ -185,10 +241,23 @@ async fn optimize_handler(
     request.budget = merge_budget(request.budget, state.budget);
     stream_ndjson(move |tx| {
         let _permit = permit;
+        let cancel = new_cancel_flag();
+        let pressure_stop = Arc::new(AtomicBool::new(false));
+        spawn_disconnect_watch(tx.clone(), cancel.clone(), pressure_stop.clone());
+        spawn_optimize_pressure_watch(tx.clone(), pressure_stop.clone(), cancel.clone());
+        spawn_heartbeat_watch(
+            tx.clone(),
+            pressure_stop.clone(),
+            cancel.clone(),
+            OptimizeStreamEvent::Heartbeat,
+        );
+        let cancel_for_progress = cancel.clone();
+        let _cancel_guard = ga_fire_engine::install_cancel(cancel);
         let result = ga_fire_engine::optimize_with_progress(&request, |progress| {
             let event = OptimizeStreamEvent::Progress(progress);
-            send_event(&tx, &event)
+            send_event_or_cancel(&tx, &event, &cancel_for_progress)
         });
+        pressure_stop.store(true, Ordering::Relaxed);
         let event = match result {
             Ok(value) => OptimizeStreamEvent::Result(Box::new(value)),
             Err(error) => OptimizeStreamEvent::Error {
@@ -198,6 +267,141 @@ async fn optimize_handler(
         let _ = send_event(&tx, &event);
     })
     .await
+}
+
+/// Opt-in per-run diagnostics (`WORKER_LOG_RUNS=1`). Logs each hand's
+/// start/finish and samples process RSS every few seconds while a run is
+/// active, so an OOM-prone eval shows which hand was in flight — and how fast
+/// memory was climbing — when the worker died.
+#[derive(Clone)]
+struct RunLogger {
+    hands: Arc<Mutex<HashMap<u16, Instant>>>,
+    peak_rss_mb: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+}
+
+impl RunLogger {
+    fn start(summary: String) -> Option<Self> {
+        if !run_logging_enabled() {
+            return None;
+        }
+        let logger = Self {
+            hands: Arc::new(Mutex::new(HashMap::new())),
+            peak_rss_mb: Arc::new(AtomicU64::new(0)),
+            stop: Arc::new(AtomicBool::new(false)),
+        };
+        tracing::info!(
+            %summary,
+            mem_available_mb = mem_available_mb(),
+            rss_mb = rss_mb(),
+            "run started"
+        );
+        let sampler = logger.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+            // First tick fires immediately; skip it so samples are spaced out.
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                if sampler.stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                sampler.sample_rss();
+            }
+        });
+        Some(logger)
+    }
+
+    fn hand_event(&self, progress: &HandProgress) {
+        match progress.phase {
+            HandPhase::Started => {
+                self.hands
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .insert(progress.sample_index, Instant::now());
+                tracing::info!(
+                    sample = progress.sample_index,
+                    total_rollouts = progress.total_rollouts,
+                    rss_mb = self.note_rss(),
+                    "hand started"
+                );
+            }
+            HandPhase::Done => {
+                let started = self
+                    .hands
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .remove(&progress.sample_index);
+                tracing::info!(
+                    sample = progress.sample_index,
+                    elapsed_s = started.map(|at| at.elapsed().as_secs()),
+                    rss_mb = self.note_rss(),
+                    "hand done"
+                );
+            }
+            HandPhase::Throttled => {
+                tracing::info!(
+                    sample = progress.sample_index,
+                    rss_mb = self.note_rss(),
+                    "hand waiting for memory"
+                );
+            }
+            HandPhase::Rollout => {}
+        }
+    }
+
+    /// Current RSS folded into the running peak, so short runs that never see
+    /// a sampler tick still report a meaningful peak.
+    fn note_rss(&self) -> Option<u64> {
+        let rss = rss_mb()?;
+        self.peak_rss_mb.fetch_max(rss, Ordering::Relaxed);
+        Some(rss)
+    }
+
+    fn sample_rss(&self) {
+        let Some(rss) = self.note_rss() else { return };
+        let peak = self.peak_rss_mb.load(Ordering::Relaxed);
+        let in_flight: Vec<String> = self
+            .hands
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .iter()
+            .map(|(index, since)| format!("#{index} {}s", since.elapsed().as_secs()))
+            .collect();
+        tracing::info!(rss_mb = rss, peak_mb = peak, ?in_flight, "run rss");
+    }
+
+    fn finish(&self, outcome: &str) {
+        self.stop.store(true, Ordering::Relaxed);
+        let rss = self.note_rss();
+        tracing::info!(
+            %outcome,
+            rss_mb = rss,
+            peak_mb = self.peak_rss_mb.load(Ordering::Relaxed),
+            "run finished"
+        );
+    }
+}
+
+fn run_logging_enabled() -> bool {
+    std::env::var("WORKER_LOG_RUNS")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+fn rss_mb() -> Option<u64> {
+    proc_kb_field("/proc/self/status", "VmRSS:")
+}
+
+fn mem_available_mb() -> Option<u64> {
+    proc_kb_field("/proc/meminfo", "MemAvailable:")
+}
+
+fn proc_kb_field(path: &str, field: &str) -> Option<u64> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let line = contents.lines().find(|line| line.starts_with(field))?;
+    let kb = line.split_whitespace().nth(1)?.parse::<u64>().ok()?;
+    Some(kb / 1024)
 }
 
 /// Serialize and send one NDJSON event. A serialization or send failure ends
@@ -210,6 +414,145 @@ fn send_event(tx: &mpsc::Sender<String>, event: &impl Serialize) -> ControlFlow<
         return ControlFlow::Break(());
     }
     ControlFlow::Continue(())
+}
+
+fn send_event_or_cancel(
+    tx: &mpsc::Sender<String>,
+    event: &impl Serialize,
+    cancel: &ga_fire_engine::CancelFlag,
+) -> ControlFlow<()> {
+    match send_event(tx, event) {
+        ControlFlow::Continue(()) => ControlFlow::Continue(()),
+        ControlFlow::Break(()) => {
+            request_cancel(cancel);
+            ControlFlow::Break(())
+        }
+    }
+}
+
+/// Poll for client disconnect so long Oracle searches abort without waiting
+/// for the next progress event (which may be minutes away).
+fn spawn_disconnect_watch(
+    tx: mpsc::Sender<String>,
+    cancel: ga_fire_engine::CancelFlag,
+    stop: Arc<AtomicBool>,
+) {
+    std::thread::Builder::new()
+        .name("ga-fire-disconnect-watch".into())
+        .spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                if tx.is_closed() {
+                    request_cancel(&cancel);
+                    tracing::info!("client disconnected; cancelling in-flight search");
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        })
+        .ok();
+}
+
+/// Emit a tiny NDJSON line on a fixed interval so the API fetch does not idle
+/// out while a single hand searches for minutes without progress events.
+fn spawn_heartbeat_watch(
+    tx: mpsc::Sender<String>,
+    stop: Arc<AtomicBool>,
+    cancel: ga_fire_engine::CancelFlag,
+    event: impl Serialize + Send + 'static,
+) {
+    std::thread::Builder::new()
+        .name("ga-fire-heartbeat".into())
+        .spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::sleep(HEARTBEAT_INTERVAL);
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                if tx.is_closed() {
+                    request_cancel(&cancel);
+                    return;
+                }
+                if send_event_or_cancel(&tx, &event, &cancel).is_break() {
+                    return;
+                }
+            }
+        })
+        .ok();
+}
+
+/// Always-on watch: emit `memoryPressure` when the engine pressure level changes.
+fn spawn_pressure_watch(
+    tx: mpsc::Sender<String>,
+    stop: Arc<AtomicBool>,
+    cancel: ga_fire_engine::CancelFlag,
+) {
+    std::thread::Builder::new()
+        .name("ga-fire-pressure-watch".into())
+        .spawn(move || {
+            let mut last = current_pressure();
+            if last != PressureLevel::Clear {
+                let event = EvaluateStreamEvent::MemoryPressure { level: last };
+                if send_event_or_cancel(&tx, &event, &cancel).is_break() {
+                    return;
+                }
+            }
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                if tx.is_closed() {
+                    request_cancel(&cancel);
+                    return;
+                }
+                let level = current_pressure();
+                if level != last {
+                    last = level;
+                    let event = EvaluateStreamEvent::MemoryPressure { level };
+                    if send_event_or_cancel(&tx, &event, &cancel).is_break() {
+                        return;
+                    }
+                }
+            }
+        })
+        .ok();
+}
+
+fn spawn_optimize_pressure_watch(
+    tx: mpsc::Sender<String>,
+    stop: Arc<AtomicBool>,
+    cancel: ga_fire_engine::CancelFlag,
+) {
+    std::thread::Builder::new()
+        .name("ga-fire-opt-pressure-watch".into())
+        .spawn(move || {
+            let mut last = current_pressure();
+            if last != PressureLevel::Clear {
+                let event = OptimizeStreamEvent::MemoryPressure { level: last };
+                if send_event_or_cancel(&tx, &event, &cancel).is_break() {
+                    return;
+                }
+            }
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                if tx.is_closed() {
+                    request_cancel(&cancel);
+                    return;
+                }
+                let level = current_pressure();
+                if level != last {
+                    last = level;
+                    let event = OptimizeStreamEvent::MemoryPressure { level };
+                    if send_event_or_cancel(&tx, &event, &cancel).is_break() {
+                        return;
+                    }
+                }
+            }
+        })
+        .ok();
 }
 
 fn default_worker_concurrency() -> usize {
@@ -257,6 +600,17 @@ mod tests {
     }
 
     #[test]
+    fn proc_kb_field_reads_meminfo_style_lines() {
+        let meminfo = "MemTotal:       32768 kB\nMemAvailable:   12345 kB\nBuffers:  1 kB\n";
+        // Read through the same parsing path via a temp file.
+        let path = std::env::temp_dir().join(format!("ga-fire-test-{}.txt", std::process::id()));
+        std::fs::write(&path, meminfo).unwrap();
+        assert_eq!(proc_kb_field(path.to_str().unwrap(), "MemAvailable:"), Some(12));
+        assert_eq!(proc_kb_field(path.to_str().unwrap(), "Missing:"), None);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
     fn merge_budget_keeps_explicit_request_budget() {
         let custom = Budget {
             max_eval_rollouts: 8,
@@ -290,5 +644,24 @@ mod tests {
         assert_eq!(hand["totalRollouts"], 16);
         assert_eq!(hand["phase"], "started");
         assert!(hand.get("sample_index").is_none());
+
+        let throttled = serde_json::to_value(EvaluateStreamEvent::HandProgress {
+            sample_index: 3,
+            phase: HandPhase::Throttled,
+            rollout: 0,
+            total_rollouts: 16,
+        })
+        .unwrap();
+        assert_eq!(throttled["phase"], "throttled");
+
+        let heartbeat = serde_json::to_value(EvaluateStreamEvent::Heartbeat).unwrap();
+        assert_eq!(heartbeat, serde_json::json!({ "kind": "heartbeat" }));
+
+        let pressure = serde_json::to_value(EvaluateStreamEvent::MemoryPressure {
+            level: PressureLevel::Squeeze,
+        })
+        .unwrap();
+        assert_eq!(pressure["kind"], "memoryPressure");
+        assert_eq!(pressure["level"], "squeeze");
     }
 }

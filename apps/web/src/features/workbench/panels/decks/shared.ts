@@ -10,7 +10,13 @@ export function tallyCards(cards: CardId[]): { id: CardId; qty: number }[] {
   for (const id of cards) {
     counts.set(id, (counts.get(id) ?? 0) + 1);
   }
-  return [...counts.entries()].map(([id, qty]) => ({ id, qty }));
+  return [...counts.entries()]
+    .map(([id, qty]) => ({ id, qty }))
+    .sort((a, b) => {
+      const nameA = CARDS[a.id]?.name ?? a.id;
+      const nameB = CARDS[b.id]?.name ?? b.id;
+      return nameA.localeCompare(nameB);
+    });
 }
 
 export function cardTraitLines(card: CardDef): string[] {

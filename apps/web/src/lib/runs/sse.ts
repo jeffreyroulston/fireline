@@ -1,10 +1,16 @@
-import type { HandPhase, HandProgress, OptimizeProgress } from "./types";
+import type {
+  HandPhase,
+  HandProgress,
+  MemoryPressureLevel,
+  OptimizeProgress,
+} from "./types";
 
 export type { OptimizeProgress };
 
 export interface StreamHandlers {
   onProgress: (progress: OptimizeProgress) => void;
   onHandProgress?: (hand: HandProgress) => void;
+  onMemoryPressure?: (level: MemoryPressureLevel | null) => void;
   onComplete: (result: unknown) => void;
   onError: (message: string) => void;
 }
@@ -20,7 +26,19 @@ function asNumber(value: unknown): number | null {
 }
 
 function asHandPhase(value: unknown): HandPhase | null {
-  if (value === "started" || value === "rollout" || value === "done") {
+  if (
+    value === "started" ||
+    value === "throttled" ||
+    value === "rollout" ||
+    value === "done"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function asMemoryPressure(value: unknown): MemoryPressureLevel | null {
+  if (value === "squeeze" || value === "parked") {
     return value;
   }
   return null;
@@ -59,20 +77,17 @@ export function applyHandProgress(
   if (update.phase === "done") {
     return hands.filter((hand) => hand.sampleIndex !== update.sampleIndex);
   }
-  // Ignore "started" — it only means the hand acquired a gate slot. Showing a
-  // bar then stacks empty loading rows for every concurrent hand. Wait until
-  // the first rollout tick so the list is "bars being worked on".
-  if (update.phase === "started" || update.rolloutsDone <= 0) {
-    return hands;
-  }
   const index = hands.findIndex(
     (hand) => hand.sampleIndex === update.sampleIndex,
   );
+  const startedAtMs =
+    index >= 0 ? (hands[index].startedAtMs ?? Date.now()) : Date.now();
+  const nextHand: HandProgress = { ...update, startedAtMs };
   if (index < 0) {
-    return [...hands, update].sort((a, b) => a.sampleIndex - b.sampleIndex);
+    return [...hands, nextHand].sort((a, b) => a.sampleIndex - b.sampleIndex);
   }
   const next = hands.slice();
-  next[index] = update;
+  next[index] = nextHand;
   return next;
 }
 
@@ -168,6 +183,17 @@ export function dispatchSseEvent(
     const hand = coerceHandProgress(data);
     if (hand) {
       handlers.onHandProgress?.(hand);
+    }
+    return false;
+  }
+  if (data.type === "memoryPressure") {
+    if (data.level === "clear") {
+      handlers.onMemoryPressure?.(null);
+    } else {
+      const level = asMemoryPressure(data.level);
+      if (level) {
+        handlers.onMemoryPressure?.(level);
+      }
     }
     return false;
   }

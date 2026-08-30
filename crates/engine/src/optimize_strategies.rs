@@ -118,6 +118,9 @@ fn score_optimize_deck_full(
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
 ) -> Result<DeckEvalResult> {
     *decks_scored += 1;
+    if crate::cancel::is_cancel_requested() {
+        return Err(EngineError::Cancelled);
+    }
     let deck_number = *decks_scored;
     let samples = ctx.request.samples;
     crate::deck::evaluate_with_progress(

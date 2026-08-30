@@ -2,7 +2,8 @@ const apiOrigin = process.env.API_ORIGIN ?? "http://127.0.0.1:8080";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 300;
+/** Allow overnight Monte Carlo streams; default serverless 300s is far too short. */
+export const maxDuration = 86400;
 
 export async function GET(
   request: Request,

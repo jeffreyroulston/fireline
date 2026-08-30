@@ -1,12 +1,23 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { HandProgress } from "@/lib/runs/types";
 
 const MAX_VISIBLE_HANDS = 8;
 
+function formatElapsed(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  if (min <= 0) {
+    return `${sec}s`;
+  }
+  return `${min}m ${sec.toString().padStart(2, "0")}s`;
+}
+
 function handBarPercent(hand: HandProgress): number {
   if (hand.totalRollouts <= 1) {
-    return 0;
+    return hand.phase === "started" || hand.rolloutsDone <= 0 ? 0 : 50;
   }
   return Math.max(
     0,
@@ -14,8 +25,25 @@ function handBarPercent(hand: HandProgress): number {
   );
 }
 
-function HandBar({ hand }: { hand: HandProgress }) {
+function HandBar({ hand, nowMs }: { hand: HandProgress; nowMs: number }) {
+  if (hand.phase === "throttled") {
+    return (
+      <div className="grid min-w-0 grid-cols-[2.5rem_minmax(0,1fr)] items-center gap-2">
+        <span className="font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
+          #{hand.sampleIndex + 1}
+        </span>
+        <span className="font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
+          waiting for memory
+        </span>
+      </div>
+    );
+  }
   const percent = handBarPercent(hand);
+  const searching = hand.rolloutsDone <= 0;
+  const elapsedLabel =
+    searching && hand.startedAtMs != null
+      ? formatElapsed(nowMs - hand.startedAtMs)
+      : null;
   return (
     <div className="grid min-w-0 grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-2">
       <span className="font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
@@ -23,12 +51,16 @@ function HandBar({ hand }: { hand: HandProgress }) {
       </span>
       <div className="h-1 w-full overflow-hidden bg-border">
         <span
-          className="block h-full bg-accent transition-[width] duration-[180ms] ease-in-out"
-          style={{ width: `${percent}%` }}
+          className={
+            searching
+              ? "block h-full w-[28%] animate-[progress-indeterminate_1.15s_ease-in-out_infinite] bg-accent [transform:translateX(-120%)]"
+              : "block h-full bg-accent transition-[width] duration-[180ms] ease-in-out"
+          }
+          style={searching ? undefined : { width: `${percent}%` }}
         />
       </div>
       <span className="font-mono text-[10px] tracking-[0.06em] text-muted uppercase tabular-nums">
-        {hand.rolloutsDone}/{hand.totalRollouts}
+        {elapsedLabel ?? `${hand.rolloutsDone}/${hand.totalRollouts}`}
       </span>
     </div>
   );
@@ -39,24 +71,43 @@ export function HandProgressBars({
 }: {
   hands: HandProgress[] | undefined;
 }) {
-  // Only hands with at least one finished rollout (actively measuring).
-  const active = (hands ?? []).filter(
-    (hand) => hand.totalRollouts > 1 && hand.rolloutsDone > 0,
+  const active = (hands ?? []).filter((hand) => hand.phase !== "done");
+  const needsClock = active.some(
+    (hand) => hand.phase !== "throttled" && hand.rolloutsDone <= 0,
   );
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!needsClock) {
+      return;
+    }
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [needsClock]);
+
   if (active.length === 0) {
     return null;
   }
   const visible = active.slice(0, MAX_VISIBLE_HANDS);
   const overflow = active.length - visible.length;
+  const calculating = active.filter((hand) => hand.phase !== "throttled").length;
+  const waiting = active.length - calculating;
+
+  let label = `${active.length} hand${active.length === 1 ? "" : "s"} calculating`;
+  if (waiting > 0 && calculating === 0) {
+    label = `${waiting} hand${waiting === 1 ? "" : "s"} waiting for memory`;
+  } else if (waiting > 0) {
+    label = `${calculating} calculating · ${waiting} waiting`;
+  }
 
   return (
     <div className="grid min-w-0 gap-1.5">
       <div className="font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
-        {active.length} hand{active.length === 1 ? "" : "s"} calculating
+        {label}
       </div>
       <div className="grid min-w-0 gap-1">
         {visible.map((hand) => (
-          <HandBar key={hand.sampleIndex} hand={hand} />
+          <HandBar key={hand.sampleIndex} hand={hand} nowMs={nowMs} />
         ))}
       </div>
       {overflow > 0 && (

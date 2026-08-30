@@ -72,6 +72,12 @@ export function OptimizeProgressPanel({
   const ariaPercent = showRollouts
     ? Math.round((handsPercent + rolloutsPercent) / 2)
     : handsPercent;
+  const memoryMessage =
+    progress?.memoryPressure === "parked"
+      ? "Run paused — the worker's machine is busy. It will resume automatically."
+      : progress?.memoryPressure === "squeeze"
+        ? "Memory pressure on the worker — hands are running slower to keep the machine responsive."
+        : null;
 
   return (
     <div
@@ -104,6 +110,11 @@ export function OptimizeProgressPanel({
             <span>best {(progress?.bestScore ?? 0).toFixed(2)}</span>
           )}
         </div>
+        {memoryMessage && (
+          <div className="font-mono text-[10px] tracking-[0.04em] text-muted normal-case">
+            {memoryMessage}
+          </div>
+        )}
         <ProgressBar percent={handsPercent} />
       </div>
       {showHandBars && <HandProgressBars hands={hands} />}

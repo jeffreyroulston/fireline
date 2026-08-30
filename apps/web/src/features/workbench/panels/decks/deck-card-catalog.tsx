@@ -18,6 +18,7 @@ import {
 } from "@/lib/utils/card-classes";
 import { useState } from "react";
 import { SectionHeading } from "../../ui";
+import { DeckTextListDetails } from "./deck-text-list-details";
 
 const KIND_FILTERS: { id: "all" | CardKind; label: string }[] = [
   { id: "all", label: "All" },
@@ -40,18 +41,6 @@ const catalogCardClass =
 
 const catalogImageClass =
   "block aspect-[5/7] w-full border border-foreground/20 bg-foreground/[0.04] object-cover transition-[border-color,transform] duration-150 ease-in-out group-enabled:group-hover:-translate-y-[3px] group-enabled:group-hover:border-foreground";
-
-const deckTextareaClass =
-  "min-h-[310px] resize-y p-4 font-mono text-xs leading-[1.8] normal-case";
-
-const textListDetailsClass = cn(
-  "mt-3.5 border border-border bg-surface",
-  "[&>summary]:flex [&>summary]:cursor-pointer [&>summary]:list-none [&>summary]:items-baseline [&>summary]:justify-between [&>summary]:gap-3 [&>summary]:px-3.5 [&>summary]:py-3",
-  "[&>summary::-webkit-details-marker]:hidden",
-  "[&>summary_span]:font-mono [&>summary_span]:text-[11px] [&>summary_span]:tracking-[0.08em] [&>summary_span]:text-foreground [&>summary_span]:uppercase",
-  "[&>summary::after]:font-mono [&>summary::after]:text-muted [&>summary::after]:content-['+']",
-  "[&[open]>summary::after]:content-['−']",
-);
 
 export function DeckCardCatalog({
   counts,
@@ -183,20 +172,11 @@ export function DeckCardCatalog({
           </p>
         )}
       </div>
-      <details className={textListDetailsClass}>
-        <summary>
-          <span>Edit as text</span>
-        </summary>
-        <label className="mx-3.5 mb-3.5 grid gap-[7px]">
-          One card per line, with quantity
-          <textarea
-            className={deckTextareaClass}
-            value={deckText}
-            onChange={(event) => onDeckTextChange(event.target.value)}
-            spellCheck={false}
-          />
-        </label>
-      </details>
+      <DeckTextListDetails
+        className="mt-3.5 border-border bg-surface"
+        deckText={deckText}
+        onDeckTextChange={onDeckTextChange}
+      />
     </div>
   );
 }
