@@ -49,7 +49,7 @@ export function InfoPanel() {
         <div className={infoCardGridClass}>
           <InfoCard title="Hand solver">
             Draw a random 7-card opening hand from a saved deck, or build one
-            card by card, then search for a maximum-damage line over a 2–5 turn
+            card by card, then search for a maximum-damage line over a 2–3 turn
             horizon (3 by default). Deck mode shuffles a seeded pile, then draws from
             the top. The solve uses the opening hand plus those draws; Oracle
             keeps the leftover pile in order.
@@ -121,7 +121,7 @@ export function InfoPanel() {
             attacks are blocked.
           </InfoCard>
           <InfoCard title="Turn horizon">
-            Solve over 2–5 turns (3 by default). Each turn advances through Main,
+            Solve over 2–3 turns (3 by default). Each turn advances through Main,
             Materialize, Recollect, Agility, End, then the opponent’s main
             (cull), Wake, and the next materialize/recollect cycle.
           </InfoCard>

@@ -121,11 +121,19 @@ export function MonteCarloSampleDetail({
               detail="DAMAGE"
             />
           </div>
-          <OptimalLine
-            label={`ROLLOUT ${selected! + 1}`}
-            events={rollout.events}
-            resetKey={`sample-mc-${selected}-${rollout.damage}`}
-          />
+          {rollout.events.length > 0 ? (
+            <OptimalLine
+              label={`ROLLOUT ${selected! + 1}`}
+              events={rollout.events}
+              resetKey={`sample-mc-${selected}-${rollout.damage}`}
+            />
+          ) : (
+            <p className="mt-3 font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
+              Rollout line tapes are omitted from deck evaluations. The P50
+              headline tape is kept on the sample; re-run this hand in the line
+              solver for full Monte Carlo tapes.
+            </p>
+          )}
         </>
       )}
     </div>

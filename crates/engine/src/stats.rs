@@ -114,11 +114,12 @@ impl LineCardStats {
                 for event in events {
                     let delta = u32::from(event.damage.saturating_sub(prev));
                     prev = event.damage;
-                    if delta > 0 && event.kind == EventKind::OnDeath {
-                        if let Some(dead) = event.card.and_then(card_from_id) {
-                            self.damage[dead.index()] += delta;
-                            claimed += delta;
-                        }
+                    if delta > 0
+                        && event.kind == EventKind::OnDeath
+                        && let Some(dead) = event.card.and_then(card_from_id)
+                    {
+                        self.damage[dead.index()] += delta;
+                        claimed += delta;
                     }
                     self.record_draw_event(event);
                 }
@@ -148,7 +149,7 @@ impl LineCardStats {
                 self.material_plays[MAT_ZANDER] += 1;
                 self.record_draws_in_events(events);
             }
-            Action::MaterializeTristanMemory { .. } | Action::TristanRecollect => {
+            Action::MaterializeTristanMemory | Action::TristanRecollect => {
                 self.material_plays[MAT_TRISTAN] += 1;
                 self.record_draws_in_events(events);
             }

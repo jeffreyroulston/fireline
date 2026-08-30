@@ -7,7 +7,7 @@ use crate::{
         resolve_materials_bitmask,
     },
     random::{Rng, percentile, shuffle_cards},
-    solver::solve_with_progress,
+    solver::solve_for_deck_eval,
 };
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -18,79 +18,10 @@ use ts_rs::TS;
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
-use std::sync::{Condvar, Mutex, OnceLock};
-use std::time::Instant;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
-
-/// Observed peak RSS for one Monte Carlo / oracle hand is ~2–3 GiB on full
-/// queues. Cap concurrent heavy hands so 16 GiB machines stay alive.
-const MB_PER_HEAVY_HAND: u64 = 3072;
-
-/// Available memory in MiB, best-effort. Detection order: cgroup v2 limit
-/// (Docker / k8s, including Docker Desktop on WSL2) → cgroup v1 limit →
-/// /proc/meminfo (bare-metal Linux / WSL) → None (e.g. native Windows).
-///
-/// `/proc/meminfo` alone would report the *host* memory inside a container,
-/// over-subscribing relative to the container's actual limit.
-fn mem_available_mb() -> Option<u64> {
-    cgroup_available_mb().or_else(proc_meminfo_available_mb)
-}
-
-/// The cgroup memory limit is fixed for the container's lifetime, so it is
-/// discovered once; the current usage is read per call.
-fn cgroup_available_mb() -> Option<u64> {
-    static LIMIT: OnceLock<Option<u64>> = OnceLock::new();
-    let limit = (*LIMIT.get_or_init(cgroup_limit_bytes))?;
-    let current = cgroup_current_bytes().unwrap_or(0);
-    Some(limit.saturating_sub(current) / (1024 * 1024))
-}
-
-fn parse_cgroup_v2_limit(raw: &str) -> Option<u64> {
-    let raw = raw.trim();
-    if raw == "max" {
-        return None;
-    }
-    raw.parse().ok()
-}
-
-fn parse_cgroup_v1_limit(raw: &str) -> Option<u64> {
-    let bytes: u64 = raw.trim().parse().ok()?;
-    // A sentinel near 2^60 means unlimited.
-    (bytes < (1 << 60)).then_some(bytes)
-}
-
-fn cgroup_limit_bytes() -> Option<u64> {
-    if let Ok(raw) = std::fs::read_to_string("/sys/fs/cgroup/memory.max") {
-        return parse_cgroup_v2_limit(&raw);
-    }
-    if let Ok(raw) = std::fs::read_to_string("/sys/fs/cgroup/memory/memory.limit_in_bytes") {
-        return parse_cgroup_v1_limit(&raw);
-    }
-    None
-}
-
-fn cgroup_current_bytes() -> Option<u64> {
-    if let Ok(raw) = std::fs::read_to_string("/sys/fs/cgroup/memory.current") {
-        return raw.trim().parse().ok();
-    }
-    if let Ok(raw) = std::fs::read_to_string("/sys/fs/cgroup/memory/memory.usage_in_bytes") {
-        return raw.trim().parse().ok();
-    }
-    None
-}
-
-fn proc_meminfo_available_mb() -> Option<u64> {
-    let status = std::fs::read_to_string("/proc/meminfo").ok()?;
-    for line in status.lines() {
-        let Some(rest) = line.strip_prefix("MemAvailable:") else {
-            continue;
-        };
-        let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
-        return Some(kb / 1024);
-    }
-    None
-}
 
 fn sim_uses_heavy_search(sim_type: SimType) -> bool {
     matches!(
@@ -112,28 +43,19 @@ fn requested_threads() -> usize {
         .unwrap_or(cpus)
 }
 
-/// Hand parallelism for deck eval. `RAYON_NUM_THREADS` is an upper bound.
-/// Monte Carlo / Oracle / Two-pass are also capped by free RAM.
+/// Hand parallelism for deck eval. `RAYON_NUM_THREADS` is an upper bound;
+/// heavy sims are also capped by the process-global memory budget.
 pub fn hand_threads(sim_type: SimType) -> usize {
-    hand_threads_with(sim_type, requested_threads(), mem_available_mb())
-}
-
-/// Pure core of [`hand_threads`], split out so tests stay off process env.
-fn hand_threads_with(sim_type: SimType, requested: usize, mem_available: Option<u64>) -> usize {
+    let requested = requested_threads();
     if !sim_uses_heavy_search(sim_type) {
         return requested;
     }
-    match mem_available {
-        Some(mb) => requested.min(usize::try_from((mb / MB_PER_HEAVY_HAND).max(1)).unwrap_or(1)),
-        // No memory source (native Windows): trust the CPU count rather than
-        // forcing heavy sims to a single thread.
-        None => requested,
-    }
+    crate::pressure::max_heavy_hands(requested)
 }
 
 /// Shared pool for deck-eval hand parallelism, sized once from the CPU count
-/// (or `RAYON_NUM_THREADS`). The RAM-based cap is enforced by [`HandGate`]
-/// inside the pool instead of rebuilding differently-sized pools per request.
+/// (or `RAYON_NUM_THREADS`). Concurrent heavy hands are capped by the
+/// process-global [`crate::pressure::MemoryGate`].
 fn shared_pool() -> Result<&'static rayon::ThreadPool> {
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
     if let Some(pool) = POOL.get() {
@@ -146,42 +68,8 @@ fn shared_pool() -> Result<&'static rayon::ThreadPool> {
     Ok(POOL.get_or_init(|| pool))
 }
 
-/// Bounds how many heavy hands run at once inside the shared pool.
-struct HandGate {
-    free: Mutex<usize>,
-    condvar: Condvar,
-}
-
-impl HandGate {
-    fn new(count: usize) -> Self {
-        Self {
-            free: Mutex::new(count.max(1)),
-            condvar: Condvar::new(),
-        }
-    }
-
-    fn acquire(&self) -> GatePermit<'_> {
-        let mut free = self.free.lock().unwrap_or_else(|err| err.into_inner());
-        while *free == 0 {
-            free = self
-                .condvar
-                .wait(free)
-                .unwrap_or_else(|err| err.into_inner());
-        }
-        *free -= 1;
-        GatePermit(self)
-    }
-}
-
-struct GatePermit<'a>(&'a HandGate);
-
-impl Drop for GatePermit<'_> {
-    fn drop(&mut self) {
-        let mut free = self.0.free.lock().unwrap_or_else(|err| err.into_inner());
-        *free += 1;
-        self.0.condvar.notify_one();
-    }
-}
+/// Emit `Throttled` after waiting this long for a memory-gate slot.
+const THROTTLE_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -388,6 +276,8 @@ pub struct EvalProgress {
 #[serde(rename_all = "camelCase")]
 pub enum HandPhase {
     Started,
+    /// Waiting for a memory-gate slot (machine is full of in-flight hands).
+    Throttled,
     Rollout,
     Done,
 }
@@ -484,6 +374,28 @@ fn drawn_from_key(key: [u8; CARD_COUNT]) -> Vec<Card> {
     drawn
 }
 
+/// Draw `samples` opening hands the same way deck eval does (for tooling /
+/// calibration). Each sample reshuffles the full deck with the shared RNG.
+pub fn draw_opening_hands(
+    deck: &[Card],
+    samples: u16,
+    seed: u64,
+) -> Result<Vec<Vec<Card>>> {
+    if deck.len() < 7 {
+        return Err(EngineError::invalid(
+            "deck must contain at least seven recognized cards",
+        ));
+    }
+    let mut rng = Rng::new(seed);
+    let mut hands = Vec::with_capacity(samples as usize);
+    for _ in 0..samples {
+        let mut shuffled = deck.to_vec();
+        shuffle_cards(&mut shuffled, &mut rng);
+        hands.push(shuffled[..7].to_vec());
+    }
+    Ok(hands)
+}
+
 /// Shared read-only inputs for solving sampled hands. Grouping them keeps the
 /// per-hand call sites readable and under the argument-count lint.
 struct SampleContext<
@@ -499,6 +411,7 @@ struct SampleContext<
     on_progress: &'a Mutex<F>,
     on_hand_progress: &'a Mutex<G>,
     report_in_hand_progress: bool,
+    cancel: Option<crate::cancel::CancelFlag>,
 }
 
 fn solve_sample_hand(
@@ -511,6 +424,7 @@ fn solve_sample_hand(
         impl FnMut(HandProgress) -> ControlFlow<()> + Send,
     >,
 ) -> Result<SampleHand> {
+    let _cancel_guard = ctx.cancel.as_ref().map(|flag| crate::cancel::install(flag.clone()));
     let request = ctx.request;
     let total_rollouts = if request.sim_type == SimType::MonteCarlo {
         ctx.rollouts
@@ -545,7 +459,7 @@ fn solve_sample_hand(
         return Err(EngineError::Cancelled);
     }
     let hand_ids = drawn.iter().map(|card| card.id().to_string()).collect();
-    let result = solve_with_progress(
+    let result = solve_for_deck_eval(
         &SolveRequest {
             hand: hand_ids,
             go_first: request.go_first,
@@ -653,6 +567,7 @@ fn report_hand_progress(
     on_hand_progress.lock().unwrap_or_else(|err| err.into_inner())(progress)
 }
 
+#[expect(clippy::too_many_arguments)]
 fn solve_unique_hands(
     unique: &[(SimType, [u8; CARD_COUNT], u16)],
     request: &DeckEvalRequest,
@@ -662,6 +577,7 @@ fn solve_unique_hands(
     on_progress: &Mutex<impl FnMut(EvalProgress) -> ControlFlow<()> + Send>,
     on_hand_progress: &Mutex<impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
     parallel: bool,
+    cancel: Option<crate::cancel::CancelFlag>,
 ) -> Result<FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand>> {
     let total = request.samples.max(1);
     let total_rollouts = if request.sim_type == SimType::MonteCarlo {
@@ -679,6 +595,7 @@ fn solve_unique_hands(
         on_progress,
         on_hand_progress,
         report_in_hand_progress,
+        cancel,
     };
     if !parallel {
         let mut cache = FxHashMap::default();
@@ -707,9 +624,10 @@ fn solve_unique_hands(
 
     let completed = AtomicU16::new(0);
     let cancelled = AtomicBool::new(false);
-    // The shared pool is CPU-sized; the gate caps concurrent heavy hands to
-    // what free RAM allows right now.
-    let gate = HandGate::new(hand_threads(request.sim_type));
+    // Shared pool is CPU-sized; the process-global memory gate caps concurrent
+    // heavy hands across all runs. Fire Brick skips the gate (cheap search).
+    let gate = sim_uses_heavy_search(request.sim_type)
+        .then(|| crate::pressure::memory_gate(requested_threads()));
     let pool = shared_pool()?;
     // map + collect into Result short-circuits on the first failure, so real
     // errors (e.g. unknown card) propagate instead of collapsing into
@@ -718,10 +636,27 @@ fn solve_unique_hands(
         unique
             .par_iter()
             .map(|&(sim_type, key, sample_index)| {
-                if cancelled.load(Ordering::Relaxed) {
+                if cancelled.load(Ordering::Relaxed)
+                    || ctx
+                        .cancel
+                        .as_ref()
+                        .is_some_and(crate::cancel::is_requested)
+                {
                     return Err(EngineError::Cancelled);
                 }
-                let _permit = gate.acquire();
+                let _permit = gate.as_ref().map(|gate| {
+                    gate.acquire_with_notify(THROTTLE_GRACE, || {
+                        let _ = report_hand_progress(
+                            on_hand_progress,
+                            HandProgress {
+                                sample_index,
+                                phase: HandPhase::Throttled,
+                                rollout: 0,
+                                total_rollouts,
+                            },
+                        );
+                    })
+                });
                 let hands_done = completed.load(Ordering::Relaxed);
                 let (cache_key, sample) =
                     solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx)?;
@@ -758,14 +693,14 @@ pub fn evaluate_with_serial_progress(
     request: &DeckEvalRequest,
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
 ) -> Result<DeckEvalResult> {
-    evaluate_hands(request, on_progress, |_| ControlFlow::Continue(()), false)
+    evaluate_hands(request, on_progress, |_| ControlFlow::Continue(()), false, None)
 }
 
 pub fn evaluate_with_progress(
     request: &DeckEvalRequest,
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
 ) -> Result<DeckEvalResult> {
-    evaluate_hands(request, on_progress, |_| ControlFlow::Continue(()), true)
+    evaluate_hands(request, on_progress, |_| ControlFlow::Continue(()), true, None)
 }
 
 /// Parallel deck-eval with both aggregate hand progress and per-hand
@@ -775,7 +710,34 @@ pub fn evaluate_with_hand_progress(
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
     on_hand_progress: impl FnMut(HandProgress) -> ControlFlow<()> + Send,
 ) -> Result<DeckEvalResult> {
-    evaluate_hands(request, on_progress, on_hand_progress, true)
+    evaluate_hands(request, on_progress, on_hand_progress, true, None)
+}
+
+/// Like [`evaluate_with_hand_progress`], but cooperative-cancel when `cancel` is set
+/// (worker sets this when the NDJSON client disconnects).
+pub fn evaluate_with_hand_progress_cancel(
+    request: &DeckEvalRequest,
+    on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
+    on_hand_progress: impl FnMut(HandProgress) -> ControlFlow<()> + Send,
+    cancel: crate::cancel::CancelFlag,
+) -> Result<DeckEvalResult> {
+    evaluate_hands(request, on_progress, on_hand_progress, true, Some(cancel))
+}
+
+/// Parallel evaluate with a cancel flag (used by optimize so disconnect aborts
+/// nested deck evals).
+pub fn evaluate_with_progress_cancel(
+    request: &DeckEvalRequest,
+    on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
+    cancel: crate::cancel::CancelFlag,
+) -> Result<DeckEvalResult> {
+    evaluate_hands(
+        request,
+        on_progress,
+        |_| ControlFlow::Continue(()),
+        true,
+        Some(cancel),
+    )
 }
 
 fn evaluate_hands(
@@ -783,6 +745,7 @@ fn evaluate_hands(
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
     on_hand_progress: impl FnMut(HandProgress) -> ControlFlow<()> + Send,
     parallel: bool,
+    cancel: Option<crate::cancel::CancelFlag>,
 ) -> Result<DeckEvalResult> {
     let started = Instant::now();
     let budget = request.budget;
@@ -850,6 +813,7 @@ fn evaluate_hands(
         &on_progress,
         &on_hand_progress,
         parallel,
+        cancel,
     )?;
 
     let mut remaining_uses: FxHashMap<(SimType, [u8; CARD_COUNT]), u16> = FxHashMap::default();
@@ -1469,6 +1433,76 @@ mod tests {
     }
 
     #[test]
+    fn deck_eval_omits_per_rollout_event_tapes() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 3),
+            ("kingdom_informant".into(), 3),
+            ("clumsy_apprentice".into(), 3),
+            ("sable_remnant".into(), 2),
+            ("blazing_throw".into(), 2),
+            ("red_hare".into(), 2),
+            ("march_hare".into(), 2),
+        ]);
+        let result = evaluate_with_progress(
+            &DeckEvalRequest {
+                deck: deck.clone(),
+                samples: 2,
+                go_first: true,
+                max_turns: 2,
+                seed: 13,
+                sim_type: SimType::MonteCarlo,
+                rollouts: 3,
+                budget: crate::budget::Budget {
+                    max_eval_rollouts: 3,
+                    ..crate::budget::Budget::default()
+                },
+                materials: BTreeMap::new(),
+            },
+            |_| ControlFlow::Continue(()),
+        )
+        .unwrap();
+        for hand in &result.hands {
+            let dist = hand.distribution.as_ref().expect("MC distribution");
+            assert_eq!(dist.rollouts.len(), 3);
+            assert!(
+                dist.rollouts.iter().all(|rollout| rollout.events.is_empty()),
+                "deck eval should drop per-rollout tapes"
+            );
+            assert!(
+                !hand.events.is_empty(),
+                "P50 headline tape should still be present"
+            );
+            assert_eq!(dist.damages.len(), 3);
+        }
+
+        let solve = crate::solve(&SolveRequest {
+            hand: result.hands[0]
+                .hand
+                .iter()
+                .map(|id| (*id).to_string())
+                .collect(),
+            go_first: true,
+            max_turns: 2,
+            sim_type: SimType::MonteCarlo,
+            deck,
+            queue: None,
+            rollouts: 3,
+            seed: 13,
+            budget: crate::budget::Budget {
+                max_solve_rollouts: 3,
+                ..crate::budget::Budget::default()
+            },
+            materials: BTreeMap::new(),
+        })
+        .unwrap();
+        let dist = solve.distribution.as_ref().expect("MC distribution");
+        assert!(
+            dist.rollouts.iter().any(|rollout| !rollout.events.is_empty()),
+            "hand solve should retain per-rollout tapes"
+        );
+    }
+
+    #[test]
     fn card_stats_expose_damage_when_seen_sum() {
         let deck = BTreeMap::from([
             ("arthur".into(), 3),
@@ -1500,34 +1534,15 @@ mod tests {
     }
 
     #[test]
-    fn heavy_hand_threads_are_capped_by_available_ram() {
-        // 4 GiB free allows one heavy hand; 8 GiB allows two.
-        assert_eq!(hand_threads_with(SimType::MonteCarlo, 8, Some(4096)), 1);
-        assert_eq!(hand_threads_with(SimType::MonteCarlo, 8, Some(8192)), 2);
-        assert_eq!(hand_threads_with(SimType::OracleOnly, 8, Some(4096)), 1);
-        assert_eq!(hand_threads_with(SimType::TwoPass, 8, Some(8192)), 2);
-        // No memory source (native Windows) falls back to the CPU count.
-        assert_eq!(hand_threads_with(SimType::MonteCarlo, 8, None), 8);
-        // Light sims are never RAM-capped.
-        assert_eq!(hand_threads_with(SimType::FireBrick, 8, Some(1)), 8);
-        assert_eq!(hand_threads_with(SimType::FireBrick, 8, None), 8);
-    }
-
-    #[test]
-    fn cgroup_v2_max_is_unlimited() {
-        assert_eq!(parse_cgroup_v2_limit("max\n"), None);
-        assert_eq!(parse_cgroup_v2_limit("  max  "), None);
-    }
-
-    #[test]
-    fn cgroup_v2_limit_parses_bytes() {
-        assert_eq!(parse_cgroup_v2_limit("17179869184\n"), Some(17_179_869_184));
-    }
-
-    #[test]
-    fn cgroup_v1_sentinel_is_unlimited() {
-        assert_eq!(parse_cgroup_v1_limit("9223372036854771712\n"), None);
-        assert_eq!(parse_cgroup_v1_limit("17179869184\n"), Some(17_179_869_184));
+    fn heavy_hand_threads_are_capped_by_memory_budget() {
+        // Max heavy hands is derived from total/reserve/hand_mem; Fire Brick
+        // still gets the full CPU count.
+        let heavy = hand_threads(SimType::MonteCarlo);
+        assert!(heavy >= 1);
+        assert!(heavy <= requested_threads());
+        assert_eq!(hand_threads(SimType::FireBrick), requested_threads());
+        assert_eq!(hand_threads(SimType::OracleOnly), heavy);
+        assert_eq!(hand_threads(SimType::TwoPass), heavy);
     }
 
     #[test]

@@ -76,7 +76,8 @@ fn main() {
         &queue,
         true,
         ga_fire_engine::model::ALL_MATERIALS,
-    );
+    )
+    .expect("oracle pass");
     stop.store(1, Ordering::Relaxed);
     thread::sleep(Duration::from_millis(30));
     eprintln!(

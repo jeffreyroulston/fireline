@@ -15,6 +15,18 @@ function handBarPercent(hand: HandProgress): number {
 }
 
 function HandBar({ hand }: { hand: HandProgress }) {
+  if (hand.phase === "throttled") {
+    return (
+      <div className="grid min-w-0 grid-cols-[2.5rem_minmax(0,1fr)] items-center gap-2">
+        <span className="font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
+          #{hand.sampleIndex + 1}
+        </span>
+        <span className="font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
+          waiting for memory
+        </span>
+      </div>
+    );
+  }
   const percent = handBarPercent(hand);
   return (
     <div className="grid min-w-0 grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-2">
@@ -39,20 +51,30 @@ export function HandProgressBars({
 }: {
   hands: HandProgress[] | undefined;
 }) {
-  // Only hands with at least one finished rollout (actively measuring).
   const active = (hands ?? []).filter(
-    (hand) => hand.totalRollouts > 1 && hand.rolloutsDone > 0,
+    (hand) =>
+      hand.phase === "throttled" ||
+      (hand.totalRollouts > 1 && hand.rolloutsDone > 0),
   );
   if (active.length === 0) {
     return null;
   }
   const visible = active.slice(0, MAX_VISIBLE_HANDS);
   const overflow = active.length - visible.length;
+  const calculating = active.filter((hand) => hand.phase !== "throttled").length;
+  const waiting = active.length - calculating;
+
+  let label = `${active.length} hand${active.length === 1 ? "" : "s"} calculating`;
+  if (waiting > 0 && calculating === 0) {
+    label = `${waiting} hand${waiting === 1 ? "" : "s"} waiting for memory`;
+  } else if (waiting > 0) {
+    label = `${calculating} calculating · ${waiting} waiting`;
+  }
 
   return (
     <div className="grid min-w-0 gap-1.5">
       <div className="font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
-        {active.length} hand{active.length === 1 ? "" : "s"} calculating
+        {label}
       </div>
       <div className="grid min-w-0 gap-1">
         {visible.map((hand) => (

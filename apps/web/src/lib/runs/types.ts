@@ -1,6 +1,8 @@
 import type { DeckResult, RatioResult } from "@/features/workbench/types";
 
-export type HandPhase = "started" | "rollout" | "done";
+export type HandPhase = "started" | "throttled" | "rollout" | "done";
+
+export type MemoryPressureLevel = "squeeze" | "parked";
 
 export interface HandProgress {
   sampleIndex: number;
@@ -24,6 +26,8 @@ export interface OptimizeProgress {
   hands?: HandProgress[];
   /** Set once the worker has begun processing (not just queued locally). */
   started?: boolean;
+  /** Live memory pressure on the worker (omit / clear when idle). */
+  memoryPressure?: MemoryPressureLevel;
 }
 
 export type RunKind = "evaluate" | "optimize";

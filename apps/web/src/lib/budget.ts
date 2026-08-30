@@ -5,6 +5,6 @@ export const DEFAULT_BUDGET: Budget = {
   maxTurnsMin: 2,
   maxTurnsMax: 5,
   maxSolveRollouts: 48,
-  maxEvalRollouts: 24,
+  maxEvalRollouts: 48,
   maxOptimizeDecks: 5000,
 };

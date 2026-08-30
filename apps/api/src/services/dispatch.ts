@@ -22,15 +22,17 @@ type EvaluateEvent =
   | {
       kind: "handProgress";
       sampleIndex: number;
-      phase: "started" | "rollout" | "done";
+      phase: "started" | "throttled" | "rollout" | "done";
       rollout: number;
       totalRollouts: number;
     }
+  | { kind: "memoryPressure"; level: "clear" | "squeeze" | "parked" }
   | { kind: "result" } & DeckEvalResult
   | { kind: "error"; message: string };
 
 type OptimizeEvent =
   | { kind: "progress" } & Record<string, unknown>
+  | { kind: "memoryPressure"; level: "clear" | "squeeze" | "parked" }
   | { kind: "result" } & OptimizeResult
   | { kind: "error"; message: string };
 
@@ -171,6 +173,11 @@ export class RunDispatcher {
               rollout: event.rollout,
               totalRollouts,
             });
+          } else if (event.kind === "memoryPressure") {
+            runHub.publish(runId, {
+              type: "memoryPressure" as const,
+              level: event.level,
+            });
           } else if (event.kind === "error") {
             throw new Error(event.message);
           } else if (event.kind === "result") {
@@ -209,6 +216,11 @@ export class RunDispatcher {
           if (event.kind === "progress") {
             const { kind: _kind, ...progress } = event;
             runHub.publish(runId, { type: "progress", ...progress });
+          } else if (event.kind === "memoryPressure") {
+            runHub.publish(runId, {
+              type: "memoryPressure" as const,
+              level: event.level,
+            });
           } else if (event.kind === "error") {
             throw new Error(event.message);
           } else if (event.kind === "result") {

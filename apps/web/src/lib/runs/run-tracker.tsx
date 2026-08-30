@@ -203,6 +203,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
                     current.progress.totalRollouts ??
                     current.progress.rolloutsDone,
                   hands: [],
+                  memoryPressure: undefined,
                 }
               : current.progress,
           };
@@ -227,6 +228,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
                 decksScored: current.progress.totalDecks,
                 handsSimulated: current.progress.totalHands,
                 bestScore: ratio.bestScore,
+                memoryPressure: undefined,
               }
             : current.progress,
         };
@@ -290,6 +292,28 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
                       },
                 }));
               },
+              onMemoryPressure: (level) => {
+                updateRun(runId, (current) => ({
+                  ...current,
+                  status: "running",
+                  progress: current.progress
+                    ? {
+                        ...current.progress,
+                        started: true,
+                        memoryPressure: level ?? undefined,
+                      }
+                    : {
+                        decksScored: 0,
+                        totalDecks: 0,
+                        legalDecks: 0,
+                        handsSimulated: 0,
+                        totalHands: 0,
+                        bestScore: 0,
+                        started: true,
+                        memoryPressure: level ?? undefined,
+                      },
+                }));
+              },
               onComplete: (result) => {
                 settledRef.current.add(runId);
                 applyComplete(runId, kind, result);
@@ -302,7 +326,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
                   error: message,
                   completedAt: new Date().toISOString(),
                   progress: current.progress
-                    ? { ...current.progress, hands: [] }
+                    ? { ...current.progress, hands: [], memoryPressure: undefined }
                     : current.progress,
                 }));
                 detachStream(runId);

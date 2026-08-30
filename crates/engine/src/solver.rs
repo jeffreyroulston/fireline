@@ -42,18 +42,33 @@ struct MemoValue {
     end_influence: u8,
 }
 
+/// Park / generational-reset checkpoint cadence (~262k nodes).
+const PARK_CHECK_MASK: u64 = 0x3_FFFF;
+
 struct Search {
     memo: FxHashMap<State, MemoValue>,
     nodes: u64,
     glimpse_enabled: bool,
+    /// Base entry cap; live limit is scaled by pressure squeeze.
+    memo_cap: usize,
+    memo_generations: u32,
+    /// Set when cooperative cancel fires mid-search; visit returns early.
+    aborted: bool,
 }
 
 impl Search {
     fn new(glimpse_enabled: bool) -> Self {
+        Self::with_memo_cap(glimpse_enabled, crate::pressure::memo_cap_entries())
+    }
+
+    fn with_memo_cap(glimpse_enabled: bool, memo_cap: usize) -> Self {
         Self {
             memo: FxHashMap::with_capacity_and_hasher(16_384, Default::default()),
             nodes: 0,
             glimpse_enabled,
+            memo_cap: memo_cap.max(1),
+            memo_generations: 0,
+            aborted: false,
         }
     }
 
@@ -63,10 +78,56 @@ impl Search {
         self.memo = FxHashMap::with_capacity_and_hasher(16_384, Default::default());
         self.nodes = 0;
         self.glimpse_enabled = glimpse_enabled;
+        self.memo_generations = 0;
+        self.aborted = false;
+    }
+
+    fn drop_memo_generation(&mut self) {
+        self.memo_generations = self.memo_generations.saturating_add(1);
+        // Hard hands reset thousands of times; log the first and then powers
+        // of two so WORKER_LOG_RUNS stays useful without flooding the console.
+        let n = self.memo_generations;
+        if n == 1 || n.is_power_of_two() {
+            tracing::info!(
+                generations = n,
+                nodes = self.nodes,
+                cap = self.memo_cap,
+                "search memo generational reset"
+            );
+        }
+        self.memo = FxHashMap::with_capacity_and_hasher(16_384, Default::default());
+    }
+
+    fn checkpoint(&mut self) {
+        if self.nodes & PARK_CHECK_MASK != 0 {
+            return;
+        }
+        if crate::cancel::is_cancel_requested() {
+            self.aborted = true;
+            return;
+        }
+        if !crate::pressure::is_parked() {
+            return;
+        }
+        // Release memo pages so the machine can reclaim them, then wait.
+        self.drop_memo_generation();
+        release_process_memory();
+        crate::pressure::wait_while_parked();
+        // Re-check after park: disconnect may have happened while we slept.
+        if crate::cancel::is_cancel_requested() {
+            self.aborted = true;
+        }
     }
 
     fn visit(&mut self, state: State) -> Outcome {
         self.nodes += 1;
+        self.checkpoint();
+        if self.aborted {
+            return Outcome {
+                damage: state.damage,
+                influence: 0,
+            };
+        }
         if state.is_terminal() {
             return Outcome {
                 damage: state.damage,
@@ -86,15 +147,24 @@ impl Search {
             damage: state.damage,
             influence: 0,
         };
-        for action in actions(state, self.glimpse_enabled) {
+        let mut acts = actions(state, self.glimpse_enabled);
+        order_actions_damage_first(&state, &mut acts);
+        for action in acts {
             let next = apply_silent(state, action);
             let outcome = self.visit(next);
+            if self.aborted {
+                return outcome;
+            }
             if outcome.better(best) {
                 best = outcome;
             }
         }
         debug_assert!(best.damage >= state.damage);
         debug_assert!(best.damage < u8::MAX);
+        let cap = crate::pressure::effective_memo_cap(self.memo_cap);
+        if self.memo.len() >= cap {
+            self.drop_memo_generation();
+        }
         self.memo.insert(
             board,
             MemoValue {
@@ -115,7 +185,9 @@ impl Search {
         if state.is_terminal() {
             return;
         }
-        for action in actions(state, self.glimpse_enabled) {
+        let mut acts = actions(state, self.glimpse_enabled);
+        order_actions_damage_first(&state, &mut acts);
+        for action in acts {
             let saved = tape.checkpoint();
             let next = apply_into(state, action, tape);
             if self.visit(next) == target {
@@ -137,6 +209,23 @@ pub fn solve(request: &SolveRequest) -> Result<SolveResult> {
 pub fn solve_with_progress(
     request: &SolveRequest,
     on_rollout: impl FnMut(u16, u16) -> ControlFlow<()>,
+) -> Result<SolveResult> {
+    solve_with_progress_inner(request, on_rollout, true)
+}
+
+/// Deck-eval entry: same as [`solve_with_progress`], but drops per-rollout event
+/// tapes from the Monte Carlo distribution (headline/P50 tape is kept).
+pub(crate) fn solve_for_deck_eval(
+    request: &SolveRequest,
+    on_rollout: impl FnMut(u16, u16) -> ControlFlow<()>,
+) -> Result<SolveResult> {
+    solve_with_progress_inner(request, on_rollout, false)
+}
+
+fn solve_with_progress_inner(
+    request: &SolveRequest,
+    on_rollout: impl FnMut(u16, u16) -> ControlFlow<()>,
+    retain_rollout_tapes: bool,
 ) -> Result<SolveResult> {
     if request.hand.len() < 2 || request.hand.len() > 16 {
         return Err(EngineError::invalid("hand must contain 2–16 cards"));
@@ -164,7 +253,7 @@ pub fn solve_with_progress(
                 max_turns,
                 materials,
                 &opening_queue,
-            )
+            )?
         }
         SimType::MonteCarlo => {
             let remaining = remaining_for_solve(request, &hand)?;
@@ -177,6 +266,7 @@ pub fn solve_with_progress(
                     rollouts,
                     seed: request.seed,
                     materials,
+                    retain_rollout_tapes,
                 },
                 on_rollout,
             )?
@@ -191,7 +281,7 @@ pub fn solve_with_progress(
                 request.seed,
                 ordered,
                 materials,
-            )
+            )?
         }
         SimType::OracleOnly => {
             let (remaining, ordered) = remaining_queue(request, &hand)?;
@@ -203,7 +293,7 @@ pub fn solve_with_progress(
                 request.seed,
                 ordered,
                 materials,
-            )
+            )?
         }
     };
     result.effective = solve_effective(request, max_turns, rollouts);
@@ -240,6 +330,7 @@ fn hand_solve_effective(
 
 pub fn solve_cards(hand: &[Card], go_first: bool, max_turns: u8, materials: u16) -> SolveResult {
     solve_cards_with_queue(hand, go_first, max_turns, materials, &[])
+        .expect("fire brick solve should not cancel without a cancel flag")
 }
 
 /// Fire Brick has no attached maindeck by default, so unknown draws stay unplayable
@@ -252,10 +343,10 @@ fn solve_cards_with_queue(
     max_turns: u8,
     materials: u16,
     queue: &[Card],
-) -> SolveResult {
+) -> Result<SolveResult> {
     let started = Instant::now();
-    let (pass, line_stats) = solve_pass(hand, go_first, max_turns, queue, false, materials);
-    SolveResult {
+    let (pass, line_stats) = solve_pass(hand, go_first, max_turns, queue, false, materials)?;
+    Ok(SolveResult {
         sim_type: SimType::FireBrick,
         max_damage: pass.max_damage,
         end_influence: pass.end_influence,
@@ -275,7 +366,7 @@ fn solve_cards_with_queue(
             SimType::FireBrick,
             crate::budget::Budget::default(),
         ),
-    }
+    })
 }
 
 pub fn solve_pass(
@@ -285,7 +376,7 @@ pub fn solve_pass(
     queue: &[Card],
     glimpse_enabled: bool,
     materials: u16,
-) -> (PassResult, crate::stats::LineCardStats) {
+) -> Result<(PassResult, crate::stats::LineCardStats)> {
     let mut search = Search::new(glimpse_enabled);
     solve_pass_with(&mut search, hand, go_first, max_turns, queue, materials)
 }
@@ -297,7 +388,7 @@ fn solve_pass_with(
     max_turns: u8,
     queue: &[Card],
     materials: u16,
-) -> (PassResult, crate::stats::LineCardStats) {
+) -> Result<(PassResult, crate::stats::LineCardStats)> {
     let mut initial = State::with_queue_and_materials(hand, go_first, max_turns, queue, materials);
     let opening_draw = if go_first {
         None
@@ -306,6 +397,10 @@ fn solve_pass_with(
     };
     search.reset(search.glimpse_enabled);
     let best = search.visit(initial);
+    if search.aborted {
+        search.reset(search.glimpse_enabled);
+        return Err(EngineError::Cancelled);
+    }
     let mut tape = EventTape::new();
     tape.push_start(initial, opening_draw);
     let mut line_stats = crate::stats::LineCardStats::default();
@@ -313,6 +408,10 @@ fn solve_pass_with(
         line_stats.record_opening_draw(drawn);
     }
     search.reconstruct(initial, best, &mut tape, &mut line_stats);
+    if search.aborted {
+        search.reset(search.glimpse_enabled);
+        return Err(EngineError::Cancelled);
+    }
     let result = (
         PassResult {
             max_damage: best.damage,
@@ -327,7 +426,7 @@ fn solve_pass_with(
     // Drop the memo before returning so callers that keep the Search shell
     // reuse a clean table; trimming happens once per hand, not per pass.
     search.reset(search.glimpse_enabled);
-    result
+    Ok(result)
 }
 
 fn summarize_line_stats(
@@ -346,6 +445,9 @@ struct MonteCarloConfig {
     rollouts: u16,
     seed: u64,
     materials: u16,
+    /// When false (deck eval), drop per-rollout event tapes after picking the
+    /// headline/P50 line so completed hands do not retain N full tapes in RAM.
+    retain_rollout_tapes: bool,
 }
 
 fn solve_monte_carlo(
@@ -378,7 +480,7 @@ fn solve_monte_carlo(
         let mut queue = remaining.to_vec();
         shuffle_cards(&mut queue, &mut rng);
         let (pass, line_stats) =
-            solve_pass_with(&mut search, hand, go_first, max_turns, &queue, materials);
+            solve_pass_with(&mut search, hand, go_first, max_turns, &queue, materials)?;
         total_nodes += pass.nodes;
         total_memo += pass.memo_entries;
         damages.push(pass.max_damage);
@@ -407,10 +509,20 @@ fn solve_monte_carlo(
         .iter()
         .position(|sample| sample.damage == p50)
         .unwrap_or(0);
-    // The median tape is cloned because the distribution keeps every rollout's
-    // events on the wire; the headline stats are moved out instead.
-    let headline = samples[median_index].clone();
+    // Headline line: keep the P50 tape on SolveResult.events. Deck eval drops
+    // per-rollout tapes from the distribution to bound RAM across many hands.
     let headline_influence = sample_influences.get(median_index).copied().unwrap_or(0);
+    let headline_damage = samples[median_index].damage;
+    let headline_events = if config.retain_rollout_tapes {
+        samples[median_index].events.clone()
+    } else {
+        std::mem::take(&mut samples[median_index].events)
+    };
+    if !config.retain_rollout_tapes {
+        for sample in &mut samples {
+            sample.events.clear();
+        }
+    }
     let headline_stats = rollout_stats
         .into_iter()
         .nth(median_index)
@@ -418,9 +530,9 @@ fn solve_monte_carlo(
 
     Ok(SolveResult {
         sim_type: SimType::MonteCarlo,
-        max_damage: headline.damage,
+        max_damage: headline_damage,
         end_influence: headline_influence,
-        events: headline.events,
+        events: headline_events,
         nodes: total_nodes,
         memo_entries: total_memo,
         elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
@@ -481,11 +593,11 @@ fn solve_two_pass(
     seed: u64,
     ordered: bool,
     materials: u16,
-) -> SolveResult {
+) -> Result<SolveResult> {
     let started = Instant::now();
-    let (mut brick, brick_stats) = solve_pass(hand, go_first, max_turns, &[], false, materials);
+    let (mut brick, brick_stats) = solve_pass(hand, go_first, max_turns, &[], false, materials)?;
     let queue = oracle_queue(remaining, seed, ordered);
-    let (mut oracle, oracle_stats) = solve_pass(hand, go_first, max_turns, &queue, true, materials);
+    let (mut oracle, oracle_stats) = solve_pass(hand, go_first, max_turns, &queue, true, materials)?;
     release_process_memory();
     brick.card_stats = summarize_line_stats(hand, &brick_stats, materials);
     oracle.card_stats = summarize_line_stats(hand, &oracle_stats, materials);
@@ -493,7 +605,7 @@ fn solve_two_pass(
     combined.add_sample(hand, &brick_stats);
     combined.add_sample(hand, &oracle_stats);
 
-    SolveResult {
+    Ok(SolveResult {
         sim_type: SimType::TwoPass,
         max_damage: brick.max_damage,
         end_influence: brick.end_influence,
@@ -513,7 +625,7 @@ fn solve_two_pass(
             SimType::TwoPass,
             crate::budget::Budget::default(),
         ),
-    }
+    })
 }
 
 fn solve_oracle_only(
@@ -524,12 +636,12 @@ fn solve_oracle_only(
     seed: u64,
     ordered: bool,
     materials: u16,
-) -> SolveResult {
+) -> Result<SolveResult> {
     let started = Instant::now();
     let queue = oracle_queue(remaining, seed, ordered);
-    let (pass, line_stats) = solve_pass(hand, go_first, max_turns, &queue, true, materials);
+    let (pass, line_stats) = solve_pass(hand, go_first, max_turns, &queue, true, materials)?;
     release_process_memory();
-    SolveResult {
+    Ok(SolveResult {
         sim_type: SimType::OracleOnly,
         max_damage: pass.max_damage,
         end_influence: pass.end_influence,
@@ -549,7 +661,7 @@ fn solve_oracle_only(
             SimType::OracleOnly,
             crate::budget::Budget::default(),
         ),
-    }
+    })
 }
 
 /// Picks the real card for Fire Brick's guaranteed "going second" draw when the request
@@ -634,6 +746,161 @@ const ACTION_CARDS: [Card; 14] = [
     Card::SparkAlight,
 ];
 
+/// Action cards that deal modeled positive damage (excludes pure-draw / no-effect actions).
+const DAMAGE_ACTION_CARDS: [Card; 10] = [
+    Card::FieryInterference,
+    Card::IntensifiedPyre,
+    Card::MarkTheTarget,
+    Card::PlantedExplosive,
+    Card::VermilionDecree,
+    Card::Demolition,
+    Card::SurgingBolt,
+    Card::IgniteFate,
+    Card::SmokeOut,
+    Card::SparkAlight,
+];
+
+fn is_pure_draw_card(card: Card) -> bool {
+    matches!(card, Card::IncreasingDanger | Card::UndeniableTruth)
+}
+
+/// Mate recollects memory before Main; ignore the Mate draw (unknown / not yet taken).
+fn board_for_damage_threat_check(mut state: State) -> State {
+    if state.phase == Phase::Materialize && state.memory_len > 0 {
+        for card in ALL_CARDS {
+            let count = state.memory[card.index()];
+            if count == 0 {
+                continue;
+            }
+            state.hand[card.index()] = state.hand[card.index()].saturating_add(count);
+            state.memory[card.index()] = 0;
+        }
+        state.hand_len = state.hand_len.saturating_add(state.memory_len);
+        state.memory_len = 0;
+    }
+    state
+}
+
+fn can_afford_action(state: &State, card: Card) -> bool {
+    if !state.has(card) {
+        return false;
+    }
+    let cost = action_cost(state, card);
+    let max_kindle = card.kindle().min(state.fire_gy).min(cost);
+    for kindle in 0..=max_kindle {
+        let reserve = cost.saturating_sub(kindle);
+        if state.hand_len.saturating_sub(1) >= reserve {
+            return true;
+        }
+    }
+    false
+}
+
+/// Approximate: board still has a legal positive-damage Main path (no recursive `actions()`).
+fn has_positive_damage_main_play(state: State) -> bool {
+    let state = board_for_damage_threat_check(state);
+    let turn0_first = state.go_first && state.turn == 0;
+
+    if state.dagger && state.dagger_ready {
+        return true;
+    }
+
+    if !turn0_first {
+        for index in 0..state.ally_len as usize {
+            if state.can_ally_attack(index) {
+                return true;
+            }
+        }
+
+        if state.champion_awake {
+            for card in [
+                Card::IgnitedStab,
+                Card::RendingFlames,
+                Card::HeatedVengeance,
+                Card::ViciousSlice,
+            ] {
+                if state.has(card) && state.hand_len.saturating_sub(1) >= card.cost() {
+                    return true;
+                }
+            }
+            for weapon in Weapon::EQUIPPABLE {
+                if state.has_weapon(weapon) {
+                    return true;
+                }
+            }
+        }
+
+        if state.has(Card::UncannyRealization)
+            && state.hand_len.saturating_sub(1) >= Card::UncannyRealization.cost()
+        {
+            for index in 0..state.ally_len as usize {
+                let ally = state.allies[index];
+                if ally.card().is_automaton() && ally.awake() {
+                    return true;
+                }
+            }
+        }
+
+        if state.has(Card::BlazingThrow) && state.any_weapon() && state.hand_len >= 2 {
+            return true;
+        }
+    }
+
+    for card in DAMAGE_ACTION_CARDS {
+        if can_afford_action(&state, card) {
+            return true;
+        }
+    }
+
+    // Soft: Truth/prep → Blade → swing counts as a remaining damage path.
+    if !turn0_first
+        && state.champion_awake
+        && state.prep > 0
+        && state.has_material(MAT_BLADE)
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Pay for a pure-draw action without resolving its draws (threat check only).
+fn simulate_pure_draw_payment(
+    mut state: State,
+    card: Card,
+    kindle: u8,
+    sacrifice_ally: Option<u8>,
+) -> Option<State> {
+    if let Some(index) = sacrifice_ally
+        && index as usize >= state.ally_len as usize
+    {
+        return None;
+    }
+    if !state.remove_hand(card) {
+        return None;
+    }
+    if let Some(index) = sacrifice_ally {
+        state.remove_ally(index as usize, true)?;
+    }
+    let cost = action_cost(&state, card);
+    if !state.pay_with_kindle(cost, kindle) {
+        return None;
+    }
+    if card == Card::UndeniableTruth {
+        state.prep = state.prep.saturating_add(1);
+    }
+    Some(state)
+}
+
+/// Never spend the last playable hand on pure draw when damage is still legal.
+fn refuse_last_hand_pure_draw(before: State, after: State) -> bool {
+    // On Death from a Truth sacrifice is damage from the play itself — keep it.
+    if after.damage > before.damage {
+        return false;
+    }
+    has_positive_damage_main_play(before) && !has_positive_damage_main_play(after)
+}
+
 /// Reserve cost after Class Bonus reductions (Incapacitate costs 2 less while Assassin).
 fn action_cost(state: &State, card: Card) -> u8 {
     let cost = card.cost();
@@ -650,6 +917,14 @@ fn push_undeniable_truth_plays(state: State, result: &mut Vec<Action>) {
         return;
     }
     for index in 0..state.ally_len as usize {
+        let Some(after) =
+            simulate_pure_draw_payment(state, Card::UndeniableTruth, 0, Some(index as u8))
+        else {
+            continue;
+        };
+        if refuse_last_hand_pure_draw(state, after) {
+            continue;
+        }
         result.push(Action::PlayAction {
             card: Card::UndeniableTruth,
             kindle: 0,
@@ -675,6 +950,14 @@ fn push_action_plays(state: State, result: &mut Vec<Action>) {
             let reserve = cost.saturating_sub(kindle);
             if state.hand_len.saturating_sub(1) < reserve {
                 continue;
+            }
+            if is_pure_draw_card(card) {
+                let Some(after) = simulate_pure_draw_payment(state, card, kindle, None) else {
+                    continue;
+                };
+                if refuse_last_hand_pure_draw(state, after) {
+                    continue;
+                }
             }
             let can_prepare =
                 card.prepare() > 0 && state.prep >= card.prepare() && state.is_assassin();
@@ -863,6 +1146,116 @@ fn push_fast_plays(state: State, result: &mut Vec<Action>) {
     push_fast_action_plays(state, result);
 }
 
+/// Memo board key: same contract as `Search::visit` (damage excluded from the key).
+fn memo_board_key(mut state: State) -> State {
+    state.damage = 0;
+    state
+}
+
+/// Stable reorder: actions that deal damage this step before dig / setup / pass.
+/// Exact search — only changes expansion order (earlier incumbent for future BnB).
+fn order_actions_damage_first(state: &State, actions: &mut [Action]) {
+    actions.sort_by_key(|action| !action_deals_immediate_damage(state, *action));
+}
+
+fn action_deals_immediate_damage(state: &State, action: Action) -> bool {
+    match action {
+        Action::AttackArthur(_)
+        | Action::AttackOthers
+        | Action::PlayAttack { .. }
+        | Action::AttackWithWeapon(_)
+        | Action::BlazingThrow(_)
+        | Action::ActivateDagger => true,
+        Action::PlayAction {
+            card,
+            sacrifice_ally,
+            ..
+        } => {
+            if matches!(
+                card,
+                Card::FieryInterference
+                    | Card::IntensifiedPyre
+                    | Card::MarkTheTarget
+                    | Card::PlantedExplosive
+                    | Card::VermilionDecree
+                    | Card::Demolition
+                    | Card::SurgingBolt
+                    | Card::IgniteFate
+                    | Card::SmokeOut
+                    | Card::SparkAlight
+            ) {
+                return true;
+            }
+            if card == Card::UndeniableTruth
+                && let Some(index) = sacrifice_ally
+                && (index as usize) < state.ally_len as usize
+            {
+                return state.allies[index as usize].card().on_death_damage() > 0;
+            }
+            false
+        }
+        Action::PlayAlly {
+            card, sacrifice, ..
+        } => {
+            if card == Card::Rococo {
+                // On-enter 2 when influence is low after pay; unique replacement also
+                // routes through GY (ordering only — over-approx is fine).
+                return state.influence() <= 5
+                    || state.allies[..state.ally_len as usize]
+                        .iter()
+                        .any(|ally| ally.card() == Card::Rococo);
+            }
+            if sacrifice {
+                return state.allies[..state.ally_len as usize].iter().any(|ally| {
+                    ally.card() != Card::Arthur && ally.card().on_death_damage() > 0
+                });
+            }
+            if card.is_unique()
+                && state.allies[..state.ally_len as usize]
+                    .iter()
+                    .any(|ally| ally.card() == card)
+            {
+                return state.allies[..state.ally_len as usize]
+                    .iter()
+                    .any(|ally| ally.card() == card && ally.card().on_death_damage() > 0);
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Drop Mate-ending actions that land on the same post-Mate memo key.
+/// On collision keep the sibling with higher incoming damage (exact if a future
+/// Mate-ender deals damage mid-phase); ties keep the first action.
+fn collapse_mate_ending_siblings(state: State, endings: Vec<Action>) -> Vec<Action> {
+    if endings.len() <= 1 {
+        return endings;
+    }
+    let mut best: FxHashMap<State, (Action, u8)> =
+        FxHashMap::with_capacity_and_hasher(endings.len(), Default::default());
+    let mut order: Vec<State> = Vec::with_capacity(endings.len());
+    for action in endings {
+        let after = apply_silent(state, action);
+        let damage = after.damage;
+        let key = memo_board_key(after);
+        match best.get(&key) {
+            Some(&(_, prev_damage)) if damage <= prev_damage => {}
+            Some(_) => {
+                best.insert(key, (action, damage));
+            }
+            None => {
+                order.push(key);
+                best.insert(key, (action, damage));
+            }
+        }
+    }
+    order
+        .into_iter()
+        .map(|key| best[&key].0)
+        .collect()
+}
+
 fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
     if state.phase == Phase::Agility {
         let mut result = Vec::with_capacity(24);
@@ -875,19 +1268,19 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
     }
 
     if state.phase == Phase::Materialize {
-        let mut result = Vec::with_capacity(16);
+        let mut endings = Vec::with_capacity(16);
         // Mercenary's Blade in Mate: champion must already be leveled.
         if state.turn >= 1 {
             if state.has_material(MAT_HAMMER) {
-                result.push(Action::MaterializeHammer);
+                endings.push(Action::MaterializeHammer);
             }
             if state.is_assassin() && state.prep > 0 && state.has_material(MAT_BLADE) {
-                result.push(Action::MercenaryBlade);
+                endings.push(Action::MercenaryBlade);
             }
         }
         // Solver reduction: Poisoned Dagger is always taken on the first Materialize window.
         if state.turn == 1 && state.has_material(MAT_DAGGER) {
-            result.push(Action::MaterializeDagger);
+            endings.push(Action::MaterializeDagger);
         }
         if state.turn >= 1
             && state.champion_level == 0
@@ -895,14 +1288,21 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
             && (state.memory_len > 0 || state.float_gy > 0)
         {
             if glimpse_enabled && state.queue_pos < state.queue_len {
-                let layouts = state.glimpse_layout_count();
-                for layout in 0..layouts {
-                    result.push(Action::MaterializeZanderMemory {
-                        glimpse_layout: Some(layout),
+                let layouts = state.glimpse_relevant_layouts();
+                if layouts.is_empty() {
+                    // No remaining deck draws — Glimpse cannot change outcomes.
+                    endings.push(Action::MaterializeZanderMemory {
+                        glimpse_layout: None,
                     });
+                } else {
+                    for layout in layouts {
+                        endings.push(Action::MaterializeZanderMemory {
+                            glimpse_layout: Some(layout),
+                        });
+                    }
                 }
             } else {
-                result.push(Action::MaterializeZanderMemory {
+                endings.push(Action::MaterializeZanderMemory {
                     glimpse_layout: None,
                 });
             }
@@ -912,32 +1312,35 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
             && state.has_material(MAT_TRISTAN)
             && (state.memory_len > 0 || state.float_gy > 0)
         {
-            if glimpse_enabled && state.queue_pos < state.queue_len {
-                let layouts = state.glimpse_layout_count();
-                for layout in 0..layouts {
-                    result.push(Action::MaterializeTristanMemory {
-                        glimpse_layout: Some(layout),
-                    });
-                }
-            } else {
-                result.push(Action::MaterializeTristanMemory {
-                    glimpse_layout: None,
-                });
-            }
+            endings.push(Action::MaterializeTristanMemory);
         }
         if state.turn >= 1
             && state.is_assassin()
             && state.has_material(MAT_RIPPER)
             && (state.memory_len > 0 || state.float_gy > 0)
         {
-            result.push(Action::MaterializeRipper);
+            endings.push(Action::MaterializeRipper);
         }
         if state.turn >= 1 && state.has_material(MAT_RING) {
-            result.push(Action::MaterializeRing);
+            endings.push(Action::MaterializeRing);
         }
-        // Fast activations before recollect (e.g. Virgil, Demolition).
+        endings.push(Action::SkipMaterialize);
+        let endings = collapse_mate_ending_siblings(state, endings);
+
+        // Preserve prior order: materializes → fast plays → Skip.
+        let mut result = Vec::with_capacity(endings.len().saturating_add(8));
+        for action in endings.iter().copied() {
+            if !matches!(action, Action::SkipMaterialize) {
+                result.push(action);
+            }
+        }
         push_fast_plays(state, &mut result);
-        result.push(Action::SkipMaterialize);
+        if endings
+            .iter()
+            .any(|action| matches!(action, Action::SkipMaterialize))
+        {
+            result.push(Action::SkipMaterialize);
+        }
         return result;
     }
 
@@ -1141,9 +1544,6 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
             }
         }
     }
-    if state.ring {
-        result.push(Action::BanishCrusaderRing);
-    }
     if state.is_assassin() && state.has_material(MAT_SOULKNIFE) && state.fire_gy >= 3 {
         result.push(Action::MaterializeSoulknife);
     }
@@ -1261,7 +1661,7 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
             level_zander(&mut state, tape, TapePhase::Materialize);
             finish_materialization(&mut state, tape);
         }
-        Action::MaterializeTristanMemory { glimpse_layout } => {
+        Action::MaterializeTristanMemory => {
             state.remove_material(MAT_TRISTAN);
             let from_memory = state.pay_champion_memory_cost();
             let fields = if from_memory {
@@ -1275,25 +1675,6 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
                 EventKind::FloatForTristan,
                 fields,
             );
-            if let Some(layout) = glimpse_layout {
-                let glimpsed = state.glimpse_peek();
-                state.apply_glimpse_layout(layout);
-                if !glimpsed.is_empty() {
-                    let mut glimpse_fields = EventFields::default();
-                    if let Some(first) = glimpsed.first() {
-                        glimpse_fields.card = Some(*first);
-                    }
-                    if let Some(second) = glimpsed.get(1) {
-                        glimpse_fields.drawn = Some(*second);
-                    }
-                    tape.push(
-                        state,
-                        TapePhase::Materialize,
-                        EventKind::Glimpse,
-                        glimpse_fields,
-                    );
-                }
-            }
             level_tristan(&mut state, tape, TapePhase::Materialize);
             finish_materialization(&mut state, tape);
         }
@@ -1353,12 +1734,19 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
         }
         Action::MaterializeRing => {
             state.remove_material(MAT_RING);
-            state.ring = true;
             tape.push(
                 state,
                 TapePhase::Materialize,
                 EventKind::MaterializeRing,
                 EventFields::default(),
+            );
+            // Always banish immediately — there is no "hold the ring for later" line.
+            let drawn = state.draw_unknown();
+            tape.push(
+                state,
+                TapePhase::Materialize,
+                EventKind::BanishCrusaderRing,
+                EventFields::default().with_drawn(drawn),
             );
             finish_materialization(&mut state, tape);
         }
@@ -1386,6 +1774,7 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
             );
         }
         Action::BanishCrusaderRing => {
+            // Legacy / defensive: Ring now banishes as part of MaterializeRing.
             if state.ring {
                 state.ring = false;
                 let drawn = state.draw_unknown();
@@ -2171,14 +2560,443 @@ mod tests {
     }
 
     #[test]
+    fn increasing_danger_refused_when_it_spends_last_damage_hand() {
+        // Smoke Out is the only damage play; paying ID reserves it → no Main damage left.
+        let mut state = State::with_queue_and_materials(
+            &[Card::IncreasingDanger, Card::SmokeOut, Card::Brick],
+            false,
+            2,
+            &[Card::Brick, Card::Brick],
+            0,
+        );
+        state.phase = Phase::Main;
+        state.champion_level = 1;
+        state.champion_awake = true;
+
+        let legal = actions(state, false);
+        assert!(
+            !legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::IncreasingDanger,
+                    ..
+                }
+            )),
+            "ID should not spend the last damage card: {legal:?}"
+        );
+        assert!(
+            legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::SmokeOut,
+                    ..
+                }
+            )),
+            "{legal:?}"
+        );
+    }
+
+    #[test]
+    fn increasing_danger_allowed_when_no_damage_play_exists() {
+        let mut state = State::with_queue_and_materials(
+            &[Card::IncreasingDanger, Card::Brick, Card::Brick],
+            false,
+            2,
+            &[Card::Demolition, Card::Brick],
+            0,
+        );
+        state.phase = Phase::Main;
+        state.champion_level = 1;
+
+        let legal = actions(state, false);
+        assert!(
+            legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::IncreasingDanger,
+                    ..
+                }
+            )),
+            "digging is fine when nothing damages yet: {legal:?}"
+        );
+    }
+
+    #[test]
+    fn undeniable_truth_refused_when_sacrifice_kills_last_damage() {
+        // Awake ally is the only damage; Truth sacs it and pays the brick.
+        let mut state = State::with_queue_and_materials(
+            &[Card::UndeniableTruth, Card::Brick],
+            false,
+            2,
+            &[Card::Brick, Card::Brick],
+            0,
+        );
+        state.phase = Phase::Main;
+        state.champion_level = 1;
+        state.add_ally(Card::ClumsyApprentice, true, false);
+
+        let legal = actions(state, false);
+        assert!(
+            !legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::UndeniableTruth,
+                    ..
+                }
+            )),
+            "Truth should not sac the only attacker: {legal:?}"
+        );
+        assert!(
+            legal
+                .iter()
+                .any(|action| matches!(action, Action::AttackOthers)),
+            "{legal:?}"
+        );
+    }
+
+    #[test]
+    fn undeniable_truth_kept_when_prep_enables_blade() {
+        // Smoke Out is spendable damage now; Truth reserves it, but +prep unlocks Blade→swing.
+        let mut state = State::with_queue_and_materials(
+            &[Card::UndeniableTruth, Card::SmokeOut],
+            false,
+            2,
+            &[],
+            MAT_BLADE,
+        );
+        state.phase = Phase::Main;
+        state.champion_level = 1;
+        state.champion_awake = true;
+        state.add_ally(Card::ClumsyApprentice, false, false);
+
+        let legal = actions(state, false);
+        assert!(
+            legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::UndeniableTruth,
+                    ..
+                }
+            )),
+            "Truth→Blade should remain legal: {legal:?}"
+        );
+    }
+
+    #[test]
+    fn draw_potential_counts_recollect_windows_and_hand_engines() {
+        // Mate on turn 0 of 3 → 3 recollect draws still owed.
+        let mut state = State::with_queue(
+            &[Card::IncreasingDanger, Card::Brick, Card::Brick, Card::Brick],
+            true,
+            3,
+            &[
+                Card::Brick,
+                Card::Brick,
+                Card::Brick,
+                Card::Brick,
+                Card::Brick,
+                Card::Brick,
+                Card::Brick,
+                Card::Brick,
+            ],
+        );
+        state.phase = Phase::Materialize;
+        state.turn = 0;
+        assert_eq!(state.recollect_draw_potential(), 3);
+        // Increasing Danger is playable (4 cards in hand/memory) → +2.
+        assert_eq!(state.draw_potential(), 5);
+
+        // After leaving Mate on turn 0, only turns 1 and 2 remain.
+        state.phase = Phase::Main;
+        assert_eq!(state.recollect_draw_potential(), 2);
+        assert_eq!(state.draw_potential(), 4);
+
+        // Truth needs an ally; without one it should not count.
+        state.hand[Card::IncreasingDanger.index()] = 0;
+        state.hand[Card::UndeniableTruth.index()] = 1;
+        state.hand_len = 4;
+        assert_eq!(state.draw_potential(), 2); // recollects only
+        state.add_ally(Card::ClumsyApprentice, true, false);
+        assert_eq!(state.draw_potential(), 3); // + Truth
+    }
+
+    #[test]
+    fn draw_potential_counts_ring_and_memory_engines() {
+        let mut state = State::with_queue(
+            &[Card::Brick, Card::Brick, Card::Brick, Card::Brick],
+            true,
+            3,
+            &[],
+        );
+        state.phase = Phase::Materialize;
+        state.turn = 0;
+        state.materials = 0;
+        // 3 Mate windows, no ring → recollects only.
+        assert_eq!(state.recollect_draw_potential(), 3);
+        assert_eq!(state.draw_potential(), 3);
+
+        // Ring still in the material deck: +1 draw per future Mate step.
+        state.materials = MAT_RING;
+        assert_eq!(state.draw_potential(), 6); // 3 recollect + 3 ring
+
+        // After materialize+banish, ring is gone from materials and not on field.
+        state.materials = 0;
+        state.ring = false;
+        state.phase = Phase::Main;
+        assert_eq!(state.recollect_draw_potential(), 2);
+        assert_eq!(state.draw_potential(), 2);
+
+        state.memory[Card::ClumsyApprentice.index()] = 1;
+        state.memory_len = 1;
+        assert_eq!(state.draw_potential(), 3); // 2 recollect + Clumsy
+    }
+
+    #[test]
     fn glimpse_tail_orders_cover_top_and_bottom() {
-        let state = State::with_queue(&[], false, 1, &[Card::Brick, Card::IgnitedStab]);
-        assert!(state.glimpse_layout_count() >= 2);
+        // Two distinct peeked cards + a middle card → five layouts (not six):
+        // both-top ×2, split ×2, both-bottom ×1.
+        let state = State::with_queue(
+            &[],
+            false,
+            1,
+            &[Card::Brick, Card::IgnitedStab, Card::Arthur],
+        );
+        assert_eq!(state.glimpse_layout_count(), 5);
         let mut reordered = state;
         reordered.apply_glimpse_layout(1);
         assert_eq!(
             reordered.queue[reordered.queue_pos as usize],
             Card::IgnitedStab as u8
+        );
+        // Both-bottom layout (index 4) keeps original relative order.
+        let mut both_bottom = state;
+        both_bottom.apply_glimpse_layout(4);
+        let pos = both_bottom.queue_pos as usize;
+        assert_eq!(both_bottom.queue[pos], Card::Arthur as u8);
+        assert_eq!(both_bottom.queue[pos + 1], Card::Brick as u8);
+        assert_eq!(both_bottom.queue[pos + 2], Card::IgnitedStab as u8);
+    }
+
+    #[test]
+    fn glimpse_collapses_to_unique_tops_when_one_draw_remains() {
+        // Mate on the last turn: only the recollect draw remains (potential 1).
+        // A-top layouts (both-stay / A-top-B-bottom) collapse; same for B-top.
+        // Both-bottom keeps a third top when middle is non-empty.
+        let mut state = State::with_queue(
+            &[Card::Brick, Card::Brick, Card::Brick, Card::Brick],
+            true,
+            3,
+            &[Card::Brick, Card::IgnitedStab, Card::Arthur],
+        );
+        state.phase = Phase::Materialize;
+        state.turn = 2;
+        state.materials = 0;
+        assert_eq!(state.draw_potential(), 1);
+        assert_eq!(state.glimpse_layout_count(), 5);
+        let relevant = state.glimpse_relevant_layouts();
+        assert_eq!(relevant, vec![0, 1, 4], "{relevant:?}");
+
+        // Empty middle: only two tops (A vs B); both-bottom duplicates both-stay.
+        let mut tight = State::with_queue(
+            &[Card::Brick, Card::Brick, Card::Brick, Card::Brick],
+            true,
+            3,
+            &[Card::Brick, Card::IgnitedStab],
+        );
+        tight.phase = Phase::Materialize;
+        tight.turn = 2;
+        tight.materials = 0;
+        assert_eq!(tight.draw_potential(), 1);
+        assert_eq!(tight.glimpse_relevant_layouts(), vec![0, 1]);
+    }
+
+    #[test]
+    fn glimpse_skipped_when_draw_potential_is_zero() {
+        let mut state = State::with_queue(
+            &[Card::Brick; 4],
+            true,
+            3,
+            &[Card::Brick, Card::IgnitedStab],
+        );
+        state.phase = Phase::Main;
+        state.turn = 2; // last turn, Mate already done → no recollect draws left
+        state.materials = 0;
+        assert_eq!(state.draw_potential(), 0);
+        assert!(state.glimpse_relevant_layouts().is_empty());
+    }
+
+    #[test]
+    fn mate_ending_siblings_collapse_identical_post_mate_keys() {
+        // All-brick queue: every Glimpse permutation is the same memo board after Mate.
+        let mut state = State::with_queue_and_materials(
+            &[Card::Brick, Card::Brick, Card::Brick, Card::Brick],
+            false,
+            2,
+            &[Card::Brick, Card::Brick, Card::Brick],
+            MAT_ZANDER,
+        );
+        state.phase = Phase::Materialize;
+        state.turn = 1;
+        state.memory[Card::Brick.index()] = 1;
+        state.memory_len = 1;
+
+        let layout_count = state.glimpse_layout_count();
+        assert!(layout_count >= 2, "need multiple Glimpse layouts to collapse");
+        let endings: Vec<Action> = (0..layout_count)
+            .map(|layout| Action::MaterializeZanderMemory {
+                glimpse_layout: Some(layout),
+            })
+            .chain(std::iter::once(Action::SkipMaterialize))
+            .collect();
+
+        let collapsed = collapse_mate_ending_siblings(state, endings);
+        let zander = collapsed
+            .iter()
+            .filter(|action| matches!(action, Action::MaterializeZanderMemory { .. }))
+            .count();
+        assert_eq!(
+            zander, 1,
+            "identical brick permutations must share one post-Mate key: {collapsed:?}"
+        );
+        assert!(
+            collapsed
+                .iter()
+                .any(|action| matches!(action, Action::SkipMaterialize)),
+            "Skip differs (no Zander level): {collapsed:?}"
+        );
+    }
+
+    #[test]
+    fn mate_ending_siblings_keep_distinct_post_mate_keys() {
+        let mut state = State::with_queue_and_materials(
+            &[Card::Brick, Card::Brick, Card::Brick, Card::Brick],
+            false,
+            2,
+            &[Card::Brick, Card::IgnitedStab, Card::Arthur],
+            MAT_ZANDER | MAT_HAMMER,
+        );
+        state.phase = Phase::Materialize;
+        state.turn = 1;
+        state.memory[Card::Brick.index()] = 1;
+        state.memory_len = 1;
+
+        let legal = actions(state, true);
+        let zander = legal
+            .iter()
+            .filter(|action| matches!(action, Action::MaterializeZanderMemory { .. }))
+            .count();
+        assert!(
+            zander >= 2,
+            "distinct tops must remain separate Mate endings: {legal:?}"
+        );
+        assert!(
+            legal
+                .iter()
+                .any(|action| matches!(action, Action::MaterializeHammer)),
+            "{legal:?}"
+        );
+        assert!(
+            legal
+                .iter()
+                .any(|action| matches!(action, Action::SkipMaterialize)),
+            "{legal:?}"
+        );
+    }
+
+    #[test]
+    fn mate_collapse_does_not_drop_fast_plays() {
+        let mut state = State::with_queue_and_materials(
+            &[Card::Demolition, Card::Brick, Card::Brick, Card::Brick],
+            false,
+            2,
+            &[Card::Brick, Card::Brick],
+            0,
+        );
+        state.phase = Phase::Materialize;
+        state.turn = 1;
+
+        let legal = actions(state, false);
+        assert!(
+            legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::Demolition,
+                    ..
+                }
+            )),
+            "fast Demolition must stay outside Mate-ending collapse: {legal:?}"
+        );
+        assert!(
+            legal
+                .iter()
+                .any(|action| matches!(action, Action::SkipMaterialize)),
+            "{legal:?}"
+        );
+    }
+
+    #[test]
+    fn damage_first_orders_burn_before_draw_engines() {
+        // Extra brick so ID payment leaves Smoke Out still affordable (soft dig gate).
+        let mut state = State::with_queue_and_materials(
+            &[
+                Card::SmokeOut,
+                Card::IncreasingDanger,
+                Card::Brick,
+                Card::Brick,
+                Card::Brick,
+            ],
+            false,
+            2,
+            &[],
+            0,
+        );
+        state.phase = Phase::Main;
+        state.champion_level = 1;
+
+        let mut legal = actions(state, false);
+        assert!(
+            legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::SmokeOut,
+                    ..
+                }
+            )),
+            "{legal:?}"
+        );
+        assert!(
+            legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::IncreasingDanger,
+                    ..
+                }
+            )),
+            "{legal:?}"
+        );
+
+        order_actions_damage_first(&state, &mut legal);
+        let smoke = legal.iter().position(|action| {
+            matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::SmokeOut,
+                    ..
+                }
+            )
+        });
+        let dig = legal.iter().position(|action| {
+            matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::IncreasingDanger,
+                    ..
+                }
+            )
+        });
+        assert!(
+            smoke.unwrap() < dig.unwrap(),
+            "Smoke Out should expand before Increasing Danger: {legal:?}"
         );
     }
 
@@ -2293,7 +3111,8 @@ mod tests {
             Card::RedHare,
             Card::PepperedChef,
         ];
-        let (pass, stats) = solve_pass(&hand, false, 2, &[Card::IgnitedStab], false, ALL_MATERIALS);
+        let (pass, stats) = solve_pass(&hand, false, 2, &[Card::IgnitedStab], false, ALL_MATERIALS)
+            .expect("solve_pass");
         assert_eq!(
             pass.events.first().and_then(|event| event.drawn),
             Some("ignited_stab"),
@@ -2843,20 +3662,30 @@ mod tests {
         state.memory[Card::KingdomInformant.index()] = 1;
         state.memory_len = 1;
 
-        let (after, steps) = apply(
-            state,
-            Action::MaterializeTristanMemory {
-                glimpse_layout: None,
-            },
-        );
+        let (after, steps) = apply(state, Action::MaterializeTristanMemory);
         assert!(after.tristan_leveled);
         assert_eq!(after.prep, 1);
         assert_eq!(after.champion_level, 1);
         assert!(
             steps
                 .iter()
-                .any(|step| format_line_event(step).contains("Tristan Lvl 1 Glimpse/Prep")),
+                .any(|step| format_line_event(step).contains("Tristan Lvl 1 Prep")),
             "{steps:?}"
+        );
+        assert!(
+            steps
+                .iter()
+                .all(|step| step.kind.as_str() != "glimpse"),
+            "Tristan must not Glimpse: {steps:?}"
+        );
+        let legal = actions(state, true);
+        let tristan_plays = legal
+            .iter()
+            .filter(|action| matches!(action, Action::MaterializeTristanMemory))
+            .count();
+        assert_eq!(
+            tristan_plays, 1,
+            "Tristan must not fan out Glimpse layouts: {legal:?}"
         );
     }
 
@@ -3464,8 +4293,8 @@ mod tests {
     }
 
     #[test]
-    fn crusader_ring_materializes_then_banishes_in_main() {
-        let mut state = State::with_queue(&[], false, 2, &[Card::IgnitedStab]);
+    fn crusader_ring_materializes_and_banishes_immediately() {
+        let mut state = State::with_queue(&[], false, 2, &[Card::IgnitedStab, Card::Brick]);
         state.phase = Phase::Materialize;
         state.turn = 2;
         state.materials = MAT_RING;
@@ -3481,27 +4310,38 @@ mod tests {
             !legal_mate
                 .iter()
                 .any(|action| matches!(action, Action::BanishCrusaderRing)),
-            "ring cannot be banished directly from deck: {legal_mate:?}"
+            "ring cannot be banished as a separate Mate action: {legal_mate:?}"
         );
 
+        let hand_before = state.hand_len;
         let (after_mate, mate_steps) = apply(state, Action::MaterializeRing);
-        assert!(after_mate.ring);
+        assert!(!after_mate.ring, "ring must not linger on the field");
         assert!(!after_mate.has_material(MAT_RING));
         assert_eq!(after_mate.phase, Phase::Main);
+        // Banish draw + recollect draw.
+        assert!(
+            after_mate.hand_len >= hand_before.saturating_add(2),
+            "expected banish+recollect draws: before={hand_before} after={}",
+            after_mate.hand_len
+        );
         assert!(
             mate_steps
                 .iter()
-                .any(|step| { format_line_event(step) == "Materialize Grand Crusader's Ring" }),
+                .any(|step| format_line_event(step) == "Materialize Grand Crusader's Ring"),
             "{mate_steps:?}"
         );
-
-        let hand_before = after_mate.hand_len;
-        let (after_banish, banish_steps) = apply(after_mate, Action::BanishCrusaderRing);
-        assert!(!after_banish.ring);
-        assert!(after_banish.hand_len > hand_before);
         assert!(
-            banish_steps.iter().any(|step| step.drawn.is_some()),
-            "{banish_steps:?}"
+            mate_steps.iter().any(|step| {
+                step.kind.as_str() == "banishCrusaderRing" && step.drawn.is_some()
+            }),
+            "banish+draw must happen in the same Mate resolution: {mate_steps:?}"
+        );
+        let legal_main = actions(after_mate, false);
+        assert!(
+            !legal_main
+                .iter()
+                .any(|action| matches!(action, Action::BanishCrusaderRing)),
+            "Main must not offer a delayed ring banish: {legal_main:?}"
         );
     }
 
@@ -4029,12 +4869,12 @@ mod tests {
             "Materialization Resolves",
             "Recollect (draw Brick)",
             "Attack from Arthur, Young Heir",
-            "Activate Clumsy Apprentice",
-            "Clumsy On-Enter draw (Brick)",
-            "Attack from Clumsy Apprentice (Arthur +1)",
             "USE IN BELOW ATTACK (Impact Hammer)",
             "Ignited Stab (no prep) with Impact Hammer",
             "Impact Hammer self 3",
+            "Activate Clumsy Apprentice",
+            "Clumsy On-Enter draw (Brick)",
+            "Attack from Clumsy Apprentice (Arthur +1)",
             "Activate Kingdom Informant",
             "Attack from Kingdom Informant (Arthur +1)",
             "Main: Pass Opportunity",
@@ -4077,7 +4917,8 @@ mod tests {
         let queue: Vec<Card> = (0..16)
             .map(|index| drill_three[index % drill_three.len()])
             .collect();
-        let (pass, _) = solve_pass(&drill_three, true, 3, &queue, true, ALL_MATERIALS);
+        let (pass, _) = solve_pass(&drill_three, true, 3, &queue, true, ALL_MATERIALS)
+            .expect("solve_pass");
         assert_eq!(pass.max_damage, 21);
         assert_eq!(
             pass.events.first().map(format_line_event).as_deref(),
@@ -4137,7 +4978,8 @@ mod tests {
         let queue: Vec<Card> = (0..16)
             .map(|index| drill_three[index % drill_three.len()])
             .collect();
-        let (pass, _) = solve_pass(&drill_three, true, 3, &queue, true, ALL_MATERIALS);
+        let (pass, _) = solve_pass(&drill_three, true, 3, &queue, true, ALL_MATERIALS)
+            .expect("solve_pass");
         let actions = labels(&pass.events);
         println!(
             "case oracle_16: damage={} actions={actions:?}",
@@ -4699,5 +5541,80 @@ mod tests {
                 .any(|event| event.kind.as_str() == "levelTristan"),
             "optimal Tristan line should materialize Tristan"
         );
+    }
+
+    #[test]
+    fn generational_memo_reset_preserves_exact_oracle_damage() {
+        let hand = [
+            Card::Arthur,
+            Card::ClumsyApprentice,
+            Card::KingdomInformant,
+            Card::IgnitedStab,
+            Card::SableRemnant,
+            Card::HastyMessenger,
+            Card::RendingFlames,
+        ];
+        let board = State::with_queue(&hand, true, 2, &[Card::Brick]);
+
+        crate::pressure::force_pressure_for_test(crate::pressure::PressureLevel::Clear);
+        let mut huge = Search::with_memo_cap(true, usize::MAX / 4);
+        let full = huge.visit(board);
+
+        let mut tiny = Search::with_memo_cap(true, 256);
+        let capped = tiny.visit(board);
+
+        assert_eq!(full.damage, capped.damage);
+        assert_eq!(full.influence, capped.influence);
+        assert!(
+            tiny.memo_generations > 0,
+            "tiny cap should force at least one generational reset"
+        );
+    }
+
+    #[test]
+    fn squeeze_multiplier_still_yields_exact_damage() {
+        let hand = [
+            Card::Arthur,
+            Card::ClumsyApprentice,
+            Card::KingdomInformant,
+            Card::IgnitedStab,
+        ];
+        let board = State::with_queue(&hand, true, 1, &[]);
+
+        crate::pressure::force_pressure_for_test(crate::pressure::PressureLevel::Clear);
+        let mut full_search = Search::with_memo_cap(false, 10_000);
+        let full = full_search.visit(board);
+
+        crate::pressure::force_pressure_for_test(crate::pressure::PressureLevel::Squeeze);
+        let mut squeezed = Search::with_memo_cap(false, 10_000);
+        let under_pressure = squeezed.visit(board);
+        crate::pressure::force_pressure_for_test(crate::pressure::PressureLevel::Clear);
+
+        assert_eq!(full.damage, under_pressure.damage);
+        assert_eq!(full.influence, under_pressure.influence);
+    }
+
+    #[test]
+    fn cancel_flag_aborts_long_oracle_pass() {
+        let hand = [
+            Card::Arthur,
+            Card::ClumsyApprentice,
+            Card::KingdomInformant,
+            Card::IgnitedStab,
+            Card::SableRemnant,
+            Card::HastyMessenger,
+            Card::RendingFlames,
+        ];
+        let queue: Vec<_> = std::iter::repeat_n(Card::Brick, 40).collect();
+        let flag = crate::cancel::new_flag();
+        let flag_set = flag.clone();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            crate::cancel::request(&flag_set);
+        });
+        let _guard = crate::cancel::install(flag);
+        let err = solve_pass(&hand, true, 3, &queue, true, ALL_MATERIALS).expect_err("cancelled");
+        assert!(matches!(err, EngineError::Cancelled));
+        handle.join().expect("cancel thread");
     }
 }

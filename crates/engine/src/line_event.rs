@@ -51,7 +51,7 @@ impl ActionOp {
             Action::MaterializeHammer => Self::MaterializeHammer,
             Action::MaterializeDagger => Self::MaterializeDagger,
             Action::MaterializeZanderMemory { .. } => Self::MaterializeZanderMemory,
-            Action::MaterializeTristanMemory { .. } => Self::MaterializeTristanMemory,
+            Action::MaterializeTristanMemory => Self::MaterializeTristanMemory,
             Action::TristanRecollect => Self::TristanRecollect,
             Action::SkipAgility => Self::SkipAgility,
             Action::MaterializeSoulknife => Self::MaterializeSoulknife,
@@ -720,7 +720,7 @@ pub fn format_line_event(event: &LineEvent) -> String {
                 "Mem Cost for Tristan Lvl 1 (Float from GY)".to_string()
             }
         }
-        EventKind::LevelTristan => "Tristan Lvl 1 Glimpse/Prep".to_string(),
+        EventKind::LevelTristan => "Tristan Lvl 1 Prep".to_string(),
         EventKind::TristanRecollect => {
             let mut parts = Vec::new();
             if let Some(id) = event.card {
