@@ -27,12 +27,14 @@ type EvaluateEvent =
       totalRollouts: number;
     }
   | { kind: "memoryPressure"; level: "clear" | "squeeze" | "parked" }
+  | { kind: "heartbeat" }
   | { kind: "result" } & DeckEvalResult
   | { kind: "error"; message: string };
 
 type OptimizeEvent =
   | { kind: "progress" } & Record<string, unknown>
   | { kind: "memoryPressure"; level: "clear" | "squeeze" | "parked" }
+  | { kind: "heartbeat" }
   | { kind: "result" } & OptimizeResult
   | { kind: "error"; message: string };
 
@@ -178,6 +180,8 @@ export class RunDispatcher {
               type: "memoryPressure" as const,
               level: event.level,
             });
+          } else if (event.kind === "heartbeat") {
+            // Worker keep-alive for undici body idle timeout; not forwarded to SSE.
           } else if (event.kind === "error") {
             throw new Error(event.message);
           } else if (event.kind === "result") {
@@ -221,6 +225,8 @@ export class RunDispatcher {
               type: "memoryPressure" as const,
               level: event.level,
             });
+          } else if (event.kind === "heartbeat") {
+            // Worker keep-alive for undici body idle timeout; not forwarded to SSE.
           } else if (event.kind === "error") {
             throw new Error(event.message);
           } else if (event.kind === "result") {

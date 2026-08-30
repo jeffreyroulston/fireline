@@ -65,6 +65,8 @@ export type ShellSolverState = Readonly<{
   simType: SimType;
   rollouts: number;
   lineResult: SolveResult | null;
+  /** Opening hand that produced `lineResult` (not the live builder hand). */
+  lineHand: CardId[];
   samples: number;
   busy: JobType | null;
   error: string;
@@ -88,7 +90,7 @@ export type ShellSolverActions = Readonly<{
   setTurns: (value: number) => void;
   setSimType: (value: SimType) => void;
   setRollouts: (value: number) => void;
-  setLineResult: (value: SolveResult | null) => void;
+  setLineResult: (value: SolveResult | null, evaluatedHand?: CardId[]) => void;
   setSamples: (value: number) => void;
   setError: (value: string) => void;
   solveHand: () => Promise<void>;
@@ -131,11 +133,18 @@ export function useShellSolver({
   const [turns, setTurns] = useState(3);
   const [simType, setSimType] = useState<SimType>("fire_brick");
   const [rollouts, setRollouts] = useState(12);
-  const [lineResult, setLineResult] = useState<SolveResult | null>(null);
+  const [lineResult, setLineResultState] = useState<SolveResult | null>(null);
+  const [lineHand, setLineHand] = useState<CardId[]>([]);
   const [samples, setSamples] = useState(8);
   const [busy, setBusy] = useState<JobType | null>(null);
   const [error, setError] = useState("");
   const [historyEpoch, setHistoryEpoch] = useState(0);
+
+  function setLineResult(value: SolveResult | null, evaluatedHand?: CardId[]) {
+    setLineResultState(value);
+    setLineHand(value && evaluatedHand ? [...evaluatedHand] : []);
+  }
+
   const {
     workerReachable,
     getRunForDeck,
@@ -217,11 +226,13 @@ export function useShellSolver({
       deckCards.length >= MIN_VALID_DECK_SIZE
         ? deckCountsCoveringHand(deckCards, hand)
         : undefined;
+    // Snapshot before the await — the builder hand can change while solving.
+    const evaluatedHand = [...hand];
     setBusy("solve");
     setError("");
     try {
       const result = await apiSolve({
-        hand,
+        hand: evaluatedHand,
         goFirst,
         maxTurns: turns,
         simType,
@@ -232,7 +243,9 @@ export function useShellSolver({
         queue: remainingQueue ?? null,
         budget: DEFAULT_BUDGET,
       });
-      startTransition(() => setLineResult(result as unknown as SolveResult));
+      startTransition(() =>
+        setLineResult(result as unknown as SolveResult, evaluatedHand),
+      );
     } catch (solveError) {
       setError(
         solveError instanceof Error
@@ -481,23 +494,27 @@ export function useShellSolver({
 
   function sendSampleToHandSolver(sample: SampleHand) {
     const deckEval = evaluateRun?.deckResult;
-    setHand([...sample.hand]);
+    const evaluatedHand = [...sample.hand];
+    setHand(evaluatedHand);
     setDrawn([]);
     setOrderedDeck([]);
     setSolverMode("hand");
     setSimType(deckEval?.simType ?? simType);
-    setLineResult({
-      simType: deckEval?.simType ?? simType,
-      maxDamage: sample.damage,
-      endInfluence:
-        sample.endInfluence ??
-        sample.twoPass?.brick.endInfluence ??
-        0,
-      events: sample.events,
-      nodes: sample.nodes,
-      distribution: sample.distribution,
-      twoPass: sample.twoPass,
-    });
+    setLineResult(
+      {
+        simType: deckEval?.simType ?? simType,
+        maxDamage: sample.damage,
+        endInfluence:
+          sample.endInfluence ??
+          sample.twoPass?.brick.endInfluence ??
+          0,
+        events: sample.events,
+        nodes: sample.nodes,
+        distribution: sample.distribution,
+        twoPass: sample.twoPass,
+      },
+      evaluatedHand,
+    );
     router.push(workbenchHref("line", activeDeckId));
     setError("");
   }
@@ -587,6 +604,7 @@ export function useShellSolver({
     simType,
     rollouts,
     lineResult,
+    lineHand,
     samples,
     busy,
     error,

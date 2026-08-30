@@ -34,7 +34,9 @@ pub use line_event::{
 };
 pub use model::{EffectiveRequest, PassResult, SimType, SolveRequest, SolveResult};
 pub use pressure::{PressureLevel, current_pressure, memory_config};
-pub use solver::{solve, solve_cards, solve_pass, solve_with_progress};
+pub use solver::{
+    opening_hand_hash, solve, solve_cards, solve_pass, solve_with_progress,
+};
 pub use version::{ENGINE_VERSION, EngineVersion};
 
 pub fn solve_json(input: &str) -> Result<String> {

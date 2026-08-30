@@ -15,6 +15,7 @@ use crate::{
     random::{Rng, percentile, shuffle_cards},
 };
 use rustc_hash::FxHashMap;
+use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
@@ -45,6 +46,12 @@ struct MemoValue {
 /// Park / generational-reset checkpoint cadence (~262k nodes).
 const PARK_CHECK_MASK: u64 = 0x3_FFFF;
 
+/// Optimistic damage per influence-reservation (2.5), as rational 5/2.
+const OPT_DMG_PER_RESERVE_NUM: u16 = 5;
+const OPT_DMG_PER_RESERVE_DEN: u16 = 2;
+/// Below this reservation budget, skip bound pruning and finish the line.
+const FINISH_RESERVE_THRESHOLD: u8 = 5;
+
 struct Search {
     memo: FxHashMap<State, MemoValue>,
     nodes: u64,
@@ -54,6 +61,14 @@ struct Search {
     memo_generations: u32,
     /// Set when cooperative cancel fires mid-search; visit returns early.
     aborted: bool,
+    /// Best damage found so far in this search (branch-and-bound incumbent).
+    incumbent_damage: u8,
+    /// When false (reconstruct), skip bound pruning so memo/target matching stays exact.
+    bound_prune: bool,
+    /// SHA-256 hex of sorted opening card ids (matches API `handHash`).
+    hand_hash: String,
+    /// Sorted opening card ids for log readability.
+    hand_label: String,
 }
 
 impl Search {
@@ -69,6 +84,10 @@ impl Search {
             memo_cap: memo_cap.max(1),
             memo_generations: 0,
             aborted: false,
+            incumbent_damage: 0,
+            bound_prune: true,
+            hand_hash: String::new(),
+            hand_label: String::new(),
         }
     }
 
@@ -80,6 +99,14 @@ impl Search {
         self.glimpse_enabled = glimpse_enabled;
         self.memo_generations = 0;
         self.aborted = false;
+        self.incumbent_damage = 0;
+        self.bound_prune = true;
+        // Keep hand_hash / hand_label across resets within the same opening hand.
+    }
+
+    fn set_opening_hand(&mut self, hand: &[Card]) {
+        self.hand_hash = opening_hand_hash(hand);
+        self.hand_label = opening_hand_label(hand);
     }
 
     fn drop_memo_generation(&mut self) {
@@ -92,6 +119,8 @@ impl Search {
                 generations = n,
                 nodes = self.nodes,
                 cap = self.memo_cap,
+                hand_hash = self.hand_hash.as_str(),
+                hand = self.hand_label.as_str(),
                 "search memo generational reset"
             );
         }
@@ -129,18 +158,43 @@ impl Search {
             };
         }
         if state.is_terminal() {
-            return Outcome {
+            let outcome = Outcome {
                 damage: state.damage,
                 influence: state.influence(),
             };
+            if outcome.damage > self.incumbent_damage {
+                self.incumbent_damage = outcome.damage;
+            }
+            return outcome;
         }
         let mut board = state;
         board.damage = 0;
         if let Some(&memo) = self.memo.get(&board) {
-            return Outcome {
+            let outcome = Outcome {
                 damage: state.damage.saturating_add(memo.damage_gain),
                 influence: memo.end_influence,
             };
+            if outcome.damage > self.incumbent_damage {
+                self.incumbent_damage = outcome.damage;
+            }
+            return outcome;
+        }
+
+        // Branch-and-bound: skip subtrees that cannot beat the incumbent.
+        // Do not memoize pruned nodes (incomplete expansion).
+        if self.bound_prune && std::env::var_os("GA_FIRE_NO_BNB").is_none() {
+            let reserve = reservation_budget(state);
+            if reserve > FINISH_RESERVE_THRESHOLD {
+                let upper = state
+                    .damage
+                    .saturating_add(optimistic_remaining_damage(state));
+                if upper < self.incumbent_damage {
+                    return Outcome {
+                        damage: state.damage,
+                        influence: 0,
+                    };
+                }
+            }
         }
 
         let mut best = Outcome {
@@ -157,6 +211,9 @@ impl Search {
             }
             if outcome.better(best) {
                 best = outcome;
+            }
+            if best.damage > self.incumbent_damage {
+                self.incumbent_damage = best.damage;
             }
         }
         debug_assert!(best.damage >= state.damage);
@@ -185,6 +242,8 @@ impl Search {
         if state.is_terminal() {
             return;
         }
+        let prune = self.bound_prune;
+        self.bound_prune = false;
         let mut acts = actions(state, self.glimpse_enabled);
         order_actions_damage_first(&state, &mut acts);
         for action in acts {
@@ -193,11 +252,13 @@ impl Search {
             if self.visit(next) == target {
                 let burst = &tape.events[saved.events_len..];
                 stats.record_action(action, state, next, burst);
+                self.bound_prune = prune;
                 self.reconstruct(next, target, tape, stats);
                 return;
             }
             tape.restore(saved);
         }
+        self.bound_prune = prune;
     }
 }
 
@@ -396,6 +457,7 @@ fn solve_pass_with(
         Some(initial.draw_unknown())
     };
     search.reset(search.glimpse_enabled);
+    search.set_opening_hand(hand);
     let best = search.visit(initial);
     if search.aborted {
         search.reset(search.glimpse_enabled);
@@ -892,8 +954,13 @@ fn simulate_pure_draw_payment(
     Some(state)
 }
 
-/// Never spend the last playable hand on pure draw when damage is still legal.
+/// Never spend the last playable hand on pure draw on the **final** turn when
+/// damage is still legal.
 fn refuse_last_hand_pure_draw(before: State, after: State) -> bool {
+    // Earlier turns: digging can set up later Mains — do not gate.
+    if before.turn.saturating_add(1) < before.max_turns {
+        return false;
+    }
     // On Death from a Truth sacrifice is damage from the play itself — keep it.
     if after.damage > before.damage {
         return false;
@@ -1144,6 +1211,85 @@ fn push_fast_action_plays(state: State, result: &mut Vec<Action>) {
 fn push_fast_plays(state: State, result: &mut Vec<Action>) {
     push_fast_ally_plays(state, result);
     push_fast_action_plays(state, result);
+}
+
+/// Influence-reservation budget: current influence × Mains left (including now).
+fn reservation_budget(state: State) -> u8 {
+    let mains = state.max_turns.saturating_sub(state.turn).max(1);
+    state.influence().saturating_mul(mains)
+}
+
+/// Optimistic remaining damage from a reservation budget at 2.5 dmg / influence.
+fn optimistic_remaining_from_reserve(reserve: u8) -> u8 {
+    let scaled = u16::from(reserve) * OPT_DMG_PER_RESERVE_NUM / OPT_DMG_PER_RESERVE_DEN;
+    scaled.min(u16::from(u8::MAX)) as u8
+}
+
+/// Zero-reserve damage still on the board / sideboard (allies, weapons, dagger).
+/// Required so `2.5 × reservation` stays admissible — board swings are not paid from I.
+fn optimistic_free_board_damage(state: State) -> u8 {
+    let mains = u16::from(state.max_turns.saturating_sub(state.turn).max(1));
+    let mut total = 0_u16;
+    for index in 0..state.ally_len as usize {
+        let power = u16::from(state.ally_power(state.allies[index]));
+        total = total.saturating_add(power.saturating_mul(mains));
+    }
+    for weapon in Weapon::EQUIPPABLE {
+        let dur = u16::from(state.weapon_durability(weapon));
+        if dur == 0 {
+            continue;
+        }
+        total = total.saturating_add(dur.saturating_mul(u16::from(state.weapon_power(weapon))));
+    }
+    if state.dagger {
+        // Ready on each wake; 1 damage per remaining Main.
+        total = total.saturating_add(mains);
+    }
+    let sideboard = |weapon: Weapon, mat: u16| {
+        if state.has_material(mat) {
+            u16::from(weapon.power().saturating_mul(weapon.durability()))
+        } else {
+            0
+        }
+    };
+    total = total.saturating_add(sideboard(Weapon::ImpactHammer, MAT_HAMMER));
+    total = total.saturating_add(sideboard(Weapon::MercenaryBlade, MAT_BLADE));
+    total = total.saturating_add(sideboard(Weapon::VaruckanSoulknife, MAT_SOULKNIFE));
+    total = total.saturating_add(sideboard(Weapon::AssassinsRipper, MAT_RIPPER));
+    // Ripper activate can add +2 power for a swing — pad when Ripper is available.
+    if state.has_material(MAT_RIPPER) || state.has_weapon(Weapon::AssassinsRipper) {
+        total = total.saturating_add(2);
+    }
+    total.min(u16::from(u8::MAX)) as u8
+}
+
+fn optimistic_remaining_damage(state: State) -> u8 {
+    optimistic_remaining_from_reserve(reservation_budget(state))
+        .saturating_add(optimistic_free_board_damage(state))
+}
+
+/// SHA-256 hex of sorted card ids — same payload as the API `handHash` helper.
+pub fn opening_hand_hash(hand: &[Card]) -> String {
+    let mut ids: Vec<&str> = hand.iter().map(|card| card.id()).collect();
+    ids.sort_unstable();
+    let digest = Sha256::digest(ids.join(",").as_bytes());
+    hex_lower(&digest)
+}
+
+fn opening_hand_label(hand: &[Card]) -> String {
+    let mut ids: Vec<&str> = hand.iter().map(|card| card.id()).collect();
+    ids.sort_unstable();
+    ids.join(",")
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /// Memo board key: same contract as `Search::visit` (damage excluded from the key).
@@ -2505,6 +2651,25 @@ mod tests {
     }
 
     #[test]
+    fn opening_hand_hash_matches_sorted_sha256_of_card_ids() {
+        // Same contract as apps/api handHash: SHA-256 of sorted ids joined by ",".
+        let hand = [Card::IgnitedStab, Card::KingdomInformant, Card::Brick];
+        let mut ids: Vec<&str> = hand.iter().map(|card| card.id()).collect();
+        ids.sort_unstable();
+        let expected = {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(ids.join(",").as_bytes());
+            hex_lower(&digest)
+        };
+        assert_eq!(opening_hand_hash(&hand), expected);
+        // Order-independent.
+        assert_eq!(
+            opening_hand_hash(&[Card::Brick, Card::IgnitedStab, Card::KingdomInformant]),
+            expected
+        );
+    }
+
+    #[test]
     fn floating_memory_returns_at_recollect_and_banishes_for_zander() {
         let state = State::with_queue(
             &[Card::IgnitedStab, Card::KingdomInformant],
@@ -2570,6 +2735,7 @@ mod tests {
             0,
         );
         state.phase = Phase::Main;
+        state.turn = 1; // final turn only
         state.champion_level = 1;
         state.champion_awake = true;
 
@@ -2597,6 +2763,33 @@ mod tests {
     }
 
     #[test]
+    fn increasing_danger_allowed_on_earlier_turns_even_if_it_spends_damage() {
+        let mut state = State::with_queue_and_materials(
+            &[Card::IncreasingDanger, Card::SmokeOut, Card::Brick],
+            false,
+            2,
+            &[Card::Brick, Card::Brick],
+            0,
+        );
+        state.phase = Phase::Main;
+        state.turn = 0;
+        state.champion_level = 1;
+        state.champion_awake = true;
+
+        let legal = actions(state, false);
+        assert!(
+            legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::IncreasingDanger,
+                    ..
+                }
+            )),
+            "earlier turns may dig even if it spends this Main's damage: {legal:?}"
+        );
+    }
+
+    #[test]
     fn increasing_danger_allowed_when_no_damage_play_exists() {
         let mut state = State::with_queue_and_materials(
             &[Card::IncreasingDanger, Card::Brick, Card::Brick],
@@ -2606,6 +2799,7 @@ mod tests {
             0,
         );
         state.phase = Phase::Main;
+        state.turn = 1;
         state.champion_level = 1;
 
         let legal = actions(state, false);
@@ -2632,6 +2826,7 @@ mod tests {
             0,
         );
         state.phase = Phase::Main;
+        state.turn = 1;
         state.champion_level = 1;
         state.add_ally(Card::ClumsyApprentice, true, false);
 
@@ -2665,6 +2860,7 @@ mod tests {
             MAT_BLADE,
         );
         state.phase = Phase::Main;
+        state.turn = 1;
         state.champion_level = 1;
         state.champion_awake = true;
         state.add_ally(Card::ClumsyApprentice, false, false);
@@ -2932,6 +3128,18 @@ mod tests {
                 .any(|action| matches!(action, Action::SkipMaterialize)),
             "{legal:?}"
         );
+    }
+
+    #[test]
+    fn reservation_budget_scales_influence_by_mains_left() {
+        let mut state = State::with_queue(&[Card::Brick; 7], true, 3, &[]);
+        state.phase = Phase::Main;
+        state.turn = 0;
+        assert_eq!(state.influence(), 7);
+        assert_eq!(reservation_budget(state), 21); // 7 × 3
+        assert_eq!(optimistic_remaining_from_reserve(21), 52); // 21 × 2.5
+        assert_eq!(optimistic_remaining_from_reserve(5), 12);
+        assert_eq!(optimistic_remaining_from_reserve(4), 10);
     }
 
     #[test]
@@ -5596,20 +5804,21 @@ mod tests {
 
     #[test]
     fn cancel_flag_aborts_long_oracle_pass() {
+        // Needs enough nodes to hit the park/cancel checkpoint mask (~262k).
         let hand = [
             Card::Arthur,
+            Card::XiaoQiao,
+            Card::DazzlingCourtesan,
             Card::ClumsyApprentice,
-            Card::KingdomInformant,
-            Card::IgnitedStab,
-            Card::SableRemnant,
-            Card::HastyMessenger,
-            Card::RendingFlames,
+            Card::Rococo,
+            Card::Rococo,
+            Card::HotCake,
         ];
         let queue: Vec<_> = std::iter::repeat_n(Card::Brick, 40).collect();
         let flag = crate::cancel::new_flag();
         let flag_set = flag.clone();
         let handle = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(std::time::Duration::from_millis(20));
             crate::cancel::request(&flag_set);
         });
         let _guard = crate::cancel::install(flag);

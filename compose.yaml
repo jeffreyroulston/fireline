@@ -27,6 +27,14 @@ services:
         GIT_SHA: ${GIT_SHA:-dev}
     environment:
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      # Optional memory knobs — set in a gitignored root `.env` to override
+      # without changing defaults for other machines (see README / .env.example).
+      GA_FIRE_HAND_MEM_MB: ${GA_FIRE_HAND_MEM_MB:-}
+      GA_FIRE_MEM_TOTAL_MB: ${GA_FIRE_MEM_TOTAL_MB:-}
+      GA_FIRE_MEM_RESERVE_MB: ${GA_FIRE_MEM_RESERVE_MB:-}
+      GA_FIRE_MEM_PARK_MB: ${GA_FIRE_MEM_PARK_MB:-}
+      RAYON_NUM_THREADS: ${RAYON_NUM_THREADS:-}
+      WORKER_LOG_RUNS: ${WORKER_LOG_RUNS:-}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/health"]
       interval: 10s

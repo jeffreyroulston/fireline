@@ -289,7 +289,7 @@ export default function FizaWorkbench({
       onTabClick={() => solver.setError("")}
     >
       <section
-        className="relative min-h-[540px] py-7 pb-9 [&>.result-rail]:mt-2 [&>.result-rail]:border-t [&>.result-rail]:border-l-0 [&>.result-rail]:pt-7 [&>.result-rail]:pl-0"
+        className="relative min-h-[540px] py-7 pb-9 [overflow-anchor:none] [&>.result-rail]:mt-2 [&>.result-rail]:border-t [&>.result-rail]:border-l-0 [&>.result-rail]:pt-7 [&>.result-rail]:pl-0"
         key={catalogEpoch}
       >
         {tab === "line" && (
@@ -310,6 +310,7 @@ export default function FizaWorkbench({
             rollouts={solver.rollouts}
             busy={solver.busy === "solve"}
             lineResult={solver.lineResult}
+            lineHand={solver.lineHand}
             decksLoading={decksLoading}
             onHandChange={solver.setHand}
             onDrawnChange={solver.onDrawnChange}

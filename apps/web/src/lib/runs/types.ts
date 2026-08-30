@@ -9,6 +9,8 @@ export interface HandProgress {
   phase: HandPhase;
   rolloutsDone: number;
   totalRollouts: number;
+  /** Client-only: wall time when this hand first appeared in the UI. */
+  startedAtMs?: number;
 }
 
 export interface OptimizeProgress {

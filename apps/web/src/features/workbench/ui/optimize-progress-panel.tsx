@@ -77,9 +77,7 @@ export function OptimizeProgressPanel({
       ? "Run paused — the worker's machine is busy. It will resume automatically."
       : progress?.memoryPressure === "squeeze"
         ? "Memory pressure on the worker — hands are running slower to keep the machine responsive."
-        : hands?.some((hand) => hand.phase === "throttled")
-          ? "Some hands are waiting for free memory — this run may take longer."
-          : null;
+        : null;
 
   return (
     <div

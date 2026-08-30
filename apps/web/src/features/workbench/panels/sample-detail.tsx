@@ -5,6 +5,10 @@ import type { CardId, DamageDistribution, LineEvent, SimType, SolveResult } from
 import { SIM_TYPE_LABELS, type SampleHand } from "../types";
 import { cn, buttonVariants } from "@/lib/utils";
 import {
+  consumePlayedSlots,
+  playCountsFromEvents,
+} from "../lib/played-hand-slots";
+import {
   DamageBars,
   DamageReadout,
   HandCard,
@@ -23,7 +27,7 @@ function drawnCardIds(events: LineEvent[]): CardId[] {
   );
 }
 
-function lineEventsForDrawn(
+function lineEventsForSample(
   sample: SampleHand,
   mode: SimType,
   mcIndex: number | null,
@@ -165,9 +169,11 @@ export function LineInspector({
 }) {
   const showingMc = mode === "monte_carlo" && Boolean(sample.distribution);
   const showingTwoPass = mode === "two_pass" && Boolean(sample.twoPass);
-  const drawn = showsDrawnStrip(mode)
-    ? drawnCardIds(lineEventsForDrawn(sample, mode, mcIndex))
-    : [];
+  const lineEvents = lineEventsForSample(sample, mode, mcIndex);
+  const drawn = showsDrawnStrip(mode) ? drawnCardIds(lineEvents) : [];
+  const remainingPlays = playCountsFromEvents(lineEvents);
+  const handPlayed = consumePlayedSlots(sample.hand, remainingPlays);
+  const drawnPlayed = consumePlayedSlots(drawn, remainingPlays);
   const readout = sampleDamageReadout(sample, mode, handNumber);
 
   return (
@@ -189,7 +195,11 @@ export function LineInspector({
       )}
       <div className="pointer-events-none mb-3.5 grid min-h-0 grid-cols-7 gap-2" aria-label="Sampled opening hand">
         {sample.hand.map((id, index) => (
-          <HandCard key={`${id}-${index}`} id={id} />
+          <HandCard
+            key={`${id}-${index}`}
+            id={id}
+            faded={!handPlayed[index]}
+          />
         ))}
       </div>
       {drawn.length > 0 && (
@@ -204,7 +214,11 @@ export function LineInspector({
             aria-label="Cards drawn on the line"
           >
             {drawn.map((id, index) => (
-              <HandCard key={`drawn-${id}-${index}`} id={id} />
+              <HandCard
+                key={`drawn-${id}-${index}`}
+                id={id}
+                faded={!drawnPlayed[index]}
+              />
             ))}
           </div>
         </div>

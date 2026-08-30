@@ -77,22 +77,17 @@ export function applyHandProgress(
   if (update.phase === "done") {
     return hands.filter((hand) => hand.sampleIndex !== update.sampleIndex);
   }
-  // Keep throttled hands visible so the UI can explain admission waits.
-  // Ignore bare "started" — it only means the hand acquired a gate slot.
-  if (update.phase === "started") {
-    return hands;
-  }
-  if (update.phase !== "throttled" && update.rolloutsDone <= 0) {
-    return hands;
-  }
   const index = hands.findIndex(
     (hand) => hand.sampleIndex === update.sampleIndex,
   );
+  const startedAtMs =
+    index >= 0 ? (hands[index].startedAtMs ?? Date.now()) : Date.now();
+  const nextHand: HandProgress = { ...update, startedAtMs };
   if (index < 0) {
-    return [...hands, update].sort((a, b) => a.sampleIndex - b.sampleIndex);
+    return [...hands, nextHand].sort((a, b) => a.sampleIndex - b.sampleIndex);
   }
   const next = hands.slice();
-  next[index] = update;
+  next[index] = nextHand;
   return next;
 }
 

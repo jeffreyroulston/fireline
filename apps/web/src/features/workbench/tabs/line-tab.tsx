@@ -22,6 +22,7 @@ type LineTabProps = Readonly<{
   rollouts: number;
   busy: boolean;
   lineResult: SolveResult | null;
+  lineHand: CardId[];
   decksLoading: boolean;
   onHandChange: (hand: CardId[]) => void;
   onDrawnChange: (drawn: CardId[]) => void;
@@ -56,6 +57,7 @@ export function LineTab({
   rollouts,
   busy,
   lineResult,
+  lineHand,
   decksLoading,
   onHandChange,
   onDrawnChange,
@@ -106,7 +108,7 @@ export function LineTab({
         onCancel={onCancel}
         decksLoading={decksLoading}
       />
-      <ResultRail result={lineResult} busy={busy} hand={hand} />
+      <ResultRail result={lineResult} busy={busy} hand={lineHand} />
     </>
   );
 }

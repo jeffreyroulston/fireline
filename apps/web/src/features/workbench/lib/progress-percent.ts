@@ -8,9 +8,17 @@ function inFlightHandFraction(progress: OptimizeProgress): number {
   }
   let fraction = 0;
   for (const hand of hands) {
+    if (hand.phase === "throttled") {
+      continue;
+    }
     if (hand.totalRollouts <= 1) {
       // Non-MC / unknown: count a started hand as a small nudge so the bar moves.
-      fraction += hand.phase === "started" ? 0.05 : 0.5;
+      fraction += hand.phase === "started" || hand.rolloutsDone <= 0 ? 0.05 : 0.5;
+      continue;
+    }
+    if (hand.rolloutsDone <= 0) {
+      // First Oracle/MC rollout can take minutes with no ticks yet.
+      fraction += 0.05;
       continue;
     }
     fraction += Math.min(1, hand.rolloutsDone / hand.totalRollouts);

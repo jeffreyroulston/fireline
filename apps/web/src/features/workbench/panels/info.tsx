@@ -7,6 +7,7 @@ import {
   infoCardBodyClass,
   infoCardClass,
   infoCardGrid3Class,
+  infoCardGrid2Class,
   infoCardGridClass,
   infoCardTitleClass,
   infoCardWideClass,
@@ -133,51 +134,108 @@ export function InfoPanel() {
 
       <section className={infoSectionClass}>
         <SectionHeading title="RULES AND ASSUMPTIONS" />
-        <article className={cn(infoCardClass, infoCardWideClass)}>
-          <h3 className={infoCardTitleClass}>What the model assumes</h3>
-          <ul className={infoListClass}>
-            <li className={infoListItemClass}>
-              Unknown draws are unplayable fire bricks unless Monte Carlo, Oracle
-              only, or the two-pass oracle supplies a draw queue. The exception is
-              the guaranteed going-second draw: Fire brick pulls a real card from
-              an attached maindeck and seed when one is available.
-            </li>
-            <li className={infoListItemClass}>
-              The opponent kills non-stealth, non-immortal allies during its main
-              phase. Assassin class stealth (e.g. Tweedledum) only counts after
-              Zander has leveled. Fast cards (e.g. Virgil, Demolition) can
-              activate during
-              materialize before recollect.
-            </li>
-            <li className={infoListItemClass}>
-              Playing a Unique ally while a copy is already on the board kills
-              the existing copy (graveyard, including On Death).
-            </li>
-            <li className={infoListItemClass}>
-              Poisoned Dagger activates as soon as it is ready, so amplify
-              applies to the rest of that turn.
-            </li>
-            <li className={infoListItemClass}>Arthur always attacks before other allies.</li>
-            <li className={infoListItemClass}>Other ready allies attack together in one bulk step.</li>
-            <li className={infoListItemClass}>
-              An awake champion can attack by wielding an equipped weapon with no
-              attack card (weapon power only). Attack cards still rest the
-              champion; ally attacks do not.
-            </li>
-            <li className={infoListItemClass}>
-              This is not a full rules engine or opponent AI. The reductions
-              above cut search space where they do not change max damage.
-            </li>
-            <li className={infoListItemClass}>
-              Champion is Zander; materials start as Impact Hammer, Mercenary’s
-              Blade, Poisoned Dagger, and Zander, Varuckan Soulknife.
-            </li>
-            <li className={infoListItemClass}>
-              Deck damage opens with 7 cards from a shuffled list. Only cards in
-              the supported FiZa catalog are recognized.
-            </li>
-          </ul>
-        </article>
+        <p className={cn(infoCardBodyClass, "max-w-[68ch]")}>
+          Not a full rules engine or opponent model — a max-damage Fire Assassin
+          line search under the assumptions below. Exact cuts keep the same
+          headline damage; approximations can drop rare setup lines.
+        </p>
+        <div className={infoCardGrid2Class}>
+          <InfoCard title="Combat model">
+            <ul className={infoListClass}>
+              <li className={infoListItemClass}>
+                Unknown draws are unplayable Fire Bricks unless Monte Carlo,
+                Oracle, or two-pass oracle supplies a queue. Going second’s
+                first-turn draw is real when a maindeck and seed are attached.
+              </li>
+              <li className={infoListItemClass}>
+                Opponent main culls non-stealth, non-immortal allies. Assassin
+                class stealth (for example Tweedledum) only after Zander has
+                leveled.
+              </li>
+              <li className={infoListItemClass}>
+                Fast cards (Virgil, Demolition, Undeniable Truth, and similar)
+                can activate in Materialize before recollect.
+              </li>
+              <li className={infoListItemClass}>
+                Unique on enter: a second copy kills the one already on board
+                (graveyard, including On Death).
+              </li>
+              <li className={infoListItemClass}>
+                Awake champion can swing with an equipped weapon and no attack
+                card. Attack cards rest the champion; ally attacks do not.
+              </li>
+              <li className={infoListItemClass}>
+                Grand Crusader’s Ring banishes and draws as soon as it
+                materializes — there is no “hold the ring” line.
+              </li>
+              <li className={infoListItemClass}>
+                Opening hand is 7 cards. Only the supported Fire Assassin catalog
+                is recognized. Champion and materials come from the material deck
+                on the run (Zander, Tristan, weapons, ring, and similar).
+              </li>
+            </ul>
+          </InfoCard>
+
+          <InfoCard title="Exact search cuts">
+            <p className="m-0">
+              Same max damage; fewer branches or earlier good lines.
+            </p>
+            <ul className={infoListClass}>
+              <li className={infoListItemClass}>
+                Poisoned Dagger activates as soon as it is ready (amplify for
+                the rest of the turn).
+              </li>
+              <li className={infoListItemClass}>
+                Arthur attacks before other allies; other ready allies attack in
+                one bulk step.
+              </li>
+              <li className={infoListItemClass}>
+                Damage-dealing actions expand before dig, setup, or pass so a
+                strong line is found early.
+              </li>
+              <li className={infoListItemClass}>
+                Materialize endings that land on the same post-recollect board
+                (same memo key) collapse to one sibling — mostly redundant
+                Glimpse layouts.
+              </li>
+              <li className={infoListItemClass}>
+                Zander Glimpse only keeps layouts that change the next draws
+                still reachable this game (draw potential). Tristan levels from
+                memory without Glimpse.
+              </li>
+              <li className={infoListItemClass}>
+                Branch-and-bound: skip a line when damage so far plus an
+                optimistic remainder (2.5 × influence × mains left, plus free
+                board damage from allies, weapons, dagger, and sideboard) cannot
+                beat the best line already found. With 5 or less influence-budget
+                left, the bound is skipped and the line is finished.
+              </li>
+            </ul>
+          </InfoCard>
+
+          <InfoCard title="Approximations">
+            <p className="m-0">
+              Speed over every edge-case line. Headline damage can be a hair low
+              on rare setups.
+            </p>
+            <ul className={infoListClass}>
+              <li className={infoListItemClass}>
+                On the final turn only, Increasing Danger and Undeniable Truth
+                are not offered when paying for them would leave no
+                positive-damage Main play while one exists now. Soft salvage:
+                Undeniable Truth that unlocks Mercenary’s Blade, or On Death
+                damage from the sacrifice, still count.
+              </li>
+            </ul>
+          </InfoCard>
+
+          <InfoCard title="Memory under load">
+            Shared machines cap memo size and may throttle or park hands when
+            process memory is high. Progress can show throttled, squeeze, or
+            parked — results stay exact; the search just takes longer or waits
+            for memory.
+          </InfoCard>
+        </div>
       </section>
 
       <section className={infoSectionClass}>
@@ -188,9 +246,9 @@ export function InfoPanel() {
             Every simulation is stamped with an engine version. The workbench
             footer shows it as{" "}
             <code>r18 · s1 · a8 · digest 78328050 · dev</code> (numbers match
-            the running build).             History and the card database pool runs that share the same engine
-            version (rules, sampler, and attribution) so cross-run stats stay
-            comparable after code changes.
+            the running build). History and the card database pool runs that share
+            the same engine version (rules, sampler, and attribution) so cross-run
+            stats stay comparable after code changes.
           </p>
           <ul className={infoListClass}>
             <li className={infoListItemClass}>
