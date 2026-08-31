@@ -58,6 +58,7 @@ export function WorkbenchChrome({
             className={navTabVariants({ active: tab === id })}
             href={workbenchHref(id, activeDeckId || undefined)}
             key={id}
+            scroll={false}
             onClick={onTabClick}
           >
             {label}

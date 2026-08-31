@@ -137,7 +137,7 @@ export const statusBadgeVariants = cva(
 export function statusBadgeTone(status: string): VariantProps<
   typeof statusBadgeVariants
 >["tone"] {
-  if (status === "complete") return "complete";
+  if (status === "complete" || status === "partial") return "complete";
   if (status === "failed" || status === "interrupted") return "failed";
   if (status === "running" || status === "queued") return "live";
   return "default";

@@ -8,4 +8,4 @@ export type DeckEvalResult = { simType: SimType, samples: number, damages: Array
 /**
  * Mean final hand + memory across sampled max-damage lines.
  */
-meanEndInfluence: number, uniqueHands: number, statesSearched: bigint, elapsedMs: number, effective: EffectiveRequest, cardStats: Array<CardStat>, brickCardStats: Array<CardStat>, oracleCardStats: Array<CardStat>, };
+meanEndInfluence: number, uniqueHands: number, statesSearched: bigint, elapsedMs: number, effective: EffectiveRequest, cardStats: Array<CardStat>, brickCardStats: Array<CardStat>, oracleCardStats: Array<CardStat>, timedOutSamples: number, };

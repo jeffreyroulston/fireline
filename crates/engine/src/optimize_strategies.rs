@@ -5,8 +5,9 @@ use crate::{
         initial_counts, ranked_decks,
     },
     error::{EngineError, Result},
-    model::{Bounds, EffectiveRequest, SimType},
+    model::{Bounds, EffectiveRequest},
     random::Rng,
+    version::ENGINE_VERSION,
 };
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
@@ -40,16 +41,17 @@ fn metric_score(result: &DeckEvalResult, metric: Metric) -> f64 {
 
 fn build_effective(request: &OptimizeRequest, target: u32) -> EffectiveRequest {
     EffectiveRequest {
+        engine_version: ENGINE_VERSION,
         root_seed: request.seed,
-        sim_type: Some(SimType::FireBrick),
+        sim_type: Some(request.sim_type),
         deck: if request.strategy == Strategy::SwapSweep {
             request.base_deck.clone()
         } else {
             BTreeMap::new()
         },
-        go_first: Some(true),
-        max_turns: Some(3),
-        rollouts: Some(1),
+        go_first: Some(request.go_first),
+        max_turns: Some(request.max_turns),
+        rollouts: Some(request.rollouts),
         samples: Some(request.samples),
         metric: Some(match request.metric {
             Metric::Mean => "mean",
@@ -60,7 +62,10 @@ fn build_effective(request: &OptimizeRequest, target: u32) -> EffectiveRequest {
         decks: Some(target),
         strategy: Some(strategy_label(request.strategy)),
         budget: request.budget,
-        ..Default::default()
+        max_threads: request.max_threads,
+        glimpse_enabled: request.glimpse_enabled,
+        max_hand_duration_secs: request.max_hand_duration_secs,
+        max_card_draw: request.max_card_draw,
     }
 }
 
@@ -127,13 +132,17 @@ fn score_optimize_deck_full(
         &DeckEvalRequest {
             deck: counts.clone(),
             samples,
-            go_first: true,
-            max_turns: 3,
+            go_first: ctx.request.go_first,
+            max_turns: ctx.request.max_turns,
             seed: ctx.request.seed.wrapping_add(u64::from(deck_number) * 131),
-            sim_type: SimType::FireBrick,
-            rollouts: 1,
+            sim_type: ctx.request.sim_type,
+            rollouts: ctx.request.rollouts,
             budget: ctx.request.budget,
             materials: ctx.request.materials.clone(),
+            max_threads: ctx.request.max_threads,
+            glimpse_enabled: ctx.request.glimpse_enabled,
+            max_hand_duration_secs: ctx.request.max_hand_duration_secs,
+            max_card_draw: ctx.request.max_card_draw,
         },
         |progress| {
             let hands_simulated = u64::from(deck_number.saturating_sub(1)) * u64::from(samples)
@@ -210,18 +219,21 @@ fn optimize_search(
         total_hands,
     };
 
-    match request.strategy {
-        Strategy::RandomSample => {
-            optimize_random_sample(request, &ctx, &mut state, &mut on_progress)?;
-        }
-        Strategy::HillClimb => {
-            optimize_hill_climb(request, &ctx, &mut state, &mut on_progress)?;
-        }
-        Strategy::Genetic => {
-            optimize_genetic(request, &ctx, &mut state, &mut on_progress)?;
-        }
+    let search = match request.strategy {
+        Strategy::RandomSample => optimize_random_sample(request, &ctx, &mut state, &mut on_progress),
+        Strategy::HillClimb => optimize_hill_climb(request, &ctx, &mut state, &mut on_progress),
+        Strategy::Genetic => optimize_genetic(request, &ctx, &mut state, &mut on_progress),
         Strategy::SwapSweep => unreachable!(),
+    };
+    if let Err(EngineError::Cancelled) = &search
+        && crate::cancel::is_save_requested()
+        && !state.history.is_empty()
+    {
+        return Ok(optimize_result_from_search(
+            request, target, legal_decks, state, started,
+        ));
     }
+    search?;
 
     if state.decks_scored == 0 {
         return Err(EngineError::invalid("could not sample any legal lists"));
@@ -236,7 +248,19 @@ fn optimize_search(
         best_score: state.best_score,
     });
 
-    Ok(OptimizeResult {
+    Ok(optimize_result_from_search(
+        request, target, legal_decks, state, started,
+    ))
+}
+
+fn optimize_result_from_search(
+    request: &OptimizeRequest,
+    target: u32,
+    legal_decks: u64,
+    state: OptimizeSearchState,
+    started: Instant,
+) -> OptimizeResult {
+    OptimizeResult {
         best_counts: state.best,
         best_score: state.best_score,
         top: ranked_decks(&state.top),
@@ -245,7 +269,7 @@ fn optimize_search(
         decks_scored: state.decks_scored,
         elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
         effective: build_effective(request, target),
-    })
+    }
 }
 
 fn optimize_random_sample(
@@ -655,13 +679,30 @@ fn optimize_swap_sweep(
     let mut candidate_rows: Vec<RankedDeck> = Vec::new();
     for candidate in &swap.candidates {
         let counts = apply_fixed_swap(&request.base_deck, &swap.from, candidate, swap.count)?;
-        let eval = score_optimize_deck_full(
+        let eval = match score_optimize_deck_full(
             &counts,
             &ctx,
             &mut decks_scored,
             best_score,
             &mut on_progress,
-        )?;
+        ) {
+            Ok(eval) => eval,
+            Err(EngineError::Cancelled) if crate::cancel::is_save_requested() => {
+                return Ok(finish_swap_sweep(
+                    request,
+                    target,
+                    legal_decks,
+                    best,
+                    best_score,
+                    rows,
+                    candidate_rows,
+                    history,
+                    decks_scored,
+                    started,
+                ));
+            }
+            Err(error) => return Err(error),
+        };
         let score = metric_score(&eval, request.metric);
         if score > best_score {
             best_score = score;
@@ -681,6 +722,42 @@ fn optimize_swap_sweep(
         });
     }
 
+    let _ = on_progress(OptimizeProgress {
+        decks_scored,
+        total_decks: target,
+        legal_decks,
+        hands_simulated: u64::from(decks_scored) * u64::from(request.samples),
+        total_hands,
+        best_score,
+    });
+
+    Ok(finish_swap_sweep(
+        request,
+        target,
+        legal_decks,
+        best,
+        best_score,
+        rows,
+        candidate_rows,
+        history,
+        decks_scored,
+        started,
+    ))
+}
+
+#[expect(clippy::too_many_arguments)]
+fn finish_swap_sweep(
+    request: &OptimizeRequest,
+    target: u32,
+    legal_decks: u64,
+    best: BTreeMap<String, u8>,
+    best_score: f64,
+    mut rows: Vec<RankedDeck>,
+    mut candidate_rows: Vec<RankedDeck>,
+    history: Vec<HistoryPoint>,
+    decks_scored: u32,
+    started: Instant,
+) -> OptimizeResult {
     candidate_rows.sort_by(|left, right| {
         right
             .score
@@ -692,16 +769,7 @@ fn optimize_swap_sweep(
     }
     rows.extend(candidate_rows);
 
-    let _ = on_progress(OptimizeProgress {
-        decks_scored,
-        total_decks: target,
-        legal_decks,
-        hands_simulated: u64::from(decks_scored) * u64::from(request.samples),
-        total_hands,
-        best_score,
-    });
-
-    Ok(OptimizeResult {
+    OptimizeResult {
         best_counts: best,
         best_score,
         top: rows,
@@ -710,7 +778,7 @@ fn optimize_swap_sweep(
         decks_scored,
         elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
         effective: build_effective(request, target),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -750,6 +818,14 @@ mod tests {
                 count: 1,
                 candidates: vec!["sable_remnant".into(), "blazing_throw".into()],
             }),
+            go_first: true,
+            max_turns: 3,
+            sim_type: crate::model::SimType::FireBrick,
+            rollouts: 1,
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+            max_card_draw: None,
         })
         .unwrap();
         assert!(result.decks_scored >= 3);
@@ -783,6 +859,14 @@ mod tests {
                 count: 1,
                 candidates: vec!["sable_remnant".into()],
             }),
+            go_first: true,
+            max_turns: 3,
+            sim_type: crate::model::SimType::FireBrick,
+            rollouts: 1,
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+            max_card_draw: None,
         })
         .unwrap();
         let candidate = result
@@ -796,6 +880,16 @@ mod tests {
                 .card_stats
                 .iter()
                 .any(|stat| stat.card == "kingdom_informant")
+        );
+        let sable = candidate
+            .card_stats
+            .iter()
+            .find(|stat| stat.card == "sable_remnant")
+            .expect("candidate card stats");
+        assert_eq!(
+            sable.with_hand_samples + sable.without_hand_samples,
+            2,
+            "each candidate sample should land in a with/without opening-hand bucket"
         );
         let baseline = result
             .top
@@ -819,6 +913,14 @@ mod tests {
             strategy: Strategy::HillClimb,
             base_deck: BTreeMap::new(),
             swap: None,
+            go_first: true,
+            max_turns: 3,
+            sim_type: crate::model::SimType::FireBrick,
+            rollouts: 1,
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+            max_card_draw: None,
         };
         let one = optimize(&request).unwrap();
         let two = optimize(&request).unwrap();
@@ -840,6 +942,14 @@ mod tests {
             strategy: Strategy::Genetic,
             base_deck: BTreeMap::new(),
             swap: None,
+            go_first: true,
+            max_turns: 3,
+            sim_type: crate::model::SimType::FireBrick,
+            rollouts: 1,
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+            max_card_draw: None,
         };
         let one = optimize(&request).unwrap();
         let two = optimize(&request).unwrap();

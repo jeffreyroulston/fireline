@@ -223,8 +223,9 @@ export function partnerDeltaClass(
   size: "default" | "peek" = "default",
 ) {
   return cn(
-    "font-display font-bold leading-none",
-    size === "peek" ? "text-[15px]" : "text-xs tracking-[0.02em]",
+    size === "peek"
+      ? "font-display text-[15px] font-bold leading-none"
+      : "font-bold tabular-nums",
     deltaTone(value),
   );
 }

@@ -38,6 +38,18 @@ function HandBar({ hand, nowMs }: { hand: HandProgress; nowMs: number }) {
       </div>
     );
   }
+  if (hand.phase === "timedOut") {
+    return (
+      <div className="grid min-w-0 grid-cols-[2.5rem_minmax(0,1fr)] items-center gap-2">
+        <span className="font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
+          #{hand.sampleIndex + 1}
+        </span>
+        <span className="font-mono text-[10px] tracking-[0.06em] text-primary-dark uppercase">
+          timed out
+        </span>
+      </div>
+    );
+  }
   const percent = handBarPercent(hand);
   const searching = hand.rolloutsDone <= 0;
   const elapsedLabel =

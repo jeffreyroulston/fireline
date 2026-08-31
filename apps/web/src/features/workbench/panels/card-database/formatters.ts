@@ -2,7 +2,6 @@ import type { TapePhase } from "@ga-fire/contracts";
 import type { CardDatabasePairingRow } from "@/lib/api/client";
 import { PHASE_LABELS } from "../../types";
 import type { PartnerMode } from "./constants";
-import { formatRunTimestamp } from "./shared";
 
 export function formatPct(value: number): string {
   return `${(value * 100).toFixed(0)}%`;
@@ -54,11 +53,4 @@ export function phaseRank(phase: string): number {
 
 export function formatKindLabel(kind: string): string {
   return kind.charAt(0).toUpperCase() + kind.slice(1);
-}
-
-export function formatRunLabel(run: {
-  deckName: string;
-  startedAt: string;
-}): string {
-  return `${run.deckName} · ${formatRunTimestamp(run.startedAt)}`;
 }

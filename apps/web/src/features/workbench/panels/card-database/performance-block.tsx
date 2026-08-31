@@ -2,8 +2,11 @@
 
 import { cn } from "@/lib/utils";
 import { InfoPopover } from "@/components/info-popover";
-import type { CardDatabasePerformance } from "@/lib/api/client";
-import { formatDmg, formatLift, formatPct } from "./formatters";
+import type {
+  CardDatabasePerformance,
+  CardDatabaseSource,
+} from "@/lib/api/client";
+import { deltaTone, formatDmg, formatLift, formatPct } from "./formatters";
 import {
   cardDbEmptyClass,
   cardDbStatsClass,
@@ -11,17 +14,16 @@ import {
   cardDbStatsDtClass,
   cardDbStatsHandClass,
   cardDbStatsItemClass,
-  partnerDeltaClass,
 } from "./shared";
 
 export interface PerformanceBlockProps {
   readonly performance: CardDatabasePerformance | null;
-  readonly swapSweep?: boolean;
+  readonly source?: CardDatabaseSource;
 }
 
 export function PerformanceBlock({
   performance,
-  swapSweep = false,
+  source,
 }: PerformanceBlockProps) {
   if (!performance) {
     return (
@@ -33,35 +35,32 @@ export function PerformanceBlock({
       {performance.handLift != null ? (
         <dl className={cn(cardDbStatsClass, cardDbStatsHandClass)}>
           <div className={cardDbStatsItemClass}>
-            <dt className={cardDbStatsDtClass}>
-              {swapSweep ? "Across swap sims" : "In opening hand"}
-            </dt>
+            <dt className={cardDbStatsDtClass}>In opening hand</dt>
             <dd className={cardDbStatsDdClass}>
               {formatDmg(performance.withHandMean ?? 0)}
             </dd>
           </div>
           <div className={cardDbStatsItemClass}>
-            <dt className={cardDbStatsDtClass}>
-              {swapSweep ? "Baseline sim" : "Not in opening hand"}
-            </dt>
+            <dt className={cardDbStatsDtClass}>Not in opening hand</dt>
             <dd className={cardDbStatsDdClass}>
               {formatDmg(performance.withoutHandMean ?? 0)}
             </dd>
           </div>
           <div className={cardDbStatsItemClass}>
             <dt className={cardDbStatsDtClass}>Lift</dt>
-            <dd className={cardDbStatsDdClass}>
-              <span className={partnerDeltaClass(performance.handLift)}>
-                {formatLift(performance.handLift)}
-              </span>
+            <dd
+              className={cn(
+                cardDbStatsDdClass,
+                deltaTone(performance.handLift),
+              )}
+            >
+              {formatLift(performance.handLift)}
             </dd>
           </div>
           <div className={cardDbStatsItemClass}>
             <dt className={cardDbStatsDtClass}>
               <InfoPopover label="Samples">
-                {swapSweep
-                  ? "Weighted samples from swap variants / baseline sims."
-                  : "Opening-hand samples with this card in hand / without."}
+                Opening-hand samples with this card in hand / without.
               </InfoPopover>
             </dt>
             <dd className={cardDbStatsDdClass}>
@@ -70,11 +69,23 @@ export function PerformanceBlock({
             </dd>
           </div>
         </dl>
+      ) : source === "swap_sweep" &&
+        performance.eligibleSamples > 0 &&
+        performance.withHandSamples === 0 &&
+        performance.withoutHandSamples === 0 ? (
+        <p className={cardDbEmptyClass}>
+          Opening-hand lift was not stored on this swap-sweep run. Re-run it to
+          populate with/without damage.
+        </p>
       ) : (
         <p className={cardDbEmptyClass}>
-          {swapSweep
-            ? "No lift vs baseline across swap sims yet."
-            : "Not enough opening-hand samples for with/without comparison (need at least 5 in each bucket)."}
+          Not enough opening-hand samples for with/without comparison (need at
+          least 5 in each bucket
+          {performance.withHandSamples > 0 ||
+          performance.withoutHandSamples > 0
+            ? `; have ${performance.withHandSamples.toLocaleString()} / ${performance.withoutHandSamples.toLocaleString()}`
+            : ""}
+          ).
         </p>
       )}
       <dl className={cardDbStatsClass}>

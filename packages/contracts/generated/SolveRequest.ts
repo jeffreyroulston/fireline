@@ -15,4 +15,20 @@ queue: Array<string> | null, rollouts: number, seed: bigint, budget: Budget,
 /**
  * Material sideboard counts. Empty → all default materials.
  */
-materials: { [key in string]?: number }, };
+materials: { [key in string]?: number }, 
+/**
+ * Cap concurrent opening-hand solves in deck eval. None → no job-local cap.
+ */
+maxThreads: number | null, 
+/**
+ * Override Glimpse during oracle / Monte Carlo search. Fire brick ignores this.
+ */
+glimpseEnabled: boolean | null, 
+/**
+ * Per-hand wall-clock limit. None / 0 → no limit.
+ */
+maxHandDurationSecs: number | null, 
+/**
+ * Cap known library draws; further draws become Fire Bricks. None / 0 → unlimited.
+ */
+maxCardDraw: number | null, };

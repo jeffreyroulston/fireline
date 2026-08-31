@@ -13,11 +13,8 @@ import {
   type CardDatabasePairingsResponse,
   type CardDatabasePerformance,
   type CardDatabaseResponse,
-  type CardDatabaseRunContributor,
   type CardDatabaseSource,
-  type CardDatabaseSwapSweepResponse,
   type CardPlayMatrixResponse,
-  type SwapSweepCardRunRow,
   type WorkerVersion,
 } from "@/lib/api/client";
 import {
@@ -90,16 +87,22 @@ export function useCardDatabasePanel({
   }, [searchParams]);
 
   const deckParam = searchParams.get("deck");
-  const runParam = searchParams.get("run");
 
   const versionGroupsQuery = useVersionGroupsQuery(
-    { simType, kind: "evaluate" },
+    {
+      simType,
+      kind:
+        dbSource === "evaluate"
+          ? "evaluate"
+          : dbSource === "swap_sweep"
+            ? "optimize"
+            : undefined,
+    },
     0,
   );
   const versionGroups = useMemo(
-    () =>
-      dbSource === "evaluate" ? (versionGroupsQuery.data ?? []) : [],
-    [dbSource, versionGroupsQuery.data],
+    () => versionGroupsQuery.data ?? [],
+    [versionGroupsQuery.data],
   );
   const groupsLoading = versionGroupsQuery.isLoading;
 
@@ -121,53 +124,36 @@ export function useCardDatabasePanel({
   }, [workerVersion, versionGroups]);
 
   useEffect(() => {
-    if (dbSource !== "evaluate") return;
     if (!currentEngine) return;
     const currentKey = `${currentEngine.rulesVersion}:${currentEngine.samplerVersion}:${currentEngine.attributionVersion}`;
     setDetailGroupKey((prev) => {
+      if (prev === currentKey) return prev;
       if (prev && versionGroups.some((g) => groupKey(g) === prev)) return prev;
-      if (versionGroups.some((g) => groupKey(g) === currentKey)) return currentKey;
-      return versionGroups[0] ? groupKey(versionGroups[0]) : currentKey;
+      return currentKey;
     });
-  }, [currentEngine, versionGroups, dbSource]);
+  }, [currentEngine, versionGroups]);
 
   const selectedDeckId = useMemo(() => {
     if (!deckParam) return null;
     return deckParam;
   }, [deckParam]);
 
-  const selectedRunId = useMemo(() => {
-    if (!runParam) return null;
-    return runParam;
-  }, [runParam]);
-
   const includedDeckIds = useMemo(() => {
     if (!selectedDeckId) return undefined;
     return [selectedDeckId];
   }, [selectedDeckId]);
 
-  const includedRunIds = useMemo(() => {
-    if (!selectedRunId) return undefined;
-    return [selectedRunId];
-  }, [selectedRunId]);
-
-  const catalogFiltersKey = `${simType}:${currentEngine?.rulesVersion ?? ""}:${currentEngine?.samplerVersion ?? ""}:${currentEngine?.attributionVersion ?? ""}:${selectedDeckId ?? "all"}:${selectedRunId ?? "all"}`;
+  const catalogFiltersKey = `${dbSource}:${simType}:${currentEngine?.rulesVersion ?? ""}:${currentEngine?.samplerVersion ?? ""}:${currentEngine?.attributionVersion ?? ""}:${selectedDeckId ?? "all"}`;
 
   const catalogQuery = useCardDatabaseQuery(
     dbSource,
     catalogFiltersKey,
     () => {
-      if (dbSource === "swap_sweep") {
-        return fetchCardDatabase({
-          source: "swap_sweep",
-          runIds: includedRunIds,
-        });
-      }
       if (!currentEngine) {
         throw new Error("No engine version");
       }
       return fetchCardDatabase({
-        source: "evaluate",
+        source: dbSource,
         simType,
         rulesVersion: currentEngine.rulesVersion,
         samplerVersion: currentEngine.samplerVersion,
@@ -178,30 +164,13 @@ export function useCardDatabasePanel({
         deckIds: includedDeckIds,
       });
     },
-    dbSource === "swap_sweep" ? true : Boolean(currentEngine),
+    Boolean(currentEngine),
   );
 
-  const catalogData = catalogQuery.data;
+  const catalogData = catalogQuery.data as CardDatabaseResponse | undefined;
   const contributors = useMemo((): CardDatabaseContributor[] => {
-    if (
-      catalogData &&
-      "contributors" in catalogData &&
-      dbSource === "evaluate"
-    ) {
-      return (catalogData as CardDatabaseResponse).contributors;
-    }
-    return [];
-  }, [catalogData, dbSource]);
-  const swapSweepContributors = useMemo((): CardDatabaseRunContributor[] => {
-    if (
-      catalogData &&
-      "contributors" in catalogData &&
-      dbSource === "swap_sweep"
-    ) {
-      return (catalogData as CardDatabaseSwapSweepResponse).contributors;
-    }
-    return [];
-  }, [catalogData, dbSource]);
+    return catalogData?.contributors ?? [];
+  }, [catalogData]);
   const cards = useMemo(
     (): CardDatabaseCard[] => catalogData?.cards ?? [],
     [catalogData?.cards],
@@ -223,14 +192,6 @@ export function useCardDatabasePanel({
       ? selectedDeckId
       : null;
   }, [selectedDeckId, contributors]);
-
-  const validatedRunId = useMemo(() => {
-    if (!selectedRunId) return null;
-    if (swapSweepContributors.length === 0) return selectedRunId;
-    return swapSweepContributors.some((entry) => entry.runId === selectedRunId)
-      ? selectedRunId
-      : null;
-  }, [selectedRunId, swapSweepContributors]);
 
   const selectedCard = useMemo(
     () => cards.find((card) => card.id === selectedId) ?? null,
@@ -258,31 +219,23 @@ export function useCardDatabasePanel({
     detailVersion.samplerVersion === currentEngine.samplerVersion &&
     detailVersion.attributionVersion === currentEngine.attributionVersion;
 
-  const detailFiltersKey = `${dbSource}:${simType}:${detailGroupKey}:${validatedDeckId ?? "all"}:${validatedRunId ?? "all"}`;
+  const detailFiltersKey = `${dbSource}:${simType}:${detailGroupKey}:${validatedDeckId ?? "all"}`;
 
   const detailDecksQuery = useCardDatabaseCardDecksQuery(
     dbSource,
     selectedCard?.id ?? "",
     detailFiltersKey,
-    () => {
-      if (dbSource === "swap_sweep") {
-        return fetchCardDatabaseCardDecks({
-          source: "swap_sweep",
-          cardId: selectedCard!.id,
-          runIds: includedRunIds,
-        });
-      }
-      return fetchCardDatabaseCardDecks({
-        source: "evaluate",
+    () =>
+      fetchCardDatabaseCardDecks({
+        source: dbSource,
         cardId: selectedCard!.id,
         simType,
         rulesVersion: detailVersion!.rulesVersion,
         samplerVersion: detailVersion!.samplerVersion,
         attributionVersion: detailVersion!.attributionVersion,
         deckIds: includedDeckIds,
-      });
-    },
-    Boolean(selectedCard),
+      }),
+    Boolean(selectedCard && detailVersion),
   );
 
   const playMatrixQuery = useCardDatabasePlayMatrixQuery(
@@ -290,6 +243,7 @@ export function useCardDatabasePanel({
     detailFiltersKey,
     () =>
       fetchCardDatabasePlayMatrix({
+        source: dbSource,
         cardId: selectedCard!.id,
         simType,
         rulesVersion: detailVersion!.rulesVersion,
@@ -299,7 +253,6 @@ export function useCardDatabasePanel({
       }),
     Boolean(
       selectedCard &&
-        dbSource === "evaluate" &&
         detailVersion &&
         selectedCard.kind !== "material",
     ),
@@ -317,6 +270,7 @@ export function useCardDatabasePanel({
         } satisfies CardDatabasePairingsResponse);
       }
       return fetchCardDatabasePairings({
+        source: dbSource,
         cardId: selectedCard!.id,
         simType,
         rulesVersion: detailVersion!.rulesVersion,
@@ -325,17 +279,15 @@ export function useCardDatabasePanel({
         deckIds: includedDeckIds,
       });
     },
-    Boolean(
-      selectedCard && dbSource === "evaluate" && detailVersion,
-    ),
+    Boolean(selectedCard && detailVersion),
   );
 
   const historicalPerformanceQuery = useCardDatabaseQuery(
-    "evaluate",
+    dbSource,
     `detail:${selectedCard?.id ?? ""}:${detailFiltersKey}`,
     () =>
       fetchCardDatabase({
-        source: "evaluate",
+        source: dbSource,
         simType,
         rulesVersion: detailVersion!.rulesVersion,
         samplerVersion: detailVersion!.samplerVersion,
@@ -346,19 +298,12 @@ export function useCardDatabasePanel({
         deckIds: includedDeckIds,
       }),
     Boolean(
-      selectedCard &&
-        dbSource === "evaluate" &&
-        detailVersion &&
-        currentEngine &&
-        !isCurrentVersion,
+      selectedCard && detailVersion && currentEngine && !isCurrentVersion,
     ),
   );
 
   const detailPerformance: CardDatabasePerformance | null = useMemo(() => {
     if (!selectedCard) return null;
-    if (dbSource === "swap_sweep") {
-      return selectedCard.performance ?? null;
-    }
     if (isCurrentVersion) {
       return selectedCard.performance ?? null;
     }
@@ -366,21 +311,9 @@ export function useCardDatabasePanel({
       (c) => c.id === selectedCard.id,
     );
     return row?.performance ?? null;
-  }, [
-    selectedCard,
-    dbSource,
-    isCurrentVersion,
-    historicalPerformanceQuery.data,
-  ]);
+  }, [selectedCard, isCurrentVersion, historicalPerformanceQuery.data]);
 
-  const detailDecks: CardDatabaseDeckRow[] =
-    detailDecksQuery.data && "decks" in detailDecksQuery.data
-      ? detailDecksQuery.data.decks
-      : [];
-  const detailSwapRuns: SwapSweepCardRunRow[] =
-    detailDecksQuery.data && "runs" in detailDecksQuery.data
-      ? detailDecksQuery.data.runs
-      : [];
+  const detailDecks: CardDatabaseDeckRow[] = detailDecksQuery.data?.decks ?? [];
   const detailPlayMatrix: CardPlayMatrixResponse | null =
     playMatrixQuery.data ?? null;
   const detailPairings: CardDatabasePairingsResponse | null =
@@ -398,7 +331,7 @@ export function useCardDatabasePanel({
   useEffect(() => {
     setPartnerMode("pairs_with_me");
     setPartnerSort({ columnId: "delta", direction: "desc" });
-  }, [selectedId, detailGroupKey, validatedDeckId, validatedRunId, dbSource]);
+  }, [selectedId, detailGroupKey, validatedDeckId, dbSource]);
 
   const { mainCards, materialCards } = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -424,29 +357,15 @@ export function useCardDatabasePanel({
   }, [cards, search, kindFilter]);
 
   const ownershipSummary = useMemo(() => {
-    if (dbSource === "swap_sweep") {
-      if (swapSweepContributors.length === 0) {
-        return "No swap-sweep runs yet.";
+    if (contributors.length === 0) {
+      if (dbSource === "swap_sweep") {
+        return "No swap-sweep runs for this sim yet.";
       }
-      if (validatedRunId) {
-        const run = swapSweepContributors.find(
-          (entry) => entry.runId === validatedRunId,
-        );
-        if (run) {
-          return `${run.deckName} · ${run.candidateCount} candidate${
-            run.candidateCount === 1 ? "" : "s"
-          } · ${run.samples.toLocaleString()} samples`;
-        }
+      if (dbSource === "evaluate") {
+        return "No evaluate runs for this sim yet.";
       }
-      const samples = swapSweepContributors.reduce(
-        (sum, entry) => sum + entry.samples,
-        0,
-      );
-      return `${swapSweepContributors.length} run${
-        swapSweepContributors.length === 1 ? "" : "s"
-      } · ${samples.toLocaleString()} samples`;
+      return "No runs for this sim yet.";
     }
-    if (contributors.length === 0) return "No evaluate runs for this sim yet.";
     if (validatedDeckId) {
       const deck = contributors.find((entry) => entry.deckId === validatedDeckId);
       if (deck) {
@@ -466,13 +385,7 @@ export function useCardDatabasePanel({
       parts.push(`${top.name} ${topPct}`);
     }
     return parts.join(" · ");
-  }, [
-    contributors,
-    validatedDeckId,
-    dbSource,
-    swapSweepContributors,
-    validatedRunId,
-  ]);
+  }, [contributors, validatedDeckId, dbSource]);
 
   function updateDbSource(source: CardDatabaseSource, clearSelection = false) {
     setDbSource(source);
@@ -483,7 +396,6 @@ export function useCardDatabasePanel({
       cardsQueryPatch(current, {
         source,
         deck: null,
-        run: null,
         ...(clearSelection ? { card: null } : {}),
       }),
     );
@@ -521,10 +433,6 @@ export function useCardDatabasePanel({
     replaceQuery((current) => cardsQueryPatch(current, { deck: deckId }));
   }
 
-  function updateRunFilter(runId: string | null) {
-    replaceQuery((current) => cardsQueryPatch(current, { run: runId }));
-  }
-
   function handlePartnerModeChange(mode: PartnerMode) {
     setPartnerMode(mode);
     setPartnerSort({ columnId: "delta", direction: "desc" });
@@ -537,7 +445,6 @@ export function useCardDatabasePanel({
     setSearch,
     kindFilter,
     contributors,
-    swapSweepContributors,
     cards,
     totalRuns,
     totalSamples,
@@ -553,7 +460,6 @@ export function useCardDatabasePanel({
     detailDecks,
     detailPlayMatrix,
     detailPairings,
-    detailSwapRuns,
     partnerMode,
     partnerSort,
     setPartnerSort,
@@ -563,14 +469,12 @@ export function useCardDatabasePanel({
     materialCards,
     ownershipSummary,
     validatedDeckId,
-    validatedRunId,
     workerVersion,
     updateDbSource,
     selectCard,
     updateSimType,
     updateKindFilter,
     updateDeckFilter,
-    updateRunFilter,
     handlePartnerModeChange,
   };
 }

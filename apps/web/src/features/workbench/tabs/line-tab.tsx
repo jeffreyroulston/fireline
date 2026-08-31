@@ -20,6 +20,11 @@ type LineTabProps = Readonly<{
   turns: number;
   simType: SimType;
   rollouts: number;
+  cpuCount: number;
+  maxThreads: number | null;
+  glimpseEnabled: boolean;
+  maxHandDurationSecs: number | null;
+  maxCardDraw: number | null;
   busy: boolean;
   lineResult: SolveResult | null;
   lineHand: CardId[];
@@ -36,6 +41,10 @@ type LineTabProps = Readonly<{
   onTurnsChange: (turns: number) => void;
   onSimTypeChange: (simType: SimType) => void;
   onRolloutsChange: (rollouts: number) => void;
+  onMaxThreadsChange: (value: number | null) => void;
+  onGlimpseEnabledChange: (value: boolean) => void;
+  onMaxHandDurationSecsChange: (value: number | null) => void;
+  onMaxCardDrawChange: (value: number | null) => void;
   onSolve: () => void;
   onCancel: () => void;
 }>;
@@ -55,6 +64,11 @@ export function LineTab({
   turns,
   simType,
   rollouts,
+  cpuCount,
+  maxThreads,
+  glimpseEnabled,
+  maxHandDurationSecs,
+  maxCardDraw,
   busy,
   lineResult,
   lineHand,
@@ -71,6 +85,10 @@ export function LineTab({
   onTurnsChange,
   onSimTypeChange,
   onRolloutsChange,
+  onMaxThreadsChange,
+  onGlimpseEnabledChange,
+  onMaxHandDurationSecsChange,
+  onMaxCardDrawChange,
   onSolve,
   onCancel,
 }: LineTabProps) {
@@ -91,6 +109,11 @@ export function LineTab({
         turns={turns}
         simType={simType}
         rollouts={rollouts}
+        cpuCount={cpuCount}
+        maxThreads={maxThreads}
+        glimpseEnabled={glimpseEnabled}
+        maxHandDurationSecs={maxHandDurationSecs}
+        maxCardDraw={maxCardDraw}
         busy={busy}
         onHandChange={onHandChange}
         onDrawnChange={onDrawnChange}
@@ -104,6 +127,10 @@ export function LineTab({
         onTurnsChange={onTurnsChange}
         onSimTypeChange={onSimTypeChange}
         onRolloutsChange={onRolloutsChange}
+        onMaxThreadsChange={onMaxThreadsChange}
+        onGlimpseEnabledChange={onGlimpseEnabledChange}
+        onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
+        onMaxCardDrawChange={onMaxCardDrawChange}
         onSolve={onSolve}
         onCancel={onCancel}
         decksLoading={decksLoading}

@@ -224,7 +224,7 @@ export function resolvePoolHash(
   const fromRun = historyRuns.find(
     (run) =>
       run.kind === "evaluate" &&
-      run.status === "complete" &&
+      (run.status === "complete" || run.status === "partial") &&
       run.simType === sim &&
       (run.deckId === deck.id || run.deckHash === deck.deckHash) &&
       !!run.deckHash,

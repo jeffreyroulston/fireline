@@ -73,7 +73,7 @@
   }
 
   select,
-  input,
+  input:not([type="checkbox"]):not([type="radio"]),
   textarea {
     width: 100%;
     border: 1px solid var(--color-border);
@@ -82,14 +82,26 @@
   }
 
   select,
-  input {
+  input:not([type="checkbox"]):not([type="radio"]) {
     height: 42px;
     padding: 0 11px;
   }
 
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 1rem;
+    height: 1rem;
+    padding: 0;
+    flex-shrink: 0;
+    border: 1px solid var(--color-border);
+    border-radius: 2px;
+    background: rgba(251, 253, 252, 0.85);
+    accent-color: var(--color-accent);
+  }
+
   /* Form controls ignore label font-size when set via font: inherit (browser default ~16px). */
   label select,
-  label input,
+  label input:not([type="checkbox"]):not([type="radio"]),
   label textarea {
     font-family: var(--font-mono);
     font-size: 10px;

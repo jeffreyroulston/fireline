@@ -878,9 +878,7 @@ pub fn format_line_event(event: &LineEvent) -> String {
             }
         }
         EventKind::SadiBounce => "Sadi bounce for Prep".to_string(),
-        EventKind::ArsonistStealth => {
-            "Corhazi Arsonist gains stealth (−1 prep)".to_string()
-        }
+        EventKind::ArsonistStealth => "Corhazi Arsonist gains stealth (−1 prep)".to_string(),
         EventKind::OnDeath => {
             if event.drawn.is_some() {
                 format!(

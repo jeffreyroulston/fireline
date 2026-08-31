@@ -124,7 +124,9 @@ export default function FizaWorkbench({
         : loadActiveDeckId(decks);
     if (!routeDeckId || !valid.has(routeDeckId)) {
       const qs = searchParams.toString();
-      router.replace(workbenchHref(tab, resolved, qs || undefined));
+      router.replace(workbenchHref(tab, resolved, qs || undefined), {
+        scroll: false,
+      });
     }
     // Only redirect when the route deck is missing/invalid — not on query-only changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- searchParams read for initial redirect qs only
@@ -149,7 +151,7 @@ export default function FizaWorkbench({
 
   function navigateToDeck(deckId: string) {
     const qs = searchParams.toString();
-    router.push(workbenchHref(tab, deckId, qs || undefined));
+    router.push(workbenchHref(tab, deckId, qs || undefined), { scroll: false });
   }
 
   function switchDeck(deckId: string) {
@@ -157,7 +159,9 @@ export default function FizaWorkbench({
   }
 
   function openRatioRun(runId: string, deckId: string) {
-    router.push(workbenchHref("ratios", deckId, `run=${runId}`));
+    router.push(workbenchHref("ratios", deckId, `run=${runId}`), {
+      scroll: false,
+    });
   }
 
   async function saveRatioDecklist(
@@ -308,6 +312,11 @@ export default function FizaWorkbench({
             turns={solver.turns}
             simType={solver.simType}
             rollouts={solver.rollouts}
+            cpuCount={solver.cpuCount}
+            maxThreads={solver.maxThreads}
+            glimpseEnabled={solver.glimpseEnabled}
+            maxHandDurationSecs={solver.maxHandDurationSecs}
+            maxCardDraw={solver.maxCardDraw}
             busy={solver.busy === "solve"}
             lineResult={solver.lineResult}
             lineHand={solver.lineHand}
@@ -324,6 +333,10 @@ export default function FizaWorkbench({
             onTurnsChange={solver.setTurns}
             onSimTypeChange={solver.onSimTypeChange}
             onRolloutsChange={solver.setRollouts}
+            onMaxThreadsChange={solver.setMaxThreads}
+            onGlimpseEnabledChange={solver.setGlimpseEnabled}
+            onMaxHandDurationSecsChange={solver.setMaxHandDurationSecs}
+            onMaxCardDrawChange={solver.setMaxCardDraw}
             onSolve={solver.solveHand}
             onCancel={solver.cancelHandSolve}
           />
@@ -373,6 +386,11 @@ export default function FizaWorkbench({
             turns={solver.turns}
             simType={solver.simType}
             rollouts={solver.rollouts}
+            cpuCount={solver.cpuCount}
+            maxThreads={solver.maxThreads}
+            glimpseEnabled={solver.glimpseEnabled}
+            maxHandDurationSecs={solver.maxHandDurationSecs}
+            maxCardDraw={solver.maxCardDraw}
             evaluateBusy={solver.evaluateBusy}
             evaluateRun={solver.evaluateRun}
             decksLoading={decksLoading}
@@ -380,10 +398,19 @@ export default function FizaWorkbench({
             onSamplesChange={solver.setSamples}
             onGoFirstChange={solver.setGoFirst}
             onTurnsChange={solver.setTurns}
-            onSimTypeChange={solver.setSimType}
+            onSimTypeChange={solver.onSimTypeChange}
             onRolloutsChange={solver.setRollouts}
+            onMaxThreadsChange={solver.setMaxThreads}
+            onGlimpseEnabledChange={solver.setGlimpseEnabled}
+            onMaxHandDurationSecsChange={solver.setMaxHandDurationSecs}
+            onMaxCardDrawChange={solver.setMaxCardDraw}
             onEvaluate={solver.evaluateCurrentDeck}
             onCancel={solver.cancelEvaluateJob}
+            onSave={
+              solver.evaluateRun?.status === "running"
+                ? solver.saveEvaluateJob
+                : undefined
+            }
             onSendToHandSolver={solver.sendSampleToHandSolver}
           />
         )}
@@ -393,12 +420,34 @@ export default function FizaWorkbench({
             decks={decks}
             activeDeck={activeDeck}
             ratio={ratio}
+            goFirst={solver.goFirst}
+            turns={solver.turns}
+            simType={solver.simType}
+            rollouts={solver.rollouts}
+            cpuCount={solver.cpuCount}
+            maxThreads={solver.maxThreads}
+            glimpseEnabled={solver.glimpseEnabled}
+            maxHandDurationSecs={solver.maxHandDurationSecs}
+            maxCardDraw={solver.maxCardDraw}
             optimizeRun={solver.optimizeRun}
             optimizeBusy={solver.optimizeBusy}
             decksLoading={decksLoading}
             onSwitchDeck={switchDeck}
+            onGoFirstChange={solver.setGoFirst}
+            onTurnsChange={solver.setTurns}
+            onSimTypeChange={solver.onSimTypeChange}
+            onRolloutsChange={solver.setRollouts}
+            onMaxThreadsChange={solver.setMaxThreads}
+            onGlimpseEnabledChange={solver.setGlimpseEnabled}
+            onMaxHandDurationSecsChange={solver.setMaxHandDurationSecs}
+            onMaxCardDrawChange={solver.setMaxCardDraw}
             onOptimize={solver.optimizeCurrentBounds}
             onCancelOptimize={solver.cancelOptimizeJob}
+            onSaveOptimize={
+              solver.optimizeRun?.status === "running"
+                ? solver.saveOptimizeJob
+                : undefined
+            }
             onSaveDecklist={saveRatioDecklist}
           />
         )}

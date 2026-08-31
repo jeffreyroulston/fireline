@@ -162,6 +162,7 @@ export interface ActiveRunApiRow {
 
 export async function fetchRunQueue(): Promise<{
   workerReachable: boolean;
+  cpuCount: number;
   maxConcurrency: number;
   running: Array<{ run: ActiveRunApiRow; deckName: string }>;
   queued: Array<{ run: ActiveRunApiRow; deckName: string }>;
@@ -188,6 +189,11 @@ export async function fetchRun(id: string): Promise<unknown> {
 
 export async function deleteRun(id: string): Promise<void> {
   await apiFetch(`/runs/${id}`, { method: "DELETE" });
+}
+
+export async function saveRun(id: string): Promise<{ discarded: boolean }> {
+  const response = await apiFetch(`/runs/${id}/save`, { method: "POST" });
+  return { discarded: response.status === 204 };
 }
 
 export function runEventsUrl(runId: string): string {
@@ -491,65 +497,21 @@ export type CardDatabaseResponse = {
   cards: CardDatabaseCard[];
 };
 
-export type CardDatabaseSource = "evaluate" | "swap_sweep";
-
-export type CardDatabaseRunContributor = {
-  runId: string;
-  deckId: string;
-  deckName: string;
-  startedAt: string;
-  candidateCount: number;
-  samples: number;
-};
-
-export type CardDatabaseSwapSweepResponse = {
-  source: "swap_sweep";
-  totalRuns: number;
-  totalSamples: number;
-  contributors: CardDatabaseRunContributor[];
-  cards: CardDatabaseCard[];
-};
-
-export type SwapSweepCardRunRow = {
-  runId: string;
-  deckId: string;
-  deckName: string;
-  startedAt: string;
-  candidate: string | null;
-  scoreDelta: number | null;
-  handLift: number | null;
-  playRate: number | null;
-  openRate: number | null;
-  seeRate: number | null;
-  samples: number;
-};
+export type CardDatabaseSource = "all" | "evaluate" | "swap_sweep";
 
 export async function fetchCardDatabase(options: {
   source?: CardDatabaseSource;
-  simType?: string;
-  rulesVersion?: number;
-  samplerVersion?: number;
-  attributionVersion?: number;
-  currentRulesVersion?: number;
-  currentSamplerVersion?: number;
-  currentAttributionVersion?: number;
+  simType: string;
+  rulesVersion: number;
+  samplerVersion: number;
+  attributionVersion: number;
+  currentRulesVersion: number;
+  currentSamplerVersion: number;
+  currentAttributionVersion: number;
   deckIds?: string[];
-  runIds?: string[];
-}): Promise<CardDatabaseResponse | CardDatabaseSwapSweepResponse> {
-  const source = options.source ?? "evaluate";
-  if (source === "swap_sweep") {
-    const search = new URLSearchParams({ source: "swap_sweep" });
-    for (const runId of options.runIds ?? []) {
-      search.append("run_id", runId);
-    }
-    if (options.runIds !== undefined) {
-      search.set("run_filter", "1");
-    }
-    const response = await apiFetch(`/analysis/card-database?${search}`);
-    return response.json() as Promise<CardDatabaseSwapSweepResponse>;
-  }
+}): Promise<CardDatabaseResponse> {
   const search = new URLSearchParams({
-    sim_type: options.simType!,
+    sim_type: options.simType,
     rules_version: String(options.rulesVersion),
     sampler_version: String(options.samplerVersion),
     attribution_version: String(options.attributionVersion),
@@ -557,6 +519,9 @@ export async function fetchCardDatabase(options: {
     current_sampler_version: String(options.currentSamplerVersion),
     current_attribution_version: String(options.currentAttributionVersion),
   });
+  if (options.source && options.source !== "evaluate") {
+    search.set("source", options.source);
+  }
   for (const deckId of options.deckIds ?? []) {
     search.append("deck_id", deckId);
   }
@@ -586,37 +551,21 @@ export type CardDatabaseCardDecksResponse = {
 export async function fetchCardDatabaseCardDecks(options: {
   source?: CardDatabaseSource;
   cardId: string;
-  simType?: string;
-  rulesVersion?: number;
-  samplerVersion?: number;
-  attributionVersion?: number;
+  simType: string;
+  rulesVersion: number;
+  samplerVersion: number;
+  attributionVersion: number;
   deckIds?: string[];
-  runIds?: string[];
-}): Promise<
-  CardDatabaseCardDecksResponse | { runs: SwapSweepCardRunRow[] }
-> {
-  const source = options.source ?? "evaluate";
-  if (source === "swap_sweep") {
-    const search = new URLSearchParams({
-      source: "swap_sweep",
-    });
-    for (const runId of options.runIds ?? []) {
-      search.append("run_id", runId);
-    }
-    if (options.runIds !== undefined) {
-      search.set("run_filter", "1");
-    }
-    const response = await apiFetch(
-      `/analysis/card-database/${encodeURIComponent(options.cardId)}/decks?${search}`,
-    );
-    return response.json() as Promise<{ runs: SwapSweepCardRunRow[] }>;
-  }
+}): Promise<CardDatabaseCardDecksResponse> {
   const search = new URLSearchParams({
-    sim_type: options.simType!,
+    sim_type: options.simType,
     rules_version: String(options.rulesVersion),
     sampler_version: String(options.samplerVersion),
     attribution_version: String(options.attributionVersion),
   });
+  if (options.source && options.source !== "evaluate") {
+    search.set("source", options.source);
+  }
   for (const deckId of options.deckIds ?? []) {
     search.append("deck_id", deckId);
   }
@@ -642,6 +591,7 @@ export type CardPlayMatrixResponse = {
 };
 
 export async function fetchCardDatabasePlayMatrix(options: {
+  source?: CardDatabaseSource;
   cardId: string;
   simType: string;
   rulesVersion: number;
@@ -655,6 +605,9 @@ export async function fetchCardDatabasePlayMatrix(options: {
     sampler_version: String(options.samplerVersion),
     attribution_version: String(options.attributionVersion),
   });
+  if (options.source && options.source !== "evaluate") {
+    search.set("source", options.source);
+  }
   for (const deckId of options.deckIds ?? []) {
     search.append("deck_id", deckId);
   }
@@ -687,6 +640,7 @@ export type CardDatabasePairingsResponse = {
 };
 
 export async function fetchCardDatabasePairings(options: {
+  source?: CardDatabaseSource;
   cardId: string;
   simType: string;
   rulesVersion: number;
@@ -700,6 +654,9 @@ export async function fetchCardDatabasePairings(options: {
     sampler_version: String(options.samplerVersion),
     attribution_version: String(options.attributionVersion),
   });
+  if (options.source && options.source !== "evaluate") {
+    search.set("source", options.source);
+  }
   for (const deckId of options.deckIds ?? []) {
     search.append("deck_id", deckId);
   }

@@ -20,12 +20,12 @@ export const QUERY_KEYS_BY_TAB: Record<Tab, readonly string[]> = {
   manage: [],
   deck: ["run"],
   ratios: ["run"],
-  cards: ["source", "sim", "kind", "card", "deck", "run"],
+  cards: ["source", "sim", "kind", "card", "deck"],
   history: ["sim", "vg", "ovg", "card"],
   info: [],
 };
 
-export type CardDatabaseSource = "evaluate" | "swap_sweep";
+export type CardDatabaseSource = "all" | "evaluate" | "swap_sweep";
 
 const SIM_TYPES = new Set<SimType>([
   "fire_brick",
@@ -92,10 +92,10 @@ export function parseKindParam(value: string | null): string | null {
 export function parseCardDatabaseSource(
   value: string | null,
 ): CardDatabaseSource {
-  if (value === "swap_sweep") {
-    return "swap_sweep";
+  if (value === "evaluate" || value === "swap_sweep") {
+    return value;
   }
-  return "evaluate";
+  return "all";
 }
 
 export function cleanQueryForTab(
@@ -183,13 +183,12 @@ export function cardsQueryPatch(
     kind?: string | null;
     card?: string | null;
     deck?: string | null;
-    run?: string | null;
   },
 ): URLSearchParams {
   const next = new URLSearchParams(current.toString());
 
   if (patch.source !== undefined) {
-    if (patch.source === "evaluate") {
+    if (patch.source === "all") {
       next.delete("source");
     } else {
       next.set("source", patch.source);
@@ -225,14 +224,6 @@ export function cardsQueryPatch(
       next.set("deck", patch.deck);
     } else {
       next.delete("deck");
-    }
-  }
-
-  if (patch.run !== undefined) {
-    if (patch.run) {
-      next.set("run", patch.run);
-    } else {
-      next.delete("run");
     }
   }
 

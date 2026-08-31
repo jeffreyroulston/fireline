@@ -11,7 +11,7 @@ export interface StreamHandlers {
   onProgress: (progress: OptimizeProgress) => void;
   onHandProgress?: (hand: HandProgress) => void;
   onMemoryPressure?: (level: MemoryPressureLevel | null) => void;
-  onComplete: (result: unknown) => void;
+  onComplete: (result: unknown, partial?: boolean) => void;
   onError: (message: string) => void;
 }
 
@@ -30,7 +30,8 @@ function asHandPhase(value: unknown): HandPhase | null {
     value === "started" ||
     value === "throttled" ||
     value === "rollout" ||
-    value === "done"
+    value === "done" ||
+    value === "timedOut"
   ) {
     return value;
   }
@@ -74,7 +75,7 @@ export function applyHandProgress(
   update: HandProgress,
 ): HandProgress[] {
   const hands = current ?? [];
-  if (update.phase === "done") {
+  if (update.phase === "done" || update.phase === "timedOut") {
     return hands.filter((hand) => hand.sampleIndex !== update.sampleIndex);
   }
   const index = hands.findIndex(
@@ -198,7 +199,7 @@ export function dispatchSseEvent(
     return false;
   }
   if (data.type === "complete") {
-    handlers.onComplete(data.result);
+    handlers.onComplete(data.result, data.partial === true);
     return true;
   }
   if (data.type === "error") {

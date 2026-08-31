@@ -78,7 +78,9 @@ fn main() {
         .get(usize::from(index))
         .unwrap_or_else(|| panic!("no sample {index}"));
     let hand_ids: Vec<String> = hand.iter().map(|card| card.id().to_string()).collect();
-    eprintln!("solving sample {index} ({sim_type:?}, {rollouts} rollouts, {max_turns} turns): {hand_ids:?}");
+    eprintln!(
+        "solving sample {index} ({sim_type:?}, {rollouts} rollouts, {max_turns} turns): {hand_ids:?}"
+    );
 
     let stop = Arc::new(AtomicU64::new(0));
     let peak = Arc::new(AtomicU64::new(0));
@@ -105,6 +107,11 @@ fn main() {
         seed: seed.wrapping_add(u64::from(index) * 17),
         budget: Default::default(),
         materials: BTreeMap::new(),
+        max_threads: None,
+        glimpse_enabled: None,
+        max_hand_duration_secs: None,
+
+    max_card_draw: None,
     })
     .expect("solve sample");
     stop.store(1, Ordering::Relaxed);

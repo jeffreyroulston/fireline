@@ -16,6 +16,11 @@ type DeckTabProps = Readonly<{
   turns: number;
   simType: SimType;
   rollouts: number;
+  cpuCount: number;
+  maxThreads: number | null;
+  glimpseEnabled: boolean;
+  maxHandDurationSecs: number | null;
+  maxCardDraw: number | null;
   evaluateBusy: boolean;
   evaluateRun: UseShellSolverResult["evaluateRun"];
   decksLoading: boolean;
@@ -25,8 +30,13 @@ type DeckTabProps = Readonly<{
   onTurnsChange: (turns: number) => void;
   onSimTypeChange: (simType: SimType) => void;
   onRolloutsChange: (rollouts: number) => void;
+  onMaxThreadsChange: (value: number | null) => void;
+  onGlimpseEnabledChange: (value: boolean) => void;
+  onMaxHandDurationSecsChange: (value: number | null) => void;
+  onMaxCardDrawChange: (value: number | null) => void;
   onEvaluate: () => void;
   onCancel: () => void;
+  onSave?: () => void;
   onSendToHandSolver: (sample: SampleHand) => void;
 }>;
 
@@ -39,6 +49,11 @@ export function DeckTab({
   turns,
   simType,
   rollouts,
+  cpuCount,
+  maxThreads,
+  glimpseEnabled,
+  maxHandDurationSecs,
+  maxCardDraw,
   evaluateBusy,
   evaluateRun,
   decksLoading,
@@ -48,8 +63,13 @@ export function DeckTab({
   onTurnsChange,
   onSimTypeChange,
   onRolloutsChange,
+  onMaxThreadsChange,
+  onGlimpseEnabledChange,
+  onMaxHandDurationSecsChange,
+  onMaxCardDrawChange,
   onEvaluate,
   onCancel,
+  onSave,
   onSendToHandSolver,
 }: DeckTabProps) {
   const evaluateFailed =
@@ -67,6 +87,11 @@ export function DeckTab({
         turns={turns}
         simType={simType}
         rollouts={rollouts}
+        cpuCount={cpuCount}
+        maxThreads={maxThreads}
+        glimpseEnabled={glimpseEnabled}
+        maxHandDurationSecs={maxHandDurationSecs}
+        maxCardDraw={maxCardDraw}
         busy={evaluateBusy}
         onSwitchDeck={onSwitchDeck}
         onSamplesChange={onSamplesChange}
@@ -74,8 +99,13 @@ export function DeckTab({
         onTurnsChange={onTurnsChange}
         onSimTypeChange={onSimTypeChange}
         onRolloutsChange={onRolloutsChange}
+        onMaxThreadsChange={onMaxThreadsChange}
+        onGlimpseEnabledChange={onGlimpseEnabledChange}
+        onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
+        onMaxCardDrawChange={onMaxCardDrawChange}
         onEvaluate={onEvaluate}
         onCancel={onCancel}
+        onSave={onSave}
         progress={evaluateRun?.progress ?? null}
         decksLoading={decksLoading}
       />

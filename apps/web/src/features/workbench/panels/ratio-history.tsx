@@ -44,7 +44,7 @@ import {
 function runMatchesGroup(run: RunHistoryRow, group: VersionGroup): boolean {
   return (
     run.kind === "optimize" &&
-    run.status === "complete" &&
+    (run.status === "complete" || run.status === "partial") &&
     run.rulesVersion === group.rulesVersion &&
     run.samplerVersion === group.samplerVersion &&
     run.attributionVersion === group.attributionVersion

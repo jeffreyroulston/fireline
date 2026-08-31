@@ -10,10 +10,11 @@ export default async function WorkbenchLayout({
 }) {
   return (
     <WorkbenchBootstrap>
+      {/* Page slot first: Next scroll/focus targets this segment on soft nav. */}
+      {children}
       <Suspense fallback={<WorkbenchLoader />}>
         <WorkbenchShell />
       </Suspense>
-      {children}
     </WorkbenchBootstrap>
   );
 }

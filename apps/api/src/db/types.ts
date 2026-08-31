@@ -48,6 +48,7 @@ export type RunStatus =
   | "queued"
   | "running"
   | "complete"
+  | "partial"
   | "failed"
   | "cancelled"
   | "interrupted";

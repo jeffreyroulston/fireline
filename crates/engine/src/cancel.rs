@@ -3,28 +3,49 @@
 //! The worker installs a job-local [`CancelFlag`] on each rayon hand thread.
 //! When the NDJSON client disconnects, the worker sets the flag; [`Search`]
 //! polls it on the same cadence as park checkpoints and aborts promptly.
+//! Cancel-and-save sets both `requested` and `save` so the engine can return
+//! finished hands instead of discarding the job.
 
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 thread_local! {
-    static CURRENT: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+    static CURRENT: RefCell<Option<CancelFlag>> = const { RefCell::new(None) };
+}
+
+/// Shared cancel state for one evaluate / optimize / solve job.
+pub struct CancelControl {
+    requested: AtomicBool,
+    save: AtomicBool,
 }
 
 /// Shared cancel flag for one evaluate / optimize / solve job.
-pub type CancelFlag = Arc<AtomicBool>;
+pub type CancelFlag = Arc<CancelControl>;
 
 pub fn new_flag() -> CancelFlag {
-    Arc::new(AtomicBool::new(false))
+    Arc::new(CancelControl {
+        requested: AtomicBool::new(false),
+        save: AtomicBool::new(false),
+    })
 }
 
 pub fn request(flag: &CancelFlag) {
-    flag.store(true, Ordering::SeqCst);
+    flag.requested.store(true, Ordering::SeqCst);
+}
+
+/// Stop the job and keep finished work for a partial result.
+pub fn request_save(flag: &CancelFlag) {
+    flag.save.store(true, Ordering::SeqCst);
+    flag.requested.store(true, Ordering::SeqCst);
 }
 
 pub fn is_requested(flag: &CancelFlag) -> bool {
-    flag.load(Ordering::Relaxed)
+    flag.requested.load(Ordering::Relaxed)
+}
+
+pub fn is_save_requested_on(flag: &CancelFlag) -> bool {
+    flag.save.load(Ordering::Relaxed)
 }
 
 /// True when this OS thread is running under an installed flag that has been set.
@@ -32,7 +53,16 @@ pub fn is_cancel_requested() -> bool {
     CURRENT.with(|slot| {
         slot.borrow()
             .as_ref()
-            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            .is_some_and(|flag| flag.requested.load(Ordering::Relaxed))
+    })
+}
+
+/// True when this OS thread's installed flag asked to keep finished work.
+pub fn is_save_requested() -> bool {
+    CURRENT.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|flag| flag.save.load(Ordering::Relaxed))
     })
 }
 
@@ -71,5 +101,18 @@ mod tests {
             assert!(is_cancel_requested());
         }
         assert!(!is_cancel_requested());
+    }
+
+    #[test]
+    fn request_save_sets_cancel_and_save() {
+        let flag = new_flag();
+        assert!(!is_requested(&flag));
+        assert!(!is_save_requested_on(&flag));
+        request_save(&flag);
+        assert!(is_requested(&flag));
+        assert!(is_save_requested_on(&flag));
+        let _guard = install(flag);
+        assert!(is_cancel_requested());
+        assert!(is_save_requested());
     }
 }

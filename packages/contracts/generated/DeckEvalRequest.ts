@@ -2,4 +2,4 @@
 import type { Budget } from "./Budget.js";
 import type { SimType } from "./SimType.js";
 
-export type DeckEvalRequest = { deck: { [key in string]?: number }, samples: number, goFirst: boolean, maxTurns: number, seed: bigint, simType: SimType, rollouts: number, budget: Budget, materials: { [key in string]?: number }, };
+export type DeckEvalRequest = { deck: { [key in string]?: number }, samples: number, goFirst: boolean, maxTurns: number, seed: bigint, simType: SimType, rollouts: number, budget: Budget, materials: { [key in string]?: number }, maxThreads: number | null, glimpseEnabled: boolean | null, maxHandDurationSecs: number | null, maxCardDraw: number | null, };

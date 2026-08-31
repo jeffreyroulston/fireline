@@ -2,6 +2,7 @@
 import type { Bounds } from "./Bounds.js";
 import type { Budget } from "./Budget.js";
 import type { Metric } from "./Metric.js";
+import type { SimType } from "./SimType.js";
 import type { Strategy } from "./Strategy.js";
 import type { SwapConfig } from "./SwapConfig.js";
 
@@ -9,4 +10,4 @@ export type OptimizeRequest = { bounds: { [key in string]?: Bounds }, deckSize: 
 /**
  * How many unique legal lists to score.
  */
-decks: number, metric: Metric, seed: bigint, budget: Budget, materials: { [key in string]?: number }, strategy: Strategy, baseDeck: { [key in string]?: number }, swap: SwapConfig | null, };
+decks: number, metric: Metric, seed: bigint, budget: Budget, materials: { [key in string]?: number }, strategy: Strategy, baseDeck: { [key in string]?: number }, swap: SwapConfig | null, goFirst: boolean, maxTurns: number, simType: SimType, rollouts: number, maxThreads: number | null, glimpseEnabled: boolean | null, maxHandDurationSecs: number | null, maxCardDraw: number | null, };

@@ -129,6 +129,13 @@ export function InfoPanel() {
           <InfoCard title="Rollouts">
             Monte Carlo only — how many shuffled remaining decks to sample.
           </InfoCard>
+          <InfoCard title="Advanced">
+            Optional processing power caps concurrent opening hands on deck
+            damage. Enable Glimpse lets Zander peek and reorder unknown draws
+            (off for Fire brick). Max hand duration skips slow hands from deck
+            aggregates and fails a line solve when set. Max card draw keeps only
+            the first N known library draws; further draws become Fire Bricks.
+          </InfoCard>
         </div>
       </section>
 

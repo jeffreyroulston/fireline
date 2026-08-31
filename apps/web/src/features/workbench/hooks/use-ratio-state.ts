@@ -24,7 +24,6 @@ type UseRatioStateOptions = Readonly<{
 export type RatioStateSnapshot = Readonly<{
   cutBudgets: Partial<Record<CardId, number>>;
   replacements: Partial<Record<CardId, number>>;
-  deckAttempts: number;
   ratioSamples: number;
   metric: "mean" | "p50";
   ratioStrategy: RatioStrategy;
@@ -50,7 +49,6 @@ export type RatioStateActions = Readonly<{
   toggleReplacement: (id: CardId) => void;
   setReplacementMax: (id: CardId, max: number) => void;
   toggleSwapCandidate: (id: CardId) => void;
-  setDeckAttempts: (value: number | ((current: number) => number)) => void;
   setRatioSamples: (value: number) => void;
   setMetric: (value: "mean" | "p50") => void;
   setRatioStrategy: (value: RatioStrategy) => void;
@@ -73,7 +71,6 @@ export function useRatioState({
   const [replacements, setReplacements] = useState<
     Partial<Record<CardId, number>>
   >({});
-  const [deckAttempts, setDeckAttempts] = useState(32);
   const [ratioSamples, setRatioSamples] = useState(40);
   const [metric, setMetric] = useState<"mean" | "p50">("mean");
   const [ratioStrategy, setRatioStrategy] =
@@ -109,7 +106,7 @@ export function useRatioState({
             ? legalDecklists
             : BigInt(MAX_RATIO_DECK_ATTEMPTS),
         );
-  const coveragePercent = deckAttemptPercent(deckAttempts, legalDecklists);
+  const coveragePercent = deckAttemptPercent(attemptCeiling, legalDecklists);
   const replacementCount = Object.keys(replacements).length;
 
   useEffect(() => {
@@ -147,13 +144,6 @@ export function useRatioState({
       return Object.fromEntries(nextEntries) as Partial<Record<CardId, number>>;
     });
   }, [deckText]);
-
-  useEffect(() => {
-    if (attemptCeiling < 1) return;
-    setDeckAttempts((current) =>
-      Math.min(Math.max(1, current), attemptCeiling),
-    );
-  }, [attemptCeiling]);
 
   function setCutBudget(id: CardId, cutUpTo: number) {
     setCutBudgets((current) => {
@@ -215,7 +205,6 @@ export function useRatioState({
   return {
     cutBudgets,
     replacements,
-    deckAttempts,
     ratioSamples,
     metric,
     ratioStrategy,
@@ -238,7 +227,6 @@ export function useRatioState({
     toggleReplacement,
     setReplacementMax,
     toggleSwapCandidate,
-    setDeckAttempts,
     setRatioSamples,
     setMetric,
     setRatioStrategy,

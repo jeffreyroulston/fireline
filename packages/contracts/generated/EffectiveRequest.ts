@@ -7,4 +7,4 @@ import type { SimType } from "./SimType.js";
 /**
  * Post-clamp inputs that actually ran, for durable persistence and cross-run grouping.
  */
-export type EffectiveRequest = { engineVersion: EngineVersion, rootSeed: bigint, simType: SimType | null, deck: { [key in string]?: number }, goFirst: boolean | null, maxTurns: number | null, rollouts: number | null, samples: number | null, metric: string | null, bounds: { [key in string]?: Bounds }, deckSize: number | null, decks: number | null, strategy: string | null, budget: Budget, };
+export type EffectiveRequest = { engineVersion: EngineVersion, rootSeed: bigint, simType: SimType | null, deck: { [key in string]?: number }, goFirst: boolean | null, maxTurns: number | null, rollouts: number | null, samples: number | null, metric: string | null, bounds: { [key in string]?: Bounds }, deckSize: number | null, decks: number | null, strategy: string | null, budget: Budget, maxThreads: number | null, glimpseEnabled: boolean | null, maxHandDurationSecs: number | null, maxCardDraw: number | null, };

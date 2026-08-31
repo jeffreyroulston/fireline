@@ -87,6 +87,9 @@ export function DeckResults({
           meta={
             <strong>
               {SIM_TYPE_LABELS[mode]} · {result.samples} opening hands
+              {(result.timedOutSamples ?? 0) > 0
+                ? ` · ${result.timedOutSamples} timed out`
+                : ""}
             </strong>
           }
           distribution={distribution}

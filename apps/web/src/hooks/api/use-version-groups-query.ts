@@ -13,7 +13,7 @@ export function useVersionGroupsQuery(
 ) {
   const scope = versionGroupsScopeKey(options);
   const simType = options.simType ?? "fire_brick";
-  const kind = options.kind ?? "evaluate";
+  const kind = options.kind ?? "all";
   const enabled = Boolean(options.deckId || options.deckHash || scope === "global");
 
   return useQuery({

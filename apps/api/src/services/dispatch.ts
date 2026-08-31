@@ -9,7 +9,7 @@ import {
   persistOptimizeResult,
 } from "./persist.js";
 import { runHub } from "./run-hub.js";
-import { postWorkerNdjson, WorkerError } from "./worker.js";
+import { fetchWorkerJson, postWorkerNdjson, WorkerError } from "./worker.js";
 
 type EvaluateEvent =
   | {
@@ -29,6 +29,7 @@ type EvaluateEvent =
   | { kind: "memoryPressure"; level: "clear" | "squeeze" | "parked" }
   | { kind: "heartbeat" }
   | { kind: "result" } & DeckEvalResult
+  | { kind: "partialResult" } & DeckEvalResult
   | { kind: "error"; message: string };
 
 type OptimizeEvent =
@@ -36,6 +37,7 @@ type OptimizeEvent =
   | { kind: "memoryPressure"; level: "clear" | "squeeze" | "parked" }
   | { kind: "heartbeat" }
   | { kind: "result" } & OptimizeResult
+  | { kind: "partialResult" } & OptimizeResult
   | { kind: "error"; message: string };
 
 export class ConcurrencyGate {
@@ -86,6 +88,23 @@ export class RunDispatcher {
     runHub.getAbort(runId)?.abort();
   }
 
+  /** Stop a running job and persist finished work. Queued jobs are cancelled. */
+  requestSave(runId: string): "queued" | "running" {
+    const index = this.queue.findIndex((job) => job.runId === runId);
+    if (index >= 0) {
+      this.queue.splice(index, 1);
+      return "queued";
+    }
+    void fetchWorkerJson(this.workerBase, `/jobs/${runId}/stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ save: true }),
+    }).catch(() => {
+      // Job is not registered on the worker yet, or already finished.
+    });
+    return "running";
+  }
+
   private async drain(): Promise<void> {
     if (this.draining) return;
     this.draining = true;
@@ -119,7 +138,7 @@ export class RunDispatcher {
         await this.processOptimize(job.runId, job.body as OptimizeRequest, abort.signal);
       }
     } catch (error) {
-      if (abort.signal.aborted) {
+      if (abort.signal.aborted || isCancelError(error)) {
         await markRunCancelled(this.db, job.runId);
         runHub.publish(job.runId, { type: "cancelled" });
       } else {
@@ -144,6 +163,7 @@ export class RunDispatcher {
           "/evaluate",
           body,
           signal,
+          { "X-Run-Id": runId },
         );
         for await (const event of lines) {
           if (event.kind === "progress") {
@@ -184,10 +204,15 @@ export class RunDispatcher {
             // Worker keep-alive for undici body idle timeout; not forwarded to SSE.
           } else if (event.kind === "error") {
             throw new Error(event.message);
-          } else if (event.kind === "result") {
-            const { kind: _kind, ...result } = event;
-            await persistEvaluateResult(this.db, runId, result as DeckEvalResult);
-            runHub.publish(runId, { type: "complete", result });
+          } else if (event.kind === "result" || event.kind === "partialResult") {
+            const { kind, ...result } = event;
+            const status = kind === "partialResult" ? "partial" : "complete";
+            await persistEvaluateResult(this.db, runId, result as DeckEvalResult, status);
+            runHub.publish(runId, {
+              type: "complete",
+              result,
+              ...(status === "partial" ? { partial: true } : {}),
+            });
             return;
           }
         }
@@ -215,6 +240,7 @@ export class RunDispatcher {
           "/optimize",
           body,
           signal,
+          { "X-Run-Id": runId },
         );
         for await (const event of lines) {
           if (event.kind === "progress") {
@@ -229,10 +255,15 @@ export class RunDispatcher {
             // Worker keep-alive for undici body idle timeout; not forwarded to SSE.
           } else if (event.kind === "error") {
             throw new Error(event.message);
-          } else if (event.kind === "result") {
-            const { kind: _kind, ...result } = event;
-            await persistOptimizeResult(this.db, runId, result as OptimizeResult);
-            runHub.publish(runId, { type: "complete", result });
+          } else if (event.kind === "result" || event.kind === "partialResult") {
+            const { kind, ...result } = event;
+            const status = kind === "partialResult" ? "partial" : "complete";
+            await persistOptimizeResult(this.db, runId, result as OptimizeResult, status);
+            runHub.publish(runId, {
+              type: "complete",
+              result,
+              ...(status === "partial" ? { partial: true } : {}),
+            });
             return;
           }
         }
@@ -247,4 +278,8 @@ export class RunDispatcher {
       }
     }
   }
+}
+
+function isCancelError(error: unknown): boolean {
+  return error instanceof Error && error.message === "cancelled";
 }

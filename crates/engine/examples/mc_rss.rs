@@ -125,6 +125,11 @@ fn main() {
         seed: 42,
         budget: Default::default(),
         materials: BTreeMap::new(),
+        max_threads: None,
+        glimpse_enabled: None,
+        max_hand_duration_secs: None,
+
+    max_card_draw: None,
     })
     .expect("mc solve");
     stop.store(1, Ordering::Relaxed);

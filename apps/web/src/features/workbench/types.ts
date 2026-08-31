@@ -36,6 +36,7 @@ export interface SampleHand {
 export interface DeckResult {
   simType?: SimType;
   samples: number;
+  timedOutSamples?: number;
   damages: number[];
   hands: SampleHand[];
   mean: number;

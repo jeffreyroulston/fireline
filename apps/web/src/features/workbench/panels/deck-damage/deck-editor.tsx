@@ -22,6 +22,11 @@ export function DeckEditor({
   turns,
   simType,
   rollouts,
+  cpuCount,
+  maxThreads,
+  glimpseEnabled,
+  maxHandDurationSecs,
+  maxCardDraw,
   busy,
   onSwitchDeck,
   onSamplesChange,
@@ -29,8 +34,13 @@ export function DeckEditor({
   onTurnsChange,
   onSimTypeChange,
   onRolloutsChange,
+  onMaxThreadsChange,
+  onGlimpseEnabledChange,
+  onMaxHandDurationSecsChange,
+  onMaxCardDrawChange,
   onEvaluate,
   onCancel,
+  onSave,
   progress,
   decksLoading = false,
 }: {
@@ -42,6 +52,11 @@ export function DeckEditor({
   turns: number;
   simType: SimType;
   rollouts: number;
+  cpuCount?: number;
+  maxThreads: number | null;
+  glimpseEnabled: boolean;
+  maxHandDurationSecs: number | null;
+  maxCardDraw: number | null;
   busy: boolean;
   onSwitchDeck: (deckId: string) => void;
   onSamplesChange: (value: number) => void;
@@ -49,8 +64,13 @@ export function DeckEditor({
   onTurnsChange: (value: number) => void;
   onSimTypeChange: (value: SimType) => void;
   onRolloutsChange: (value: number) => void;
+  onMaxThreadsChange: (value: number | null) => void;
+  onGlimpseEnabledChange: (value: boolean) => void;
+  onMaxHandDurationSecsChange: (value: number | null) => void;
+  onMaxCardDrawChange: (value: number | null) => void;
   onEvaluate: () => void;
   onCancel: () => void;
+  onSave?: () => void;
   progress?: OptimizeProgress | null;
   decksLoading?: boolean;
 }) {
@@ -87,16 +107,26 @@ export function DeckEditor({
           turns={turns}
           simType={simType}
           rollouts={rollouts}
+          cpuCount={cpuCount}
+          maxThreads={maxThreads}
+          glimpseEnabled={glimpseEnabled}
+          maxHandDurationSecs={maxHandDurationSecs}
+          maxCardDraw={maxCardDraw}
           onFirstChange={onGoFirstChange}
           onTurnsChange={onTurnsChange}
           onSimTypeChange={onSimTypeChange}
           onRolloutsChange={onRolloutsChange}
+          onMaxThreadsChange={onMaxThreadsChange}
+          onGlimpseEnabledChange={onGlimpseEnabledChange}
+          onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
+          onMaxCardDrawChange={onMaxCardDrawChange}
         />
         <ActionBar
           label="Sample deck damage"
           busy={busy}
           onRun={onEvaluate}
           onCancel={onCancel}
+          onSave={onSave}
           progress={progress}
           monteCarloRollouts={simType === "monte_carlo" ? rollouts : undefined}
         />

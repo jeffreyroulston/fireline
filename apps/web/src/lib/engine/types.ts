@@ -219,6 +219,10 @@ export interface CardStat {
   damageWhenSeenSum: number;
   damagePerPlay: number;
   damageShare: number;
+  withHandDamageSum?: number;
+  withHandSamples?: number;
+  withoutHandDamageSum?: number;
+  withoutHandSamples?: number;
 }
 
 export interface DeckCounts {
