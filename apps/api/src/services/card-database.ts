@@ -24,7 +24,7 @@ import {
 
 export type { CardHandImpact } from "../lib/hand-impact.js";
 
-const COMPLETE = "complete" as const;
+const DONE_STATUSES = ["complete", "partial"] as const;
 
 export type CardDatabaseSource = "all" | "evaluate" | "swap_sweep";
 
@@ -342,7 +342,7 @@ export async function cardDatabase(
         sql<number>`count(*)::int`.as("runCount"),
         sql<number>`sum(coalesce(r.samples, 0))::int`.as("samples"),
       ])
-      .where("r.status", "=", COMPLETE)
+      .where("r.status", "in", DONE_STATUSES)
       .where("r.kind", "=", "evaluate")
       .where("r.deck_id", "is not", null)
       .where("r.sim_type", "=", options.simType)
@@ -386,7 +386,7 @@ export async function cardDatabase(
           sql<number>`sum(cs.damage)::int`.as("damage"),
           sql<number>`sum(cs.damage_when_seen_sum)::int`.as("damageWhenSeenSum"),
         ])
-        .where("r.status", "=", COMPLETE)
+        .where("r.status", "in", DONE_STATUSES)
         .where("r.kind", "=", "evaluate")
         .where("r.deck_id", "is not", null)
         .where("r.sim_type", "=", options.simType)
@@ -425,7 +425,7 @@ export async function cardDatabase(
         .innerJoin("runs as r", "r.id", "cs.run_id")
         .select("cs.card_id as cardId")
         .distinct()
-        .where("r.status", "=", COMPLETE)
+        .where("r.status", "in", DONE_STATUSES)
         .where("r.kind", "=", "evaluate")
         .where("r.deck_id", "is not", null)
         .where("r.sim_type", "=", options.simType)
@@ -451,7 +451,7 @@ export async function cardDatabase(
       let runCountQuery = db
         .selectFrom("runs")
         .select(sql<number>`count(*)::int`.as("runCount"))
-        .where("status", "=", COMPLETE)
+        .where("status", "in", DONE_STATUSES)
         .where("kind", "=", "evaluate")
         .where("deck_id", "is not", null)
         .where("sim_type", "=", options.simType)
@@ -462,7 +462,7 @@ export async function cardDatabase(
       let samplesQuery = db
         .selectFrom("runs")
         .select(sql<number>`sum(coalesce(samples, 0))::int`.as("totalSamples"))
-        .where("status", "=", COMPLETE)
+        .where("status", "in", DONE_STATUSES)
         .where("kind", "=", "evaluate")
         .where("deck_id", "is not", null)
         .where("sim_type", "=", options.simType)
@@ -558,7 +558,7 @@ async function evaluateDecksForCard(
       sql<number>`sum(cs.damage_when_seen_sum)::int`.as("damageWhenSeenSum"),
     ])
     .where("cs.card_id", "=", options.cardId)
-    .where("r.status", "=", COMPLETE)
+    .where("r.status", "in", DONE_STATUSES)
     .where("r.kind", "=", "evaluate")
     .where("r.deck_id", "is not", null)
     .where("r.sim_type", "=", options.simType)
@@ -731,7 +731,7 @@ export async function cardDatabasePlayMatrix(
     .selectFrom("run_samples as rs")
     .innerJoin("runs as r", "r.id", "rs.run_id")
     .select(sql<number>`coalesce(sum(rs.occurrence_count), 0)::int`.as("totalSamples"))
-    .where("r.status", "=", COMPLETE)
+    .where("r.status", "in", DONE_STATUSES)
     .where("r.kind", "=", "evaluate")
     .where("r.deck_id", "is not", null)
     .where("r.sim_type", "=", options.simType)
@@ -758,7 +758,7 @@ export async function cardDatabasePlayMatrix(
       sql<string>`e.payload->>'phase'`.as("phase"),
       sql<number>`sum(rs.occurrence_count)::int`.as("plays"),
     ])
-    .where("r.status", "=", COMPLETE)
+    .where("r.status", "in", DONE_STATUSES)
     .where("r.kind", "=", "evaluate")
     .where("r.deck_id", "is not", null)
     .where("r.sim_type", "=", options.simType)
@@ -860,7 +860,7 @@ export async function cardDatabasePairings(
       "r.deck_counts as deckCounts",
       "r.deck_id as deckId",
     ])
-    .where("r.status", "=", COMPLETE)
+    .where("r.status", "in", DONE_STATUSES)
     .where("r.kind", "=", "evaluate")
     .where("r.deck_id", "is not", null)
     .where("r.sim_type", "=", options.simType)

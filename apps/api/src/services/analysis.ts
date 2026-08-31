@@ -690,6 +690,11 @@ export async function listRunHistory(
       "runs.root_seed as rootSeed",
       "runs.samples as samples",
       "runs.rollouts as rollouts",
+      "runs.go_first as goFirst",
+      "runs.max_turns as maxTurns",
+      "runs.metric as metric",
+      "runs.optimize_strategy as optimizeStrategy",
+      "runs.request_body as requestBody",
       "runs.mean_damage as meanDamage",
       "runs.p50_damage as p50Damage",
       "runs.best_score as bestScore",
@@ -718,5 +723,24 @@ export async function listRunHistory(
     query = query.where("runs.kind", "in", ["evaluate", "optimize"]);
   }
 
-  return query.execute();
+  const rows = await query.execute();
+  return rows.map((row) => {
+    const body = (row.requestBody ?? {}) as Record<string, unknown>;
+    const { requestBody: _requestBody, ...rest } = row;
+    return {
+      ...rest,
+      maxThreads: numberOrNull(body.maxThreads),
+      glimpseEnabled: boolOrNull(body.glimpseEnabled),
+      maxHandDurationSecs: numberOrNull(body.maxHandDurationSecs),
+      maxCardDraw: numberOrNull(body.maxCardDraw),
+    };
+  });
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function boolOrNull(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
 }

@@ -211,6 +211,14 @@ export interface RunHistoryRow {
   rootSeed: string | null;
   samples: number | null;
   rollouts: number | null;
+  goFirst: boolean | null;
+  maxTurns: number | null;
+  metric: string | null;
+  optimizeStrategy: string | null;
+  maxThreads: number | null;
+  glimpseEnabled: boolean | null;
+  maxHandDurationSecs: number | null;
+  maxCardDraw: number | null;
   meanDamage: number | null;
   p50Damage: number | null;
   bestScore: number | null;

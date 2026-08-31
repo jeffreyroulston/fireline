@@ -12,7 +12,7 @@ import type {
   CardPerformance,
 } from "./card-database.js";
 
-const COMPLETE = "complete" as const;
+const DONE_STATUSES = ["complete", "partial"] as const;
 const SWAP_SWEEP = "swapSweep" as const;
 export const SWAP_SWEEP_VIRTUAL_DECK_PREFIX = "swap-sweep:";
 
@@ -207,7 +207,7 @@ async function loadSwapSweepEvalRows(
       "r.samples as samples",
       "c.card_stats as cardStats",
     ])
-    .where("r.status", "=", COMPLETE)
+    .where("r.status", "in", DONE_STATUSES)
     .where("r.kind", "=", "optimize")
     .where("r.optimize_strategy", "=", SWAP_SWEEP)
     .where("r.sim_type", "=", options.simType)

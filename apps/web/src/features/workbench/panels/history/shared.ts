@@ -171,6 +171,54 @@ export function handsLabel(run: RunHistoryRow): string {
   return String(run.samples);
 }
 
+/** Short lines for a history-row settings hover. */
+export function runSettingsLines(run: RunHistoryRow): string[] {
+  const lines: string[] = [];
+  if (run.goFirst != null) {
+    lines.push(run.goFirst ? "Going first" : "Going second");
+  }
+  if (run.maxTurns != null) {
+    lines.push(`${run.maxTurns} turn${run.maxTurns === 1 ? "" : "s"}`);
+  }
+  if (run.simType) {
+    lines.push(SIM_TYPE_LABELS[run.simType as SimType] ?? run.simType);
+  }
+  if (run.simType === "monte_carlo" && run.rollouts != null) {
+    lines.push(
+      `${run.rollouts} rollout${run.rollouts === 1 ? "" : "s"} per hand`,
+    );
+  }
+  if (run.samples != null) {
+    lines.push(
+      `${run.samples} opening hand${run.samples === 1 ? "" : "s"}`,
+    );
+  }
+  if (run.kind === "optimize") {
+    if (run.optimizeStrategy) {
+      lines.push(`Strategy: ${run.optimizeStrategy}`);
+    }
+    if (run.metric) {
+      lines.push(`Metric: ${run.metric}`);
+    }
+  }
+  if (run.maxThreads != null) {
+    lines.push(`Processing power: ${run.maxThreads}`);
+  }
+  if (run.glimpseEnabled != null) {
+    lines.push(run.glimpseEnabled ? "Glimpse on" : "Glimpse off");
+  }
+  if (run.maxHandDurationSecs != null && run.maxHandDurationSecs > 0) {
+    lines.push(`Max hand ${run.maxHandDurationSecs}s`);
+  }
+  if (run.maxCardDraw != null && run.maxCardDraw > 0) {
+    lines.push(`Max card draw ${run.maxCardDraw}`);
+  }
+  if (run.rootSeed) {
+    lines.push(`Seed ${run.rootSeed}`);
+  }
+  return lines;
+}
+
 function expandBuckets(buckets: number[]): number[] {
   const damages: number[] = [];
   for (let damage = 0; damage < buckets.length; damage += 1) {

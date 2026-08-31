@@ -191,12 +191,16 @@ export function RunSettings({
                     </span>
                   </span>
                 </label>
-                <label>
-                  <InfoPopover label="Max card draw">
-                    Only the first N known library draws stay real. After that,
-                    every further draw is an unplayable Fire Brick.
-                  </InfoPopover>
+                <label htmlFor="run-max-card-draw">
+                  <span className="inline-flex items-center gap-[5px] leading-none">
+                    Max card draw
+                    <InfoPopover hideLabel label="Max card draw">
+                      Only the first N known library draws stay real. After
+                      that, every further draw is an unplayable Fire Brick.
+                    </InfoPopover>
+                  </span>
                   <input
+                    id="run-max-card-draw"
                     type="number"
                     min={0}
                     max={64}

@@ -35,7 +35,7 @@ fn sim_uses_heavy_search(sim_type: SimType) -> bool {
 fn requested_threads() -> usize {
     let cpus = std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(4);
+        .unwrap_or(6);
     std::env::var("RAYON_NUM_THREADS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
