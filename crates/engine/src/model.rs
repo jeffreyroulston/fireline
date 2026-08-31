@@ -377,7 +377,9 @@ impl State {
         }
         match self.phase {
             Phase::Materialize => self.max_turns.saturating_sub(self.turn),
-            Phase::Main | Phase::Agility => self.max_turns.saturating_sub(self.turn.saturating_add(1)),
+            Phase::Main | Phase::Agility => {
+                self.max_turns.saturating_sub(self.turn.saturating_add(1))
+            }
         }
     }
 
@@ -421,11 +423,16 @@ impl State {
             }
             Card::VermilionDecree => {
                 // Only the imbued path draws; need Fire available for imbue.
-                if self.fire_gy > 0 || self.hand.iter().enumerate().any(|(i, &n)| {
-                    n > 0 && ALL_CARDS[i].is_fire() && ALL_CARDS[i] != Card::VermilionDecree
-                }) || self.memory.iter().enumerate().any(|(i, &n)| {
-                    n > 0 && ALL_CARDS[i].is_fire()
-                }) {
+                if self.fire_gy > 0
+                    || self.hand.iter().enumerate().any(|(i, &n)| {
+                        n > 0 && ALL_CARDS[i].is_fire() && ALL_CARDS[i] != Card::VermilionDecree
+                    })
+                    || self
+                        .memory
+                        .iter()
+                        .enumerate()
+                        .any(|(i, &n)| n > 0 && ALL_CARDS[i].is_fire())
+                {
                     1
                 } else {
                     0
@@ -1233,6 +1240,14 @@ pub struct EffectiveRequest {
     #[cfg_attr(feature = "ts", ts(type = "string | null"))]
     pub strategy: Option<&'static str>,
     pub budget: Budget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_threads: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub glimpse_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_hand_duration_secs: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_card_draw: Option<u16>,
 }
 
 impl Default for EffectiveRequest {
@@ -1252,6 +1267,10 @@ impl Default for EffectiveRequest {
             decks: None,
             strategy: None,
             budget: Budget::default(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+            max_card_draw: None,
         }
     }
 }
@@ -1287,6 +1306,47 @@ pub struct SolveRequest {
     /// Material sideboard counts. Empty → all default materials.
     #[serde(default)]
     pub materials: BTreeMap<String, u8>,
+    /// Cap concurrent opening-hand solves in deck eval. None → no job-local cap.
+    #[serde(default)]
+    pub max_threads: Option<u16>,
+    /// Override Glimpse during oracle / Monte Carlo search. Fire brick ignores this.
+    #[serde(default)]
+    pub glimpse_enabled: Option<bool>,
+    /// Per-hand wall-clock limit. None / 0 → no limit.
+    #[serde(default)]
+    pub max_hand_duration_secs: Option<u16>,
+    /// Cap known library draws; further draws become Fire Bricks. None / 0 → unlimited.
+    #[serde(default)]
+    pub max_card_draw: Option<u16>,
+}
+
+/// Whether Glimpse is active for a solve pass.
+pub fn effective_glimpse(sim_type: SimType, brick_pass: bool, glimpse_enabled: Option<bool>) -> bool {
+    if sim_type == SimType::FireBrick || brick_pass {
+        return false;
+    }
+    glimpse_enabled.unwrap_or(true)
+}
+
+pub fn hand_duration(max_hand_duration_secs: Option<u16>) -> Option<std::time::Duration> {
+    max_hand_duration_secs
+        .filter(|&secs| secs > 0)
+        .map(|secs| std::time::Duration::from_secs(u64::from(secs)))
+}
+
+/// Truncate a known draw queue so later draws fall back to Fire Brick.
+pub fn truncate_draw_queue(queue: Vec<Card>, max_card_draw: Option<u16>) -> Vec<Card> {
+    match max_card_draw.filter(|&n| n > 0) {
+        Some(n) => {
+            let n = usize::from(n).min(DRAW_QUEUE_CAP);
+            if queue.len() > n {
+                queue[..n].to_vec()
+            } else {
+                queue
+            }
+        }
+        None => queue,
+    }
 }
 
 /// Map persisted material ids to the engine material bitmask.

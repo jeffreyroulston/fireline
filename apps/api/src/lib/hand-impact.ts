@@ -2,7 +2,7 @@ import type { Kysely } from "kysely";
 import type { Database } from "../db/types.js";
 import type { VersionTriple } from "./version.js";
 
-const COMPLETE = "complete" as const;
+const DONE_STATUSES = ["complete", "partial"] as const;
 
 export const MIN_HAND_BUCKET_SAMPLES = 5;
 
@@ -173,7 +173,7 @@ export async function loadEvaluateSamples(
       "r.deck_counts as deckCounts",
       "r.deck_id as deckId",
     ])
-    .where("r.status", "=", COMPLETE)
+    .where("r.status", "in", DONE_STATUSES)
     .where("r.kind", "=", "evaluate")
     .where("r.sim_type", "=", options.simType)
     .where("r.rules_version", "=", options.version.rulesVersion)

@@ -428,6 +428,18 @@ pub struct CardStat {
     pub damage_per_play: f64,
     /// Share of all attributed card damage.
     pub damage_share: f64,
+    /// Sum of sample damage when this card was in the opening hand.
+    #[serde(default)]
+    pub with_hand_damage_sum: u32,
+    /// Samples where this card was in the opening hand.
+    #[serde(default)]
+    pub with_hand_samples: u32,
+    /// Sum of sample damage when this card was not in the opening hand.
+    #[serde(default)]
+    pub without_hand_damage_sum: u32,
+    /// Samples where this card was not in the opening hand.
+    #[serde(default)]
+    pub without_hand_samples: u32,
 }
 
 pub struct DeckStatAccumulator {
@@ -439,6 +451,10 @@ pub struct DeckStatAccumulator {
     line: LineCardStats,
     /// Per-sample damage attributed (summed) for damage_when_seen.
     damage_when_seen_sum: [u32; CARD_COUNT],
+    hand_damage_with: [u32; CARD_COUNT],
+    hand_samples_with: [u32; CARD_COUNT],
+    hand_damage_without: [u32; CARD_COUNT],
+    hand_samples_without: [u32; CARD_COUNT],
     materials_mask: u16,
 }
 
@@ -452,6 +468,10 @@ impl Default for DeckStatAccumulator {
             seen: [0; CARD_COUNT],
             line: LineCardStats::default(),
             damage_when_seen_sum: [0; CARD_COUNT],
+            hand_damage_with: [0; CARD_COUNT],
+            hand_samples_with: [0; CARD_COUNT],
+            hand_damage_without: [0; CARD_COUNT],
+            hand_samples_without: [0; CARD_COUNT],
             materials_mask: crate::model::ALL_MATERIALS,
         }
     }
@@ -503,6 +523,32 @@ impl DeckStatAccumulator {
         stats.merge_into(&mut self.line);
     }
 
+    /// Record the sample's total damage into opening-hand with/without buckets.
+    /// Call once per physical sample, including two-pass (where `add_sample` runs twice).
+    pub fn add_hand_outcome(&mut self, opening: &[Card], sample_damage: u8) {
+        let mut opened_this = [false; CARD_COUNT];
+        for &card in opening {
+            if card == Card::Brick {
+                continue;
+            }
+            opened_this[card.index()] = true;
+        }
+        let damage = u32::from(sample_damage);
+        for index in 0..CARD_COUNT {
+            if self.copies[index] == 0 {
+                continue;
+            }
+            if opened_this[index] {
+                self.hand_samples_with[index] += 1;
+                self.hand_damage_with[index] = self.hand_damage_with[index].saturating_add(damage);
+            } else {
+                self.hand_samples_without[index] += 1;
+                self.hand_damage_without[index] =
+                    self.hand_damage_without[index].saturating_add(damage);
+            }
+        }
+    }
+
     pub fn finish(self) -> Vec<CardStat> {
         let samples = self.samples.max(1) as f64;
         let total_damage: u32 = PLAYABLE_CARDS
@@ -552,6 +598,10 @@ impl DeckStatAccumulator {
                         0.0
                     },
                     damage_share: f64::from(damage) / total_damage_f,
+                    with_hand_damage_sum: self.hand_damage_with[index],
+                    with_hand_samples: self.hand_samples_with[index],
+                    without_hand_damage_sum: self.hand_damage_without[index],
+                    without_hand_samples: self.hand_samples_without[index],
                 }
             })
             .collect::<Vec<_>>();
@@ -586,6 +636,10 @@ impl DeckStatAccumulator {
                     0.0
                 },
                 damage_share: f64::from(damage) / total_damage_f,
+                with_hand_damage_sum: 0,
+                with_hand_samples: 0,
+                without_hand_damage_sum: 0,
+                without_hand_samples: 0,
             });
         }
 
@@ -760,5 +814,31 @@ mod tests {
         assert_eq!(hammer.copies, 1);
         assert_eq!(hammer.seen, 1);
         assert_eq!(hammer.plays, 0);
+    }
+
+    #[test]
+    fn hand_outcome_splits_sample_damage_by_opening() {
+        let mut acc = DeckStatAccumulator::with_deck(&[Card::Arthur, Card::KingdomInformant]);
+        acc.add_sample(&[Card::Arthur], &LineCardStats::default());
+        acc.add_hand_outcome(&[Card::Arthur], 10);
+        acc.add_sample(&[Card::KingdomInformant], &LineCardStats::default());
+        acc.add_hand_outcome(&[Card::KingdomInformant], 4);
+        let rows = acc.finish();
+        let arthur = rows
+            .iter()
+            .find(|row| row.card == "arthur")
+            .expect("arthur row");
+        assert_eq!(arthur.with_hand_samples, 1);
+        assert_eq!(arthur.with_hand_damage_sum, 10);
+        assert_eq!(arthur.without_hand_samples, 1);
+        assert_eq!(arthur.without_hand_damage_sum, 4);
+        let informant = rows
+            .iter()
+            .find(|row| row.card == "kingdom_informant")
+            .expect("informant row");
+        assert_eq!(informant.with_hand_samples, 1);
+        assert_eq!(informant.with_hand_damage_sum, 4);
+        assert_eq!(informant.without_hand_samples, 1);
+        assert_eq!(informant.without_hand_damage_sum, 10);
     }
 }

@@ -1,11 +1,11 @@
 "use client";
 
-import type { DeckCounts } from "@/lib/engine";
+import type { DeckCounts, SimType } from "@/lib/engine";
 import type { SavedDeck } from "@/lib/decks";
 import { isUnsuccessfulTerminalStatus } from "@/lib/runs/types";
 import { cn } from "@/lib/utils/cn";
 import { errorBannerClass } from "@/lib/utils/ui-classes";
-import { ActionBar, PanelTopline } from "../ui";
+import { ActionBar, PanelTopline, RunSettings } from "../ui";
 import {
   CutBudgetPanel,
   PermutationPanel,
@@ -24,12 +24,30 @@ type RatiosTabProps = Readonly<{
   decks: SavedDeck[];
   activeDeck: SavedDeck | null;
   ratio: UseRatioStateResult;
+  goFirst: boolean;
+  turns: number;
+  simType: SimType;
+  rollouts: number;
+  cpuCount: number;
+  maxThreads: number | null;
+  glimpseEnabled: boolean;
+  maxHandDurationSecs: number | null;
+  maxCardDraw: number | null;
   optimizeRun: UseShellSolverResult["optimizeRun"];
   optimizeBusy: boolean;
   decksLoading: boolean;
   onSwitchDeck: (deckId: string) => void;
+  onGoFirstChange: (goFirst: boolean) => void;
+  onTurnsChange: (turns: number) => void;
+  onSimTypeChange: (simType: SimType) => void;
+  onRolloutsChange: (rollouts: number) => void;
+  onMaxThreadsChange: (value: number | null) => void;
+  onGlimpseEnabledChange: (value: boolean) => void;
+  onMaxHandDurationSecsChange: (value: number | null) => void;
+  onMaxCardDrawChange: (value: number | null) => void;
   onOptimize: () => void;
   onCancelOptimize: () => void;
+  onSaveOptimize?: () => void;
   onSaveDecklist: (
     counts: DeckCounts,
     score: number,
@@ -42,12 +60,30 @@ export function RatiosTab({
   decks,
   activeDeck,
   ratio,
+  goFirst,
+  turns,
+  simType,
+  rollouts,
+  cpuCount,
+  maxThreads,
+  glimpseEnabled,
+  maxHandDurationSecs,
+  maxCardDraw,
   optimizeRun,
   optimizeBusy,
   decksLoading,
   onSwitchDeck,
+  onGoFirstChange,
+  onTurnsChange,
+  onSimTypeChange,
+  onRolloutsChange,
+  onMaxThreadsChange,
+  onGlimpseEnabledChange,
+  onMaxHandDurationSecsChange,
+  onMaxCardDrawChange,
   onOptimize,
   onCancelOptimize,
+  onSaveOptimize,
   onSaveDecklist,
 }: RatiosTabProps) {
   const optimizeFailed =
@@ -103,12 +139,10 @@ export function RatiosTab({
             boundMaxTotal={ratio.boundMaxTotal}
             deckSize={ratio.deckSize}
             freeCopies={ratio.freeCopies}
-            deckAttempts={ratio.deckAttempts}
             attemptCeiling={ratio.attemptCeiling}
             coveragePercent={ratio.coveragePercent}
             busy={optimizeBusy}
             progress={optimizeRun?.progress ?? null}
-            onDeckAttemptsChange={ratio.setDeckAttempts}
           />
         </>
       )}
@@ -117,6 +151,25 @@ export function RatiosTab({
         metric={ratio.metric}
         onRatioSamplesChange={ratio.setRatioSamples}
         onMetricChange={ratio.setMetric}
+      />
+      <RunSettings
+        goFirst={goFirst}
+        turns={turns}
+        simType={simType}
+        rollouts={rollouts}
+        cpuCount={cpuCount}
+        maxThreads={maxThreads}
+        glimpseEnabled={glimpseEnabled}
+        maxHandDurationSecs={maxHandDurationSecs}
+        maxCardDraw={maxCardDraw}
+        onFirstChange={onGoFirstChange}
+        onTurnsChange={onTurnsChange}
+        onSimTypeChange={onSimTypeChange}
+        onRolloutsChange={onRolloutsChange}
+        onMaxThreadsChange={onMaxThreadsChange}
+        onGlimpseEnabledChange={onGlimpseEnabledChange}
+        onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
+        onMaxCardDrawChange={onMaxCardDrawChange}
       />
       <ActionBar
         label={
@@ -127,11 +180,13 @@ export function RatiosTab({
         busy={optimizeBusy}
         onRun={onOptimize}
         onCancel={onCancelOptimize}
+        onSave={onSaveOptimize}
         progress={
           ratio.ratioStrategy === "swapSweep"
             ? (optimizeRun?.progress ?? null)
             : null
         }
+        monteCarloRollouts={simType === "monte_carlo" ? rollouts : undefined}
       />
       {optimizeFailed && !optimizeBusy ? (
         <p className={cn(errorBannerClass, "mt-[30px]")} role="alert">

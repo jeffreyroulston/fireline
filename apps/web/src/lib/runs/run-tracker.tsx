@@ -15,6 +15,7 @@ import {
   deleteRun,
   fetchRun,
   fetchRunQueue,
+  saveRun as requestSaveRun,
   runEventsUrl,
 } from "@/lib/api/client";
 import type { DeckResult, RatioResult } from "@/features/workbench/types";
@@ -47,6 +48,7 @@ import {
   aggregateWorkerState,
   isFinishedQueueStatus,
   isLiveRunStatus,
+  isPersistedResultStatus,
   isUnsuccessfulTerminalStatus,
   queueSummaryLabel,
 } from "./types";
@@ -55,6 +57,7 @@ interface RunTrackerContextValue {
   workerState: WorkerState;
   workerStateReady: boolean;
   workerReachable: boolean;
+  cpuCount: number;
   maxConcurrency: number;
   runningCount: number;
   queuedCount: number;
@@ -81,6 +84,7 @@ interface RunTrackerContextValue {
     initialProgress: OptimizeProgress,
   ) => Promise<string>;
   cancelRun: (runId: string) => Promise<void>;
+  saveRun: (runId: string) => Promise<void>;
   dismissFinished: (runId: string) => void;
   clearQueue: () => Promise<void>;
   syncFromServer: () => Promise<void>;
@@ -156,6 +160,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
   );
   const [workerStateReady, setWorkerStateReady] = useState(false);
   const [workerReachable, setWorkerReachable] = useState(true);
+  const [cpuCount, setCpuCount] = useState(1);
   const [maxConcurrency, setMaxConcurrency] = useState(2);
   const [runningCount, setRunningCount] = useState(0);
   const [queuedCount, setQueuedCount] = useState(0);
@@ -187,18 +192,22 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const applyComplete = useCallback(
-    (runId: string, kind: RunKind, result: unknown) => {
+    (runId: string, kind: RunKind, result: unknown, partial = false) => {
+      const status = partial ? "partial" : "complete";
       updateRun(runId, (current) => {
         if (kind === "evaluate") {
+          const deckResult = result as DeckResult;
           return {
             ...current,
-            status: "complete",
-            deckResult: result as DeckResult,
+            status,
+            deckResult,
             completedAt: new Date().toISOString(),
             progress: current.progress
               ? {
                   ...current.progress,
-                  handsSimulated: current.progress.totalHands,
+                  handsSimulated: partial
+                    ? (deckResult.samples ?? current.progress.handsSimulated)
+                    : current.progress.totalHands,
                   rolloutsDone:
                     current.progress.totalRollouts ??
                     current.progress.rolloutsDone,
@@ -219,14 +228,18 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
             : (result as RatioResult);
         return {
           ...current,
-          status: "complete",
+          status,
           ratioResult: ratio,
           completedAt: new Date().toISOString(),
           progress: current.progress
             ? {
                 ...current.progress,
-                decksScored: current.progress.totalDecks,
-                handsSimulated: current.progress.totalHands,
+                decksScored: partial
+                  ? current.progress.decksScored
+                  : current.progress.totalDecks,
+                handsSimulated: partial
+                  ? current.progress.handsSimulated
+                  : current.progress.totalHands,
                 bestScore: ratio.bestScore,
                 memoryPressure: undefined,
               }
@@ -314,9 +327,9 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
                       },
                 }));
               },
-              onComplete: (result) => {
+              onComplete: (result, partial) => {
                 settledRef.current.add(runId);
-                applyComplete(runId, kind, result);
+                applyComplete(runId, kind, result, partial);
               },
               onError: (message) => {
                 settledRef.current.add(runId);
@@ -369,7 +382,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
   const hydrateCompletedRun = useCallback(
     async (runId: string) => {
       const response = (await fetchRun(runId)) as FetchRunResponse;
-      if (response.run.status !== "complete") {
+      if (!isPersistedResultStatus(response.run.status)) {
         updateRun(runId, (current) => ({
           ...current,
           status: response.run.status,
@@ -382,7 +395,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
       }
       updateRun(runId, (current) => ({
         ...current,
-        status: "complete",
+        status: response.run.status,
         completedAt: response.run.completed_at ?? current.completedAt,
         deckResult:
           current.kind === "evaluate" ? hydrateDeckResult(response) : null,
@@ -401,6 +414,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
     try {
       const queue = await fetchRunQueue();
       setWorkerReachable(queue.workerReachable);
+      setCpuCount(queue.cpuCount ?? 1);
       setMaxConcurrency(queue.maxConcurrency);
       setRunningCount(queue.running.length);
       setQueuedCount(queue.queued.length);
@@ -460,7 +474,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
         if (dismissed.has(item.run.id)) {
           continue;
         }
-        if (item.run.status !== "complete") {
+        if (!isPersistedResultStatus(item.run.status)) {
           continue;
         }
         const existing = runsRef.current.get(item.run.id);
@@ -584,6 +598,27 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
     [detachStream, syncFromServer],
   );
 
+  const saveRun = useCallback(
+    async (runId: string) => {
+      try {
+        const { discarded } = await requestSaveRun(runId);
+        if (discarded) {
+          settledRef.current.add(runId);
+          detachStream(runId);
+          setRuns((current) => {
+            const next = new Map(current);
+            next.delete(runId);
+            return next;
+          });
+        }
+      } catch {
+        // Keep the stream attached so a late result can still land.
+      }
+      void syncFromServer();
+    },
+    [detachStream, syncFromServer],
+  );
+
   const dismissFinished = useCallback((runId: string) => {
     setDismissedRunIds((current) => dismissRunId(current, runId));
     setRuns((current) => {
@@ -692,6 +727,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
       workerState,
       workerStateReady,
       workerReachable,
+      cpuCount,
       maxConcurrency,
       runningCount,
       queuedCount,
@@ -704,6 +740,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
       startEvaluate,
       startOptimize,
       cancelRun,
+      saveRun,
       dismissFinished,
       clearQueue,
       syncFromServer,
@@ -712,6 +749,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
       workerState,
       workerStateReady,
       workerReachable,
+      cpuCount,
       maxConcurrency,
       runningCount,
       queuedCount,
@@ -724,6 +762,7 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
       startEvaluate,
       startOptimize,
       cancelRun,
+      saveRun,
       dismissFinished,
       clearQueue,
       syncFromServer,

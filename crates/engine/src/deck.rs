@@ -4,7 +4,7 @@ use crate::{
     line_event::LineEvent,
     model::{
         DamageDistribution, EffectiveRequest, SimType, SolveRequest, TwoPassResult,
-        resolve_materials_bitmask,
+        hand_duration, resolve_materials_bitmask,
     },
     random::{Rng, percentile, shuffle_cards},
     solver::solve_for_deck_eval,
@@ -18,7 +18,7 @@ use ts_rs::TS;
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
@@ -35,7 +35,7 @@ fn sim_uses_heavy_search(sim_type: SimType) -> bool {
 fn requested_threads() -> usize {
     let cpus = std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(4);
+        .unwrap_or(6);
     std::env::var("RAYON_NUM_THREADS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -68,6 +68,57 @@ fn shared_pool() -> Result<&'static rayon::ThreadPool> {
     Ok(POOL.get_or_init(|| pool))
 }
 
+/// Logical CPU count (respects `RAYON_NUM_THREADS` when set).
+pub fn cpu_count() -> usize {
+    requested_threads()
+}
+
+fn job_thread_cap(max_threads: Option<u16>) -> Option<usize> {
+    max_threads
+        .filter(|&n| n > 0)
+        .map(|n| usize::from(n).min(requested_threads()))
+}
+
+struct JobSemaphore {
+    max: usize,
+    active: Mutex<usize>,
+    notify: Condvar,
+}
+
+impl JobSemaphore {
+    fn new(max: usize) -> Self {
+        Self {
+            max,
+            active: Mutex::new(0),
+            notify: Condvar::new(),
+        }
+    }
+
+    fn acquire(&self) -> JobPermit<'_> {
+        let mut active = self.active.lock().unwrap_or_else(|err| err.into_inner());
+        while *active >= self.max {
+            active = self
+                .notify
+                .wait(active)
+                .unwrap_or_else(|err| err.into_inner());
+        }
+        *active += 1;
+        JobPermit { sem: self }
+    }
+}
+
+struct JobPermit<'a> {
+    sem: &'a JobSemaphore,
+}
+
+impl Drop for JobPermit<'_> {
+    fn drop(&mut self) {
+        let mut active = self.sem.active.lock().unwrap_or_else(|err| err.into_inner());
+        *active = active.saturating_sub(1);
+        self.sem.notify.notify_one();
+    }
+}
+
 /// Emit `Throttled` after waiting this long for a memory-gate slot.
 const THROTTLE_GRACE: Duration = Duration::from_secs(2);
 
@@ -96,6 +147,14 @@ pub struct DeckEvalRequest {
     pub budget: crate::budget::Budget,
     #[serde(default)]
     pub materials: BTreeMap<String, u8>,
+    #[serde(default)]
+    pub max_threads: Option<u16>,
+    #[serde(default)]
+    pub glimpse_enabled: Option<bool>,
+    #[serde(default)]
+    pub max_hand_duration_secs: Option<u16>,
+    #[serde(default)]
+    pub max_card_draw: Option<u16>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -157,6 +216,12 @@ pub struct DeckEvalResult {
     pub brick_card_stats: Vec<crate::stats::CardStat>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub oracle_card_stats: Vec<crate::stats::CardStat>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub timed_out_samples: usize,
+}
+
+const fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -188,6 +253,22 @@ pub struct OptimizeRequest {
     pub base_deck: BTreeMap<String, u8>,
     #[serde(default)]
     pub swap: Option<SwapConfig>,
+    #[serde(default = "default_true")]
+    pub go_first: bool,
+    #[serde(default = "default_turns")]
+    pub max_turns: u8,
+    #[serde(default)]
+    pub sim_type: crate::model::SimType,
+    #[serde(default = "default_rollouts")]
+    pub rollouts: u16,
+    #[serde(default)]
+    pub max_threads: Option<u16>,
+    #[serde(default)]
+    pub glimpse_enabled: Option<bool>,
+    #[serde(default)]
+    pub max_hand_duration_secs: Option<u16>,
+    #[serde(default)]
+    pub max_card_draw: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -280,6 +361,8 @@ pub enum HandPhase {
     Throttled,
     Rollout,
     Done,
+    /// Hand exceeded the per-hand wall-clock limit and was excluded.
+    TimedOut,
 }
 
 /// Progress for one concurrent opening hand (started / mid-rollout / done).
@@ -376,11 +459,7 @@ fn drawn_from_key(key: [u8; CARD_COUNT]) -> Vec<Card> {
 
 /// Draw `samples` opening hands the same way deck eval does (for tooling /
 /// calibration). Each sample reshuffles the full deck with the shared RNG.
-pub fn draw_opening_hands(
-    deck: &[Card],
-    samples: u16,
-    seed: u64,
-) -> Result<Vec<Vec<Card>>> {
+pub fn draw_opening_hands(deck: &[Card], samples: u16, seed: u64) -> Result<Vec<Vec<Card>>> {
     if deck.len() < 7 {
         return Err(EngineError::invalid(
             "deck must contain at least seven recognized cards",
@@ -424,7 +503,11 @@ fn solve_sample_hand(
         impl FnMut(HandProgress) -> ControlFlow<()> + Send,
     >,
 ) -> Result<SampleHand> {
-    let _cancel_guard = ctx.cancel.as_ref().map(|flag| crate::cancel::install(flag.clone()));
+    let _cancel_guard = ctx
+        .cancel
+        .as_ref()
+        .map(|flag| crate::cancel::install(flag.clone()));
+    let _deadline_guard = hand_duration(ctx.request.max_hand_duration_secs).map(crate::deadline::install);
     let request = ctx.request;
     let total_rollouts = if request.sim_type == SimType::MonteCarlo {
         ctx.rollouts
@@ -471,6 +554,10 @@ fn solve_sample_hand(
             seed: request.seed.wrapping_add(u64::from(sample_index) * 17),
             budget: *ctx.budget,
             materials: request.materials.clone(),
+            max_threads: None,
+            glimpse_enabled: request.glimpse_enabled,
+            max_hand_duration_secs: request.max_hand_duration_secs,
+            max_card_draw: request.max_card_draw,
         },
         |rollout, total_rollouts| {
             if rollout > 0
@@ -564,7 +651,9 @@ fn report_hand_progress(
     on_hand_progress: &Mutex<impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
     progress: HandProgress,
 ) -> ControlFlow<()> {
-    on_hand_progress.lock().unwrap_or_else(|err| err.into_inner())(progress)
+    on_hand_progress
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())(progress)
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -600,9 +689,44 @@ fn solve_unique_hands(
     if !parallel {
         let mut cache = FxHashMap::default();
         for (index, &(sim_type, key, sample_index)) in unique.iter().enumerate() {
+            if ctx.cancel.as_ref().is_some_and(crate::cancel::is_requested) {
+                return finish_cancelled(ctx.cancel.as_ref(), cache);
+            }
             let hands_done = u16::try_from(index).unwrap_or(u16::MAX);
             let (cache_key, sample) =
-                solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx)?;
+                match solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx) {
+                    Ok(solved) => solved,
+                    Err(EngineError::Cancelled) => {
+                        return finish_cancelled(ctx.cancel.as_ref(), cache);
+                    }
+                    Err(EngineError::HandTimeout) => {
+                        let _ = report_hand_progress(
+                            on_hand_progress,
+                            HandProgress {
+                                sample_index,
+                                phase: HandPhase::TimedOut,
+                                rollout: 0,
+                                total_rollouts,
+                            },
+                        );
+                        let n = u16::try_from(index + 1).unwrap_or(u16::MAX);
+                        if report_eval_progress(
+                            on_progress,
+                            EvalProgress {
+                                sample: n,
+                                total,
+                                rollout: 0,
+                                total_rollouts,
+                            },
+                        )
+                        .is_break()
+                        {
+                            return finish_cancelled(ctx.cancel.as_ref(), cache);
+                        }
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
             cache.insert(cache_key, sample);
             let n = u16::try_from(index + 1).unwrap_or(u16::MAX);
             if report_eval_progress(
@@ -616,7 +740,7 @@ fn solve_unique_hands(
             )
             .is_break()
             {
-                return Err(EngineError::Cancelled);
+                return finish_cancelled(ctx.cancel.as_ref(), cache);
             }
         }
         return Ok(cache);
@@ -628,58 +752,120 @@ fn solve_unique_hands(
     // heavy hands across all runs. Fire Brick skips the gate (cheap search).
     let gate = sim_uses_heavy_search(request.sim_type)
         .then(|| crate::pressure::memory_gate(requested_threads()));
+    let job_semaphore = job_thread_cap(request.max_threads).map(JobSemaphore::new);
     let pool = shared_pool()?;
-    // map + collect into Result short-circuits on the first failure, so real
-    // errors (e.g. unknown card) propagate instead of collapsing into
-    // "cancelled".
-    let cache = pool.install(|| {
-        unique
-            .par_iter()
-            .map(|&(sim_type, key, sample_index)| {
-                if cancelled.load(Ordering::Relaxed)
-                    || ctx
-                        .cancel
-                        .as_ref()
-                        .is_some_and(crate::cancel::is_requested)
-                {
-                    return Err(EngineError::Cancelled);
+    let cache = Mutex::new(FxHashMap::default());
+    let first_error = Mutex::new(None::<EngineError>);
+    pool.install(|| {
+        unique.par_iter().for_each(|&(sim_type, key, sample_index)| {
+            if first_error
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .is_some()
+            {
+                return;
+            }
+            if cancelled.load(Ordering::Relaxed)
+                || ctx.cancel.as_ref().is_some_and(crate::cancel::is_requested)
+            {
+                cancelled.store(true, Ordering::Relaxed);
+                return;
+            }
+            let _thread_permit = job_semaphore.as_ref().map(|sem| sem.acquire());
+            let _permit = gate.as_ref().map(|gate| {
+                gate.acquire_with_notify(THROTTLE_GRACE, || {
+                    let _ = report_hand_progress(
+                        on_hand_progress,
+                        HandProgress {
+                            sample_index,
+                            phase: HandPhase::Throttled,
+                            rollout: 0,
+                            total_rollouts,
+                        },
+                    );
+                })
+            });
+            let hands_done = completed.load(Ordering::Relaxed);
+            match solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx) {
+                Ok((cache_key, sample)) => {
+                    cache
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .insert(cache_key, sample);
+                    let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                    if report_eval_progress(
+                        on_progress,
+                        EvalProgress {
+                            sample: n,
+                            total,
+                            rollout: 0,
+                            total_rollouts,
+                        },
+                    )
+                    .is_break()
+                    {
+                        cancelled.store(true, Ordering::Relaxed);
+                    }
                 }
-                let _permit = gate.as_ref().map(|gate| {
-                    gate.acquire_with_notify(THROTTLE_GRACE, || {
-                        let _ = report_hand_progress(
-                            on_hand_progress,
-                            HandProgress {
-                                sample_index,
-                                phase: HandPhase::Throttled,
-                                rollout: 0,
-                                total_rollouts,
-                            },
-                        );
-                    })
-                });
-                let hands_done = completed.load(Ordering::Relaxed);
-                let (cache_key, sample) =
-                    solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx)?;
-                let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                if report_eval_progress(
-                    on_progress,
-                    EvalProgress {
-                        sample: n,
-                        total,
-                        rollout: 0,
-                        total_rollouts,
-                    },
-                )
-                .is_break()
-                {
+                Err(EngineError::Cancelled) => {
                     cancelled.store(true, Ordering::Relaxed);
-                    return Err(EngineError::Cancelled);
                 }
-                Ok((cache_key, sample))
-            })
-            .collect::<Result<FxHashMap<_, _>>>()
-    })?;
+                Err(EngineError::HandTimeout) => {
+                    let _ = report_hand_progress(
+                        on_hand_progress,
+                        HandProgress {
+                            sample_index,
+                            phase: HandPhase::TimedOut,
+                            rollout: 0,
+                            total_rollouts,
+                        },
+                    );
+                    let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                    if report_eval_progress(
+                        on_progress,
+                        EvalProgress {
+                            sample: n,
+                            total,
+                            rollout: 0,
+                            total_rollouts,
+                        },
+                    )
+                    .is_break()
+                    {
+                        cancelled.store(true, Ordering::Relaxed);
+                    }
+                }
+                Err(error) => {
+                    let mut slot = first_error.lock().unwrap_or_else(|err| err.into_inner());
+                    if slot.is_none() {
+                        *slot = Some(error);
+                    }
+                    cancelled.store(true, Ordering::Relaxed);
+                }
+            }
+        });
+    });
+    if let Some(error) = first_error
+        .into_inner()
+        .unwrap_or_else(|err| err.into_inner())
+    {
+        return Err(error);
+    }
+    let cache = cache.into_inner().unwrap_or_else(|err| err.into_inner());
+    if ctx.cancel.as_ref().is_some_and(crate::cancel::is_requested) {
+        return finish_cancelled(ctx.cancel.as_ref(), cache);
+    }
     Ok(cache)
+}
+
+fn finish_cancelled(
+    cancel: Option<&crate::cancel::CancelFlag>,
+    cache: FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand>,
+) -> Result<FxHashMap<(SimType, [u8; CARD_COUNT]), SampleHand>> {
+    if cancel.is_some_and(crate::cancel::is_save_requested_on) && !cache.is_empty() {
+        return Ok(cache);
+    }
+    Err(EngineError::Cancelled)
 }
 
 pub fn evaluate(request: &DeckEvalRequest) -> Result<DeckEvalResult> {
@@ -693,14 +879,26 @@ pub fn evaluate_with_serial_progress(
     request: &DeckEvalRequest,
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
 ) -> Result<DeckEvalResult> {
-    evaluate_hands(request, on_progress, |_| ControlFlow::Continue(()), false, None)
+    evaluate_hands(
+        request,
+        on_progress,
+        |_| ControlFlow::Continue(()),
+        false,
+        None,
+    )
 }
 
 pub fn evaluate_with_progress(
     request: &DeckEvalRequest,
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
 ) -> Result<DeckEvalResult> {
-    evaluate_hands(request, on_progress, |_| ControlFlow::Continue(()), true, None)
+    evaluate_hands(
+        request,
+        on_progress,
+        |_| ControlFlow::Continue(()),
+        true,
+        None,
+    )
 }
 
 /// Parallel deck-eval with both aggregate hand progress and per-hand
@@ -816,11 +1014,13 @@ fn evaluate_hands(
         cancel,
     )?;
 
+    let unique_solved = cache.len();
     let mut remaining_uses: FxHashMap<(SimType, [u8; CARD_COUNT]), u16> = FxHashMap::default();
     for draw in &draws {
-        *remaining_uses
-            .entry((request.sim_type, draw.key))
-            .or_insert(0) += 1;
+        let cache_key = (request.sim_type, draw.key);
+        if cache.contains_key(&cache_key) {
+            *remaining_uses.entry(cache_key).or_insert(0) += 1;
+        }
     }
 
     let mut hands = Vec::with_capacity(draws.len());
@@ -838,6 +1038,9 @@ fn evaluate_hands(
     let mut cache = cache;
     for draw in &draws {
         let cache_key = (request.sim_type, draw.key);
+        if !remaining_uses.contains_key(&cache_key) {
+            continue;
+        }
         let last = remaining_uses
             .get_mut(&cache_key)
             .map(|n| {
@@ -846,12 +1049,12 @@ fn evaluate_hands(
             })
             .unwrap_or(true);
         let mut sample = if last {
-            cache.remove(&cache_key).expect("every draw key was solved")
+            cache.remove(&cache_key).expect("solved draw key stays in cache")
         } else {
             cache
                 .get(&cache_key)
                 .cloned()
-                .expect("every draw key was solved")
+                .expect("solved draw key stays in cache")
         };
         sample.hand = draw.drawn.iter().map(|card| card.id()).collect();
         total_nodes += sample.nodes;
@@ -866,6 +1069,7 @@ fn evaluate_hands(
         } else {
             stats_acc.add_sample(&draw.drawn, &sample.line_stats);
         }
+        stats_acc.add_hand_outcome(&draw.drawn, sample.damage);
         hands.push(sample);
     }
 
@@ -892,6 +1096,13 @@ fn evaluate_hands(
         .map(|hand| f64::from(hand.end_influence))
         .sum::<f64>()
         / hands.len().max(1) as f64;
+    let sample_count = damages.len();
+    if sample_count == 0 {
+        return Err(EngineError::invalid(
+            "every opening hand exceeded the max duration",
+        ));
+    }
+    let timed_out_samples = usize::from(request.samples).saturating_sub(sample_count);
     Ok(DeckEvalResult {
         sim_type: request.sim_type,
         samples: damages.len(),
@@ -904,7 +1115,7 @@ fn evaluate_hands(
         max: sorted.last().copied().unwrap_or(0),
         min: sorted.first().copied().unwrap_or(0),
         mean_end_influence,
-        unique_hands: cache.len(),
+        unique_hands: unique_solved,
         states_searched: total_nodes,
         elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
         effective: EffectiveRequest {
@@ -914,8 +1125,12 @@ fn evaluate_hands(
             go_first: Some(request.go_first),
             max_turns: Some(max_turns),
             rollouts: Some(rollouts),
-            samples: Some(request.samples),
+            samples: Some(u16::try_from(sample_count).unwrap_or(u16::MAX)),
             budget,
+            max_threads: request.max_threads,
+            glimpse_enabled: request.glimpse_enabled,
+            max_hand_duration_secs: request.max_hand_duration_secs,
+            max_card_draw: request.max_card_draw,
             ..Default::default()
         },
         card_stats: stats_acc.finish(),
@@ -929,6 +1144,7 @@ fn evaluate_hands(
         } else {
             Vec::new()
         },
+        timed_out_samples,
     })
 }
 
@@ -1114,6 +1330,11 @@ mod tests {
             rollouts: 1,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         };
         let one = evaluate(&request).unwrap();
         let two = evaluate(&request).unwrap();
@@ -1146,6 +1367,14 @@ mod tests {
             strategy: Strategy::RandomSample,
             base_deck: BTreeMap::new(),
             swap: None,
+            go_first: true,
+            max_turns: 3,
+            sim_type: crate::model::SimType::FireBrick,
+            rollouts: 1,
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+            max_card_draw: None,
         })
         .unwrap();
         assert_eq!(
@@ -1181,6 +1410,11 @@ mod tests {
             rollouts: 0,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         })
         .unwrap();
         assert_eq!(result.effective.max_turns, Some(2));
@@ -1208,6 +1442,11 @@ mod tests {
             rollouts: 1,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         };
         let serial =
             evaluate_with_serial_progress(&request, |_| ControlFlow::Continue(())).unwrap();
@@ -1241,6 +1480,11 @@ mod tests {
                 rollouts: 1,
                 budget: crate::budget::Budget::default(),
                 materials: BTreeMap::new(),
+                max_threads: None,
+                glimpse_enabled: None,
+                max_hand_duration_secs: None,
+
+            max_card_draw: None,
             },
             |progress| {
                 ticks.push(progress);
@@ -1291,6 +1535,11 @@ mod tests {
                     ..crate::budget::Budget::default()
                 },
                 materials: BTreeMap::new(),
+                max_threads: None,
+                glimpse_enabled: None,
+                max_hand_duration_secs: None,
+
+            max_card_draw: None,
             },
             |progress| {
                 ticks.push(progress);
@@ -1335,6 +1584,11 @@ mod tests {
                     ..crate::budget::Budget::default()
                 },
                 materials: BTreeMap::new(),
+                max_threads: None,
+                glimpse_enabled: None,
+                max_hand_duration_secs: None,
+
+            max_card_draw: None,
             },
             |progress| {
                 ticks.push(progress);
@@ -1387,6 +1641,11 @@ mod tests {
                     ..crate::budget::Budget::default()
                 },
                 materials: BTreeMap::new(),
+                max_threads: None,
+                glimpse_enabled: None,
+                max_hand_duration_secs: None,
+
+            max_card_draw: None,
             },
             |_| ControlFlow::Continue(()),
             |progress| {
@@ -1423,7 +1682,11 @@ mod tests {
                 .filter(|tick| tick.phase == HandPhase::Rollout)
                 .map(|tick| tick.rollout)
                 .collect();
-            assert_eq!(rollouts, vec![1, 2, 3], "hand {index} rollouts: {rollouts:?}");
+            assert_eq!(
+                rollouts,
+                vec![1, 2, 3],
+                "hand {index} rollouts: {rollouts:?}"
+            );
         }
         let done_count = hand_ticks
             .iter()
@@ -1457,6 +1720,11 @@ mod tests {
                     ..crate::budget::Budget::default()
                 },
                 materials: BTreeMap::new(),
+                max_threads: None,
+                glimpse_enabled: None,
+                max_hand_duration_secs: None,
+
+            max_card_draw: None,
             },
             |_| ControlFlow::Continue(()),
         )
@@ -1465,7 +1733,9 @@ mod tests {
             let dist = hand.distribution.as_ref().expect("MC distribution");
             assert_eq!(dist.rollouts.len(), 3);
             assert!(
-                dist.rollouts.iter().all(|rollout| rollout.events.is_empty()),
+                dist.rollouts
+                    .iter()
+                    .all(|rollout| rollout.events.is_empty()),
                 "deck eval should drop per-rollout tapes"
             );
             assert!(
@@ -1493,11 +1763,18 @@ mod tests {
                 ..crate::budget::Budget::default()
             },
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         })
         .unwrap();
         let dist = solve.distribution.as_ref().expect("MC distribution");
         assert!(
-            dist.rollouts.iter().any(|rollout| !rollout.events.is_empty()),
+            dist.rollouts
+                .iter()
+                .any(|rollout| !rollout.events.is_empty()),
             "hand solve should retain per-rollout tapes"
         );
     }
@@ -1519,6 +1796,11 @@ mod tests {
             rollouts: 1,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         })
         .unwrap();
         for stat in &result.card_stats {
@@ -1529,6 +1811,10 @@ mod tests {
                 );
             } else {
                 assert_eq!(stat.damage_when_seen_sum, 0);
+            }
+            let buckets = stat.with_hand_samples + stat.without_hand_samples;
+            if buckets > 0 {
+                assert_eq!(buckets, result.samples as u32);
             }
         }
     }
@@ -1562,6 +1848,11 @@ mod tests {
             rollouts: 1,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         })
         .unwrap();
         assert_eq!(result.hands.len(), 8);
@@ -1570,5 +1861,187 @@ mod tests {
         for sample in &result.hands {
             assert_eq!(sample.hand.len(), 7);
         }
+    }
+
+    #[test]
+    fn serial_evaluate_save_keeps_finished_hands() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 3),
+            ("kingdom_informant".into(), 3),
+            ("clumsy_apprentice".into(), 3),
+            ("sable_remnant".into(), 2),
+            ("blazing_throw".into(), 2),
+            ("red_hare".into(), 2),
+            ("march_hare".into(), 2),
+        ]);
+        let request = DeckEvalRequest {
+            deck,
+            samples: 8,
+            go_first: true,
+            max_turns: 2,
+            seed: 17,
+            sim_type: SimType::FireBrick,
+            rollouts: 1,
+            budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
+        };
+        let flag = crate::cancel::new_flag();
+        let result = evaluate_hands(
+            &request,
+            |progress| {
+                if progress.sample >= 2 {
+                    crate::cancel::request_save(&flag);
+                }
+                ControlFlow::Continue(())
+            },
+            |_| ControlFlow::Continue(()),
+            false,
+            Some(flag.clone()),
+        )
+        .unwrap();
+        assert!(result.samples >= 2);
+        assert!(result.samples < 8);
+        assert_eq!(result.hands.len(), result.samples);
+        assert_eq!(result.damages.len(), result.samples);
+    }
+
+    #[test]
+    fn serial_evaluate_hard_cancel_discards_hands() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 3),
+            ("kingdom_informant".into(), 3),
+            ("clumsy_apprentice".into(), 3),
+            ("sable_remnant".into(), 2),
+            ("blazing_throw".into(), 2),
+            ("red_hare".into(), 2),
+            ("march_hare".into(), 2),
+        ]);
+        let flag = crate::cancel::new_flag();
+        let error = evaluate_hands(
+            &DeckEvalRequest {
+                deck,
+                samples: 8,
+                go_first: true,
+                max_turns: 2,
+                seed: 17,
+                sim_type: SimType::FireBrick,
+                rollouts: 1,
+                budget: crate::budget::Budget::default(),
+                materials: BTreeMap::new(),
+                max_threads: None,
+                glimpse_enabled: None,
+                max_hand_duration_secs: None,
+
+            max_card_draw: None,
+            },
+            |progress| {
+                if progress.sample >= 2 {
+                    crate::cancel::request(&flag);
+                }
+                ControlFlow::Continue(())
+            },
+            |_| ControlFlow::Continue(()),
+            false,
+            Some(flag.clone()),
+        )
+        .expect_err("hard cancel should discard finished hands");
+        assert!(matches!(error, EngineError::Cancelled));
+    }
+
+    #[test]
+    fn truncate_draw_queue_caps_known_draws() {
+        use crate::model::truncate_draw_queue;
+        let queue = vec![
+            Card::Arthur,
+            Card::RedHare,
+            Card::MarchHare,
+            Card::BlazingThrow,
+        ];
+        assert_eq!(truncate_draw_queue(queue.clone(), None).len(), 4);
+        assert_eq!(truncate_draw_queue(queue.clone(), Some(0)).len(), 4);
+        assert_eq!(truncate_draw_queue(queue.clone(), Some(2)).len(), 2);
+        assert_eq!(
+            truncate_draw_queue(queue, Some(2)),
+            vec![Card::Arthur, Card::RedHare]
+        );
+    }
+
+    #[test]
+    fn effective_glimpse_forces_off_for_fire_brick() {
+        use crate::model::effective_glimpse;
+        assert!(!effective_glimpse(SimType::FireBrick, false, Some(true)));
+        assert!(!effective_glimpse(SimType::TwoPass, true, Some(true)));
+        assert!(effective_glimpse(SimType::OracleOnly, false, None));
+        assert!(!effective_glimpse(SimType::OracleOnly, false, Some(false)));
+    }
+
+    #[test]
+    fn deck_eval_accounts_for_timed_out_samples() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 3),
+            ("kingdom_informant".into(), 3),
+            ("clumsy_apprentice".into(), 3),
+            ("sable_remnant".into(), 2),
+            ("blazing_throw".into(), 2),
+            ("red_hare".into(), 2),
+            ("march_hare".into(), 2),
+        ]);
+        let outcome = evaluate(&DeckEvalRequest {
+            deck,
+            samples: 4,
+            go_first: true,
+            max_turns: 3,
+            seed: 17,
+            sim_type: SimType::OracleOnly,
+            rollouts: 1,
+            budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: Some(1),
+            max_card_draw: None,
+        });
+        match outcome {
+            Ok(result) => {
+                assert_eq!(result.samples + result.timed_out_samples, 4);
+            }
+            Err(EngineError::InvalidRequest(_)) => {}
+            Err(other) => panic!("unexpected evaluate error: {other}"),
+        }
+    }
+
+    #[test]
+    fn deck_eval_all_hands_timeout_errors() {
+        let deck = BTreeMap::from([
+            ("arthur".into(), 3),
+            ("kingdom_informant".into(), 3),
+            ("clumsy_apprentice".into(), 3),
+            ("sable_remnant".into(), 2),
+            ("blazing_throw".into(), 2),
+            ("red_hare".into(), 2),
+            ("march_hare".into(), 2),
+        ]);
+        let error = evaluate(&DeckEvalRequest {
+            deck,
+            samples: 2,
+            go_first: true,
+            max_turns: 3,
+            seed: 17,
+            sim_type: SimType::OracleOnly,
+            rollouts: 1,
+            budget: crate::budget::Budget::default(),
+            materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: Some(1),
+            max_card_draw: None,
+        })
+        .unwrap_err();
+        assert!(matches!(error, EngineError::InvalidRequest(_)));
     }
 }

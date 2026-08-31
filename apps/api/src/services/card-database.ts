@@ -16,10 +16,60 @@ import {
 } from "../lib/hand-impact.js";
 import { isMaterialCardId } from "../db/card-seed.js";
 import { getCards, listDecksForCard, type CatalogCard } from "./card-catalog.js";
+import {
+  loadSwapSweepCardDeckRows,
+  loadSwapSweepSlice,
+  parseSwapSweepVirtualDeckId,
+} from "./card-database-swap-sweep.js";
 
 export type { CardHandImpact } from "../lib/hand-impact.js";
 
-const COMPLETE = "complete" as const;
+const DONE_STATUSES = ["complete", "partial"] as const;
+
+export type CardDatabaseSource = "all" | "evaluate" | "swap_sweep";
+
+export function includesEvaluate(source: CardDatabaseSource): boolean {
+  return source === "all" || source === "evaluate";
+}
+
+export function includesSwapSweep(source: CardDatabaseSource): boolean {
+  return source === "all" || source === "swap_sweep";
+}
+
+function splitCardDatabaseDeckIds(
+  source: CardDatabaseSource,
+  deckIds: string[] | undefined,
+): {
+  evaluateDeckIds: string[] | undefined;
+  swapSweepDeckIds: string[] | undefined;
+} {
+  if (deckIds === undefined) {
+    return { evaluateDeckIds: undefined, swapSweepDeckIds: undefined };
+  }
+
+  const evaluateDeckIds: string[] = [];
+  const swapSweepDeckIds: string[] = [];
+  for (const id of deckIds) {
+    const original = parseSwapSweepVirtualDeckId(id);
+    if (original) {
+      swapSweepDeckIds.push(original);
+    } else {
+      evaluateDeckIds.push(id);
+      if (source === "swap_sweep") {
+        swapSweepDeckIds.push(id);
+      }
+    }
+  }
+
+  return {
+    evaluateDeckIds: includesEvaluate(source) ? evaluateDeckIds : [],
+    swapSweepDeckIds: includesSwapSweep(source) ? swapSweepDeckIds : [],
+  };
+}
+
+function includeDeckScopedQuery(deckIds: string[] | undefined): boolean {
+  return deckIds === undefined || deckIds.length > 0;
+}
 
 export type CardPerformance = {
   runCount: number;
@@ -150,9 +200,107 @@ function mergeHandImpact(
   };
 }
 
+function mergePerformance(
+  a: CardPerformance,
+  b: CardPerformance,
+): CardPerformance {
+  const totals = {
+    runCount: a.runCount + b.runCount,
+    deckCount: a.deckCount + b.deckCount,
+    eligibleSamples: a.eligibleSamples + b.eligibleSamples,
+    opened: a.opened + b.opened,
+    openedCopies: a.openedCopies + b.openedCopies,
+    drawn: a.drawn + b.drawn,
+    seen: a.seen + b.seen,
+    plays: a.plays + b.plays,
+    attacks: a.attacks + b.attacks,
+    damage: a.damage + b.damage,
+    damageWhenSeenSum:
+      a.damageWhenSeen * a.seen + b.damageWhenSeen * b.seen,
+  };
+  const liftSource = a.handLift != null ? a : b;
+  return mergeHandImpact(ratesFromTotals(totals), {
+    withHandMean: liftSource.withHandMean,
+    withoutHandMean: liftSource.withoutHandMean,
+    handLift: liftSource.handLift,
+    withHandSamples: liftSource.withHandSamples,
+    withoutHandSamples: liftSource.withoutHandSamples,
+  });
+}
+
+function mergePerformanceMaps(
+  a: Map<string, CardPerformance>,
+  b: Map<string, CardPerformance>,
+): Map<string, CardPerformance> {
+  const merged = new Map(a);
+  for (const [cardId, extra] of b) {
+    const existing = merged.get(cardId);
+    merged.set(cardId, existing ? mergePerformance(existing, extra) : extra);
+  }
+  return merged;
+}
+
+function mergeContributors(
+  a: CardDatabaseContributor[],
+  b: CardDatabaseContributor[],
+): CardDatabaseContributor[] {
+  const byDeck = new Map<string, CardDatabaseContributor>();
+  for (const row of [...a, ...b]) {
+    const existing = byDeck.get(row.deckId);
+    if (!existing) {
+      byDeck.set(row.deckId, { ...row });
+      continue;
+    }
+    existing.runCount += row.runCount;
+    existing.samples += row.samples;
+  }
+  const merged = [...byDeck.values()];
+  const totalSamples = merged.reduce((sum, row) => sum + row.samples, 0);
+  for (const row of merged) {
+    row.sampleShare = totalSamples > 0 ? row.samples / totalSamples : 0;
+  }
+  merged.sort((left, right) => right.samples - left.samples);
+  return merged;
+}
+
+function mergeDeckRows(
+  a: CardDatabaseDeckRow[],
+  b: CardDatabaseDeckRow[],
+): CardDatabaseDeckRow[] {
+  const byDeck = new Map<string, CardDatabaseDeckRow>();
+  for (const row of [...a, ...b]) {
+    const existing = byDeck.get(row.deckId);
+    if (!existing) {
+      byDeck.set(row.deckId, { ...row });
+      continue;
+    }
+    const seenA = existing.damageWhenSeen != null ? existing.samples : 0;
+    const seenB = row.damageWhenSeen != null ? row.samples : 0;
+    byDeck.set(row.deckId, {
+      deckId: existing.deckId,
+      name: existing.name,
+      copies: existing.copies ?? row.copies,
+      runCount: existing.runCount + row.runCount,
+      samples: existing.samples + row.samples,
+      damageWhenSeen:
+        existing.damageWhenSeen != null && row.damageWhenSeen != null
+          ? (existing.damageWhenSeen * seenA + row.damageWhenSeen * seenB) /
+            Math.max(seenA + seenB, 1)
+          : (existing.damageWhenSeen ?? row.damageWhenSeen),
+      withHandMean: existing.withHandMean ?? row.withHandMean,
+      withoutHandMean: existing.withoutHandMean ?? row.withoutHandMean,
+      handLift: existing.handLift ?? row.handLift,
+      withHandSamples: existing.withHandSamples || row.withHandSamples,
+      withoutHandSamples: existing.withoutHandSamples || row.withoutHandSamples,
+    });
+  }
+  return [...byDeck.values()].sort((left, right) => right.samples - left.samples);
+}
+
 export async function cardDatabase(
   db: Kysely<Database>,
   options: {
+    source?: CardDatabaseSource;
     simType: string;
     version: VersionTriple;
     attributionVersion: number;
@@ -161,167 +309,192 @@ export async function cardDatabase(
     deckIds?: string[];
   },
 ) {
+  const source = options.source ?? "evaluate";
   const catalog = await getCards(db);
   const deckIds = options.deckIds?.filter(Boolean);
-
-  const contributorRows = await db
-    .selectFrom("runs as r")
-    .innerJoin("decks as d", "d.id", "r.deck_id")
-    .select([
-      "r.deck_id as deckId",
-      "d.name as name",
-      sql<number>`count(*)::int`.as("runCount"),
-      sql<number>`sum(coalesce(r.samples, 0))::int`.as("samples"),
-    ])
-    .where("r.status", "=", COMPLETE)
-    .where("r.kind", "=", "evaluate")
-    .where("r.deck_id", "is not", null)
-    .where("r.sim_type", "=", options.simType)
-    .where("r.rules_version", "=", options.currentVersion.rulesVersion)
-    .where("r.sampler_version", "=", options.currentVersion.samplerVersion)
-    .where("r.attribution_version", "=", options.currentAttributionVersion)
-    .groupBy(["r.deck_id", "d.name"])
-    .orderBy(sql`sum(coalesce(r.samples, 0))`, "desc")
-    .execute();
-
-  const totalContributorSamples = contributorRows.reduce(
-    (sum, row) => sum + row.samples,
-    0,
+  const skipAll = deckIds !== undefined && deckIds.length === 0;
+  const { evaluateDeckIds, swapSweepDeckIds } = splitCardDatabaseDeckIds(
+    source,
+    deckIds,
   );
-  const contributors: CardDatabaseContributor[] = contributorRows.map(
-    (row) => ({
-      deckId: row.deckId!,
-      name: row.name,
-      runCount: row.runCount,
-      samples: row.samples,
-      sampleShare:
-        totalContributorSamples > 0 ? row.samples / totalContributorSamples : 0,
-    }),
-  );
+  const swapQuery = {
+    simType: options.simType,
+    version: options.version,
+    attributionVersion: options.attributionVersion,
+    currentVersion: options.currentVersion,
+    currentAttributionVersion: options.currentAttributionVersion,
+    deckIds: swapSweepDeckIds,
+  };
 
-  const emptyDeckFilter = deckIds !== undefined && deckIds.length === 0;
-
+  let contributors: CardDatabaseContributor[] = [];
   let performanceByCard = new Map<string, CardPerformance>();
   let olderSet = new Set<string>();
   let totalRuns = 0;
   let totalSamples = 0;
 
-  if (!emptyDeckFilter) {
-    let statsQuery = db
-      .selectFrom("run_card_stats as cs")
-      .innerJoin("runs as r", "r.id", "cs.run_id")
+  if (includesEvaluate(source) && !skipAll) {
+    const contributorRows = await db
+      .selectFrom("runs as r")
+      .innerJoin("decks as d", "d.id", "r.deck_id")
       .select([
-        "cs.card_id as cardId",
-        sql<number>`count(distinct r.id)::int`.as("runCount"),
-        sql<number>`count(distinct r.deck_id)::int`.as("deckCount"),
-        sql<number>`sum(coalesce(r.samples, 0))::int`.as("eligibleSamples"),
-        sql<number>`sum(cs.opened)::int`.as("opened"),
-        sql<number>`sum(cs.opened_copies)::int`.as("openedCopies"),
-        sql<number>`sum(cs.drawn)::int`.as("drawn"),
-        sql<number>`sum(cs.seen)::int`.as("seen"),
-        sql<number>`sum(cs.plays)::int`.as("plays"),
-        sql<number>`sum(cs.attacks)::int`.as("attacks"),
-        sql<number>`sum(cs.damage)::int`.as("damage"),
-        sql<number>`sum(cs.damage_when_seen_sum)::int`.as("damageWhenSeenSum"),
+        "r.deck_id as deckId",
+        "d.name as name",
+        sql<number>`count(*)::int`.as("runCount"),
+        sql<number>`sum(coalesce(r.samples, 0))::int`.as("samples"),
       ])
-      .where("r.status", "=", COMPLETE)
+      .where("r.status", "in", DONE_STATUSES)
       .where("r.kind", "=", "evaluate")
       .where("r.deck_id", "is not", null)
       .where("r.sim_type", "=", options.simType)
-      .where("r.rules_version", "=", options.version.rulesVersion)
-      .where("r.sampler_version", "=", options.version.samplerVersion)
-      .where("r.attribution_version", "=", options.attributionVersion)
-      .groupBy("cs.card_id");
+      .where("r.rules_version", "=", options.currentVersion.rulesVersion)
+      .where("r.sampler_version", "=", options.currentVersion.samplerVersion)
+      .where("r.attribution_version", "=", options.currentAttributionVersion)
+      .groupBy(["r.deck_id", "d.name"])
+      .orderBy(sql`sum(coalesce(r.samples, 0))`, "desc")
+      .execute();
 
-    if (deckIds && deckIds.length > 0) {
-      statsQuery = statsQuery.where("r.deck_id", "in", deckIds);
-    }
-
-    const statRows = await statsQuery.execute();
-    const samples = await loadEvaluateSamples(db, {
-      simType: options.simType,
-      version: options.version,
-      attributionVersion: options.attributionVersion,
-      deckIds,
-    });
-    const handImpactByCard = computeAllHandImpacts(samples);
-    performanceByCard = new Map(
-      statRows.map((row) => {
-        const impact = handImpactByCard.get(row.cardId);
-        return [
-          row.cardId,
-          mergeHandImpact(ratesFromTotals(row), impact),
-        ];
-      }),
+    const totalContributorSamples = contributorRows.reduce(
+      (sum, row) => sum + row.samples,
+      0,
     );
-    for (const [cardId, impact] of handImpactByCard) {
-      if (performanceByCard.has(cardId) || impact.handLift == null) {
-        continue;
+    contributors = contributorRows.map((row) => ({
+      deckId: row.deckId!,
+      name: row.name,
+      runCount: row.runCount,
+      samples: row.samples,
+      sampleShare:
+        totalContributorSamples > 0
+          ? row.samples / totalContributorSamples
+          : 0,
+    }));
+
+    if (includeDeckScopedQuery(evaluateDeckIds)) {
+      let statsQuery = db
+        .selectFrom("run_card_stats as cs")
+        .innerJoin("runs as r", "r.id", "cs.run_id")
+        .select([
+          "cs.card_id as cardId",
+          sql<number>`count(distinct r.id)::int`.as("runCount"),
+          sql<number>`count(distinct r.deck_id)::int`.as("deckCount"),
+          sql<number>`sum(coalesce(r.samples, 0))::int`.as("eligibleSamples"),
+          sql<number>`sum(cs.opened)::int`.as("opened"),
+          sql<number>`sum(cs.opened_copies)::int`.as("openedCopies"),
+          sql<number>`sum(cs.drawn)::int`.as("drawn"),
+          sql<number>`sum(cs.seen)::int`.as("seen"),
+          sql<number>`sum(cs.plays)::int`.as("plays"),
+          sql<number>`sum(cs.attacks)::int`.as("attacks"),
+          sql<number>`sum(cs.damage)::int`.as("damage"),
+          sql<number>`sum(cs.damage_when_seen_sum)::int`.as("damageWhenSeenSum"),
+        ])
+        .where("r.status", "in", DONE_STATUSES)
+        .where("r.kind", "=", "evaluate")
+        .where("r.deck_id", "is not", null)
+        .where("r.sim_type", "=", options.simType)
+        .where("r.rules_version", "=", options.version.rulesVersion)
+        .where("r.sampler_version", "=", options.version.samplerVersion)
+        .where("r.attribution_version", "=", options.attributionVersion)
+        .groupBy("cs.card_id");
+
+      if (evaluateDeckIds && evaluateDeckIds.length > 0) {
+        statsQuery = statsQuery.where("r.deck_id", "in", evaluateDeckIds);
       }
-      performanceByCard.set(cardId, mergeHandImpact(emptyPerformance(), impact));
-    }
 
-    let olderQuery = db
-      .selectFrom("run_card_stats as cs")
-      .innerJoin("runs as r", "r.id", "cs.run_id")
-      .select("cs.card_id as cardId")
-      .distinct()
-      .where("r.status", "=", COMPLETE)
-      .where("r.kind", "=", "evaluate")
-      .where("r.deck_id", "is not", null)
-      .where("r.sim_type", "=", options.simType)
-      .where((eb) =>
-        eb.or([
-          eb("r.rules_version", "<>", options.currentVersion.rulesVersion),
-          eb("r.sampler_version", "<>", options.currentVersion.samplerVersion),
-          eb(
-            "r.attribution_version",
-            "<>",
-            options.currentAttributionVersion,
-          ),
-        ]),
+      const statRows = await statsQuery.execute();
+      const samples = await loadEvaluateSamples(db, {
+        simType: options.simType,
+        version: options.version,
+        attributionVersion: options.attributionVersion,
+        deckIds: evaluateDeckIds,
+      });
+      const handImpactByCard = computeAllHandImpacts(samples);
+      performanceByCard = new Map(
+        statRows.map((row) => {
+          const impact = handImpactByCard.get(row.cardId);
+          return [row.cardId, mergeHandImpact(ratesFromTotals(row), impact)];
+        }),
       );
+      for (const [cardId, impact] of handImpactByCard) {
+        if (performanceByCard.has(cardId) || impact.handLift == null) {
+          continue;
+        }
+        performanceByCard.set(cardId, mergeHandImpact(emptyPerformance(), impact));
+      }
 
-    if (deckIds && deckIds.length > 0) {
-      olderQuery = olderQuery.where("r.deck_id", "in", deckIds);
+      let olderQuery = db
+        .selectFrom("run_card_stats as cs")
+        .innerJoin("runs as r", "r.id", "cs.run_id")
+        .select("cs.card_id as cardId")
+        .distinct()
+        .where("r.status", "in", DONE_STATUSES)
+        .where("r.kind", "=", "evaluate")
+        .where("r.deck_id", "is not", null)
+        .where("r.sim_type", "=", options.simType)
+        .where((eb) =>
+          eb.or([
+            eb("r.rules_version", "<>", options.currentVersion.rulesVersion),
+            eb("r.sampler_version", "<>", options.currentVersion.samplerVersion),
+            eb(
+              "r.attribution_version",
+              "<>",
+              options.currentAttributionVersion,
+            ),
+          ]),
+        );
+
+      if (evaluateDeckIds && evaluateDeckIds.length > 0) {
+        olderQuery = olderQuery.where("r.deck_id", "in", evaluateDeckIds);
+      }
+
+      const olderRows = await olderQuery.execute();
+      olderSet = new Set(olderRows.map((row) => row.cardId));
+
+      let runCountQuery = db
+        .selectFrom("runs")
+        .select(sql<number>`count(*)::int`.as("runCount"))
+        .where("status", "in", DONE_STATUSES)
+        .where("kind", "=", "evaluate")
+        .where("deck_id", "is not", null)
+        .where("sim_type", "=", options.simType)
+        .where("rules_version", "=", options.version.rulesVersion)
+        .where("sampler_version", "=", options.version.samplerVersion)
+        .where("attribution_version", "=", options.attributionVersion);
+
+      let samplesQuery = db
+        .selectFrom("runs")
+        .select(sql<number>`sum(coalesce(samples, 0))::int`.as("totalSamples"))
+        .where("status", "in", DONE_STATUSES)
+        .where("kind", "=", "evaluate")
+        .where("deck_id", "is not", null)
+        .where("sim_type", "=", options.simType)
+        .where("rules_version", "=", options.version.rulesVersion)
+        .where("sampler_version", "=", options.version.samplerVersion)
+        .where("attribution_version", "=", options.attributionVersion);
+
+      if (evaluateDeckIds && evaluateDeckIds.length > 0) {
+        runCountQuery = runCountQuery.where("deck_id", "in", evaluateDeckIds);
+        samplesQuery = samplesQuery.where("deck_id", "in", evaluateDeckIds);
+      }
+
+      const [runCountRow, samplesRow] = await Promise.all([
+        runCountQuery.executeTakeFirst(),
+        samplesQuery.executeTakeFirst(),
+      ]);
+      totalRuns = runCountRow?.runCount ?? 0;
+      totalSamples = samplesRow?.totalSamples ?? 0;
     }
+  }
 
-    const olderRows = await olderQuery.execute();
-    olderSet = new Set(olderRows.map((row) => row.cardId));
-
-    let runCountQuery = db
-      .selectFrom("runs")
-      .select(sql<number>`count(*)::int`.as("runCount"))
-      .where("status", "=", COMPLETE)
-      .where("kind", "=", "evaluate")
-      .where("deck_id", "is not", null)
-      .where("sim_type", "=", options.simType)
-      .where("rules_version", "=", options.version.rulesVersion)
-      .where("sampler_version", "=", options.version.samplerVersion)
-      .where("attribution_version", "=", options.attributionVersion);
-
-    let samplesQuery = db
-      .selectFrom("runs")
-      .select(sql<number>`sum(coalesce(samples, 0))::int`.as("totalSamples"))
-      .where("status", "=", COMPLETE)
-      .where("kind", "=", "evaluate")
-      .where("deck_id", "is not", null)
-      .where("sim_type", "=", options.simType)
-      .where("rules_version", "=", options.version.rulesVersion)
-      .where("sampler_version", "=", options.version.samplerVersion)
-      .where("attribution_version", "=", options.attributionVersion);
-
-    if (deckIds && deckIds.length > 0) {
-      runCountQuery = runCountQuery.where("deck_id", "in", deckIds);
-      samplesQuery = samplesQuery.where("deck_id", "in", deckIds);
-    }
-
-    const [runCountRow, samplesRow] = await Promise.all([
-      runCountQuery.executeTakeFirst(),
-      samplesQuery.executeTakeFirst(),
-    ]);
-    totalRuns = runCountRow?.runCount ?? 0;
-    totalSamples = samplesRow?.totalSamples ?? 0;
+  if (includesSwapSweep(source) && !skipAll) {
+    const swap = await loadSwapSweepSlice(db, swapQuery);
+    contributors = includesEvaluate(source)
+      ? mergeContributors(contributors, swap.contributors)
+      : swap.contributors;
+    performanceByCard = includesEvaluate(source)
+      ? mergePerformanceMaps(performanceByCard, swap.performanceByCard)
+      : swap.performanceByCard;
+    olderSet = new Set([...olderSet, ...swap.olderCardIds]);
+    totalRuns += swap.totalRuns;
+    totalSamples += swap.totalSamples;
   }
 
   const cards: CardDatabaseCard[] = catalog
@@ -385,7 +558,7 @@ async function evaluateDecksForCard(
       sql<number>`sum(cs.damage_when_seen_sum)::int`.as("damageWhenSeenSum"),
     ])
     .where("cs.card_id", "=", options.cardId)
-    .where("r.status", "=", COMPLETE)
+    .where("r.status", "in", DONE_STATUSES)
     .where("r.kind", "=", "evaluate")
     .where("r.deck_id", "is not", null)
     .where("r.sim_type", "=", options.simType)
@@ -413,6 +586,7 @@ async function evaluateDecksForCard(
 export async function cardDatabaseCardDecks(
   db: Kysely<Database>,
   options: {
+    source?: CardDatabaseSource;
     cardId: string;
     simType: string;
     version: VersionTriple;
@@ -420,59 +594,87 @@ export async function cardDatabaseCardDecks(
     deckIds?: string[];
   },
 ): Promise<CardDatabaseDeckRow[]> {
-  const stats = await evaluateDecksForCard(db, options);
-  const statsById = new Map(stats.map((row) => [row.deckId, row]));
-  const samples = await loadEvaluateSamples(db, {
+  const source = options.source ?? "evaluate";
+  const { evaluateDeckIds, swapSweepDeckIds } = splitCardDatabaseDeckIds(
+    source,
+    options.deckIds,
+  );
+  const swapQuery = {
     simType: options.simType,
     version: options.version,
     attributionVersion: options.attributionVersion,
-    deckIds: options.deckIds,
-  });
+    deckIds: swapSweepDeckIds,
+  };
 
-  function deckRow(
-    deckId: string,
-    name: string,
-    copies: number | null,
-    stat?: (typeof stats)[number],
-  ): CardDatabaseDeckRow {
-    const impact = computeHandImpact(samples, options.cardId, deckId);
-    return {
-      deckId,
-      name,
-      copies,
-      runCount: stat?.runCount ?? 0,
-      samples: stat?.samples ?? 0,
-      damageWhenSeen: stat?.damageWhenSeen ?? null,
-      withHandMean: impact.withHandMean,
-      withoutHandMean: impact.withoutHandMean,
-      handLift: impact.handLift,
-      withHandSamples: impact.withHandSamples,
-      withoutHandSamples: impact.withoutHandSamples,
-    };
+  let rows: CardDatabaseDeckRow[] = [];
+
+  if (includesEvaluate(source) && includeDeckScopedQuery(evaluateDeckIds)) {
+    const stats = await evaluateDecksForCard(db, {
+      ...options,
+      deckIds: evaluateDeckIds,
+    });
+    const statsById = new Map(stats.map((row) => [row.deckId, row]));
+    const samples = await loadEvaluateSamples(db, {
+      simType: options.simType,
+      version: options.version,
+      attributionVersion: options.attributionVersion,
+      deckIds: evaluateDeckIds,
+    });
+
+    function deckRow(
+      deckId: string,
+      name: string,
+      copies: number | null,
+      stat?: (typeof stats)[number],
+    ): CardDatabaseDeckRow {
+      const impact = computeHandImpact(samples, options.cardId, deckId);
+      return {
+        deckId,
+        name,
+        copies,
+        runCount: stat?.runCount ?? 0,
+        samples: stat?.samples ?? 0,
+        damageWhenSeen: stat?.damageWhenSeen ?? null,
+        withHandMean: impact.withHandMean,
+        withoutHandMean: impact.withoutHandMean,
+        handLift: impact.handLift,
+        withHandSamples: impact.withHandSamples,
+        withoutHandSamples: impact.withoutHandSamples,
+      };
+    }
+
+    if (isMaterialCardId(options.cardId)) {
+      rows = stats.map((row) => deckRow(row.deckId, row.name, null, row));
+    } else {
+      let membership = await listDecksForCard(db, options.cardId);
+      if (evaluateDeckIds !== undefined) {
+        const allow = new Set(evaluateDeckIds);
+        membership = membership.filter((deck) => allow.has(deck.id));
+      }
+
+      const fromMembership: CardDatabaseDeckRow[] = membership.map((deck) =>
+        deckRow(deck.id, deck.name, deck.copies, statsById.get(deck.id)),
+      );
+
+      const seen = new Set(fromMembership.map((row) => row.deckId));
+      const extras: CardDatabaseDeckRow[] = stats
+        .filter((row) => !seen.has(row.deckId))
+        .map((row) => deckRow(row.deckId, row.name, null, row));
+
+      rows = [...fromMembership, ...extras];
+    }
   }
 
-  if (isMaterialCardId(options.cardId)) {
-    return stats.map((row) =>
-      deckRow(row.deckId, row.name, null, row),
+  if (includesSwapSweep(source) && includeDeckScopedQuery(swapSweepDeckIds)) {
+    const swapRows = await loadSwapSweepCardDeckRows(
+      db,
+      options.cardId,
+      swapQuery,
     );
+    rows = includesEvaluate(source) ? mergeDeckRows(rows, swapRows) : swapRows;
   }
 
-  let membership = await listDecksForCard(db, options.cardId);
-  if (options.deckIds !== undefined) {
-    const allow = new Set(options.deckIds);
-    membership = membership.filter((deck) => allow.has(deck.id));
-  }
-
-  const fromMembership: CardDatabaseDeckRow[] = membership.map((deck) =>
-    deckRow(deck.id, deck.name, deck.copies, statsById.get(deck.id)),
-  );
-
-  const seen = new Set(fromMembership.map((row) => row.deckId));
-  const extras: CardDatabaseDeckRow[] = stats
-    .filter((row) => !seen.has(row.deckId))
-    .map((row) => deckRow(row.deckId, row.name, null, row));
-
-  return [...fromMembership, ...extras];
+  return rows;
 }
 
 /** Materialize / level kinds that count as "playing" a material card. */
@@ -506,6 +708,7 @@ export type CardPlayMatrix = {
 export async function cardDatabasePlayMatrix(
   db: Kysely<Database>,
   options: {
+    source?: CardDatabaseSource;
     cardId: string;
     simType: string;
     version: VersionTriple;
@@ -513,7 +716,12 @@ export async function cardDatabasePlayMatrix(
     deckIds?: string[];
   },
 ): Promise<CardPlayMatrix> {
-  if (options.deckIds !== undefined && options.deckIds.length === 0) {
+  const source = options.source ?? "evaluate";
+  const { evaluateDeckIds } = splitCardDatabaseDeckIds(source, options.deckIds);
+  if (!includesEvaluate(source)) {
+    return { totalPlays: 0, totalSamples: 0, cells: [] };
+  }
+  if (!includeDeckScopedQuery(evaluateDeckIds)) {
     return { totalPlays: 0, totalSamples: 0, cells: [] };
   }
 
@@ -523,7 +731,7 @@ export async function cardDatabasePlayMatrix(
     .selectFrom("run_samples as rs")
     .innerJoin("runs as r", "r.id", "rs.run_id")
     .select(sql<number>`coalesce(sum(rs.occurrence_count), 0)::int`.as("totalSamples"))
-    .where("r.status", "=", COMPLETE)
+    .where("r.status", "in", DONE_STATUSES)
     .where("r.kind", "=", "evaluate")
     .where("r.deck_id", "is not", null)
     .where("r.sim_type", "=", options.simType)
@@ -531,8 +739,8 @@ export async function cardDatabasePlayMatrix(
     .where("r.sampler_version", "=", options.version.samplerVersion)
     .where("r.attribution_version", "=", options.attributionVersion);
 
-  if (options.deckIds && options.deckIds.length > 0) {
-    sampleQuery = sampleQuery.where("r.deck_id", "in", options.deckIds);
+  if (evaluateDeckIds && evaluateDeckIds.length > 0) {
+    sampleQuery = sampleQuery.where("r.deck_id", "in", evaluateDeckIds);
   }
 
   const sampleRow = await sampleQuery.executeTakeFirst();
@@ -550,7 +758,7 @@ export async function cardDatabasePlayMatrix(
       sql<string>`e.payload->>'phase'`.as("phase"),
       sql<number>`sum(rs.occurrence_count)::int`.as("plays"),
     ])
-    .where("r.status", "=", COMPLETE)
+    .where("r.status", "in", DONE_STATUSES)
     .where("r.kind", "=", "evaluate")
     .where("r.deck_id", "is not", null)
     .where("r.sim_type", "=", options.simType)
@@ -564,8 +772,8 @@ export async function cardDatabasePlayMatrix(
     .orderBy(sql`(e.payload->>'turn')::int`, "asc")
     .orderBy(sql`e.payload->>'phase'`, "asc");
 
-  if (options.deckIds && options.deckIds.length > 0) {
-    playQuery = playQuery.where("r.deck_id", "in", options.deckIds);
+  if (evaluateDeckIds && evaluateDeckIds.length > 0) {
+    playQuery = playQuery.where("r.deck_id", "in", evaluateDeckIds);
   }
 
   if (materialKinds) {
@@ -614,6 +822,7 @@ export type CardDatabasePairings = {
 export async function cardDatabasePairings(
   db: Kysely<Database>,
   options: {
+    source?: CardDatabaseSource;
     cardId: string;
     simType: string;
     version: VersionTriple;
@@ -621,16 +830,19 @@ export async function cardDatabasePairings(
     deckIds?: string[];
   },
 ): Promise<CardDatabasePairings> {
+  const source = options.source ?? "evaluate";
+  const { evaluateDeckIds } = splitCardDatabaseDeckIds(source, options.deckIds);
   const empty: CardDatabasePairings = {
     cardId: options.cardId,
     totalSamples: 0,
     partners: [],
   };
 
-  if (
-    options.deckIds !== undefined &&
-    options.deckIds.length === 0
-  ) {
+  if (!includesEvaluate(source)) {
+    return empty;
+  }
+
+  if (!includeDeckScopedQuery(evaluateDeckIds)) {
     return empty;
   }
 
@@ -648,7 +860,7 @@ export async function cardDatabasePairings(
       "r.deck_counts as deckCounts",
       "r.deck_id as deckId",
     ])
-    .where("r.status", "=", COMPLETE)
+    .where("r.status", "in", DONE_STATUSES)
     .where("r.kind", "=", "evaluate")
     .where("r.deck_id", "is not", null)
     .where("r.sim_type", "=", options.simType)
@@ -656,8 +868,8 @@ export async function cardDatabasePairings(
     .where("r.sampler_version", "=", options.version.samplerVersion)
     .where("r.attribution_version", "=", options.attributionVersion);
 
-  if (options.deckIds && options.deckIds.length > 0) {
-    sampleQuery = sampleQuery.where("r.deck_id", "in", options.deckIds);
+  if (evaluateDeckIds && evaluateDeckIds.length > 0) {
+    sampleQuery = sampleQuery.where("r.deck_id", "in", evaluateDeckIds);
   }
 
   const sampleRows = await sampleQuery.execute();

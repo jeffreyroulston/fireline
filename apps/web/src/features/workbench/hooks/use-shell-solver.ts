@@ -41,6 +41,25 @@ import {
 } from "../utils";
 import { workbenchHref } from "../routes";
 
+function advancedRunFields(
+  simType: SimType,
+  maxThreads: number | null,
+  glimpseEnabled: boolean,
+  maxHandDurationSecs: number | null,
+  maxCardDraw: number | null,
+) {
+  return {
+    maxThreads,
+    glimpseEnabled: simType === "fire_brick" ? false : glimpseEnabled,
+    maxHandDurationSecs:
+      maxHandDurationSecs != null && maxHandDurationSecs > 0
+        ? maxHandDurationSecs
+        : null,
+    maxCardDraw:
+      maxCardDraw != null && maxCardDraw > 0 ? maxCardDraw : null,
+  };
+}
+
 type UseShellSolverOptions = Readonly<{
   deckText: string;
   activeDeck: SavedDeck | null;
@@ -64,6 +83,11 @@ export type ShellSolverState = Readonly<{
   turns: number;
   simType: SimType;
   rollouts: number;
+  maxThreads: number | null;
+  glimpseEnabled: boolean;
+  maxHandDurationSecs: number | null;
+  maxCardDraw: number | null;
+  cpuCount: number;
   lineResult: SolveResult | null;
   /** Opening hand that produced `lineResult` (not the live builder hand). */
   lineHand: CardId[];
@@ -90,6 +114,10 @@ export type ShellSolverActions = Readonly<{
   setTurns: (value: number) => void;
   setSimType: (value: SimType) => void;
   setRollouts: (value: number) => void;
+  setMaxThreads: (value: number | null) => void;
+  setGlimpseEnabled: (value: boolean) => void;
+  setMaxHandDurationSecs: (value: number | null) => void;
+  setMaxCardDraw: (value: number | null) => void;
   setLineResult: (value: SolveResult | null, evaluatedHand?: CardId[]) => void;
   setSamples: (value: number) => void;
   setError: (value: string) => void;
@@ -98,7 +126,9 @@ export type ShellSolverActions = Readonly<{
   optimizeCurrentBounds: () => Promise<void>;
   cancelHandSolve: () => void;
   cancelEvaluateJob: () => void;
+  saveEvaluateJob: () => void;
   cancelOptimizeJob: () => void;
+  saveOptimizeJob: () => void;
   sendSampleToHandSolver: (sample: SampleHand) => void;
   drawRandomHandFromDeck: () => void;
   drawCardFromDeck: () => void;
@@ -133,6 +163,12 @@ export function useShellSolver({
   const [turns, setTurns] = useState(3);
   const [simType, setSimType] = useState<SimType>("fire_brick");
   const [rollouts, setRollouts] = useState(12);
+  const [maxThreads, setMaxThreads] = useState<number | null>(null);
+  const [glimpseEnabled, setGlimpseEnabled] = useState(true);
+  const [maxHandDurationSecs, setMaxHandDurationSecs] = useState<number | null>(
+    null,
+  );
+  const [maxCardDraw, setMaxCardDraw] = useState<number | null>(null);
   const [lineResult, setLineResultState] = useState<SolveResult | null>(null);
   const [lineHand, setLineHand] = useState<CardId[]>([]);
   const [samples, setSamples] = useState(8);
@@ -147,10 +183,12 @@ export function useShellSolver({
 
   const {
     workerReachable,
+    cpuCount,
     getRunForDeck,
     startEvaluate,
     startOptimize,
     cancelRun: cancelWorkerRun,
+    saveRun: saveWorkerRun,
   } = useRunTracker();
   const completedRunIdsRef = useRef<Set<string>>(new Set());
 
@@ -174,7 +212,10 @@ export function useShellSolver({
   ).length;
 
   useEffect(() => {
-    if (evaluateRun?.status !== "complete" || !evaluateRun.id) {
+    if (
+      (evaluateRun?.status !== "complete" && evaluateRun?.status !== "partial") ||
+      !evaluateRun.id
+    ) {
       return;
     }
     if (completedRunIdsRef.current.has(evaluateRun.id)) {
@@ -242,6 +283,13 @@ export function useShellSolver({
         deck: deck ?? {},
         queue: remainingQueue ?? null,
         budget: DEFAULT_BUDGET,
+        ...advancedRunFields(
+          simType,
+          maxThreads,
+          glimpseEnabled,
+          maxHandDurationSecs,
+          maxCardDraw,
+        ),
       });
       startTransition(() =>
         setLineResult(result as unknown as SolveResult, evaluatedHand),
@@ -303,6 +351,13 @@ export function useShellSolver({
           rollouts,
           seed: makeSeed() as unknown as bigint,
           budget: DEFAULT_BUDGET,
+          ...advancedRunFields(
+            simType,
+            maxThreads,
+            glimpseEnabled,
+            maxHandDurationSecs,
+            maxCardDraw,
+          ),
         },
         initialProgress,
       );
@@ -383,6 +438,17 @@ export function useShellSolver({
             seed: makeSeed() as unknown as bigint,
             materials: activeMaterialCounts,
             budget: DEFAULT_BUDGET,
+            goFirst,
+            maxTurns: turns,
+            simType,
+            rollouts,
+            ...advancedRunFields(
+              simType,
+              maxThreads,
+              glimpseEnabled,
+              maxHandDurationSecs,
+              maxCardDraw,
+            ),
           },
           initialProgress,
         );
@@ -418,7 +484,7 @@ export function useShellSolver({
       return;
     }
     const deckCount = Math.min(
-      ratio.deckAttempts,
+      ratio.attemptCeiling,
       MAX_RATIO_DECK_ATTEMPTS,
       Number(
         legal > BigInt(Number.MAX_SAFE_INTEGER)
@@ -459,6 +525,17 @@ export function useShellSolver({
           seed: makeSeed() as unknown as bigint,
           materials: activeMaterialCounts,
           budget: DEFAULT_BUDGET,
+          goFirst,
+          maxTurns: turns,
+          simType,
+          rollouts,
+          ...advancedRunFields(
+            simType,
+            maxThreads,
+            glimpseEnabled,
+            maxHandDurationSecs,
+            maxCardDraw,
+          ),
         },
         initialProgress,
       );
@@ -484,12 +561,26 @@ export function useShellSolver({
     setError("Calculation cancelled.");
   }
 
+  function saveEvaluateJob() {
+    if (!evaluateRun || evaluateRun.status !== "running") {
+      return;
+    }
+    void saveWorkerRun(evaluateRun.id);
+  }
+
   function cancelOptimizeJob() {
     if (!optimizeRun || (optimizeRun.status !== "queued" && optimizeRun.status !== "running")) {
       return;
     }
     void cancelWorkerRun(optimizeRun.id);
     setError("Calculation cancelled.");
+  }
+
+  function saveOptimizeJob() {
+    if (!optimizeRun || optimizeRun.status !== "running") {
+      return;
+    }
+    void saveWorkerRun(optimizeRun.id);
   }
 
   function sendSampleToHandSolver(sample: SampleHand) {
@@ -515,7 +606,7 @@ export function useShellSolver({
       },
       evaluatedHand,
     );
-    router.push(workbenchHref("line", activeDeckId));
+    router.push(workbenchHref("line", activeDeckId), { scroll: false });
     setError("");
   }
 
@@ -589,6 +680,11 @@ export function useShellSolver({
 
   function onSimTypeChange(value: SimType) {
     setSimType(value);
+    if (value === "fire_brick") {
+      setGlimpseEnabled(false);
+    } else if (simType === "fire_brick") {
+      setGlimpseEnabled(true);
+    }
     setLineResult(null);
   }
 
@@ -603,6 +699,11 @@ export function useShellSolver({
     turns,
     simType,
     rollouts,
+    maxThreads,
+    glimpseEnabled,
+    maxHandDurationSecs,
+    maxCardDraw,
+    cpuCount,
     lineResult,
     lineHand,
     samples,
@@ -625,6 +726,10 @@ export function useShellSolver({
     setTurns,
     setSimType,
     setRollouts,
+    setMaxThreads,
+    setGlimpseEnabled,
+    setMaxHandDurationSecs,
+    setMaxCardDraw,
     setLineResult,
     setSamples,
     setError,
@@ -633,7 +738,9 @@ export function useShellSolver({
     optimizeCurrentBounds,
     cancelHandSolve,
     cancelEvaluateJob,
+    saveEvaluateJob,
     cancelOptimizeJob,
+    saveOptimizeJob,
     sendSampleToHandSolver,
     drawRandomHandFromDeck,
     drawCardFromDeck,

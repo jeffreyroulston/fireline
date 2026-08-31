@@ -10,6 +10,10 @@ pub enum EngineError {
     #[error("cancelled")]
     Cancelled,
 
+    /// A per-hand wall-clock deadline was exceeded.
+    #[error("hand exceeded max duration")]
+    HandTimeout,
+
     #[error("unknown card: {0}")]
     UnknownCard(String),
 

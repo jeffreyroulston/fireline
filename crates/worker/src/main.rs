@@ -1,17 +1,18 @@
 use axum::{
     Json, Router,
-    extract::State,
-    http::StatusCode,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
     response::Response,
     routing::{get, post},
 };
 use ga_fire_engine::{
-    Budget, DeckEvalRequest, DeckEvalResult, ENGINE_VERSION, EvalProgress, HandPhase, HandProgress,
-    OptimizeProgress, OptimizeRequest, OptimizeResult, PressureLevel, SimType, SolveRequest,
-    SolveResult, card_catalog, current_pressure, evaluate_with_hand_progress_cancel, hand_threads,
-    memory_config, new_cancel_flag, request_cancel,
+    Budget, CancelFlag, DeckEvalRequest, DeckEvalResult, ENGINE_VERSION, EvalProgress, HandPhase,
+    HandProgress, OptimizeProgress, OptimizeRequest, OptimizeResult, PressureLevel, SimType,
+    SolveRequest, SolveResult, card_catalog, current_pressure, evaluate_with_hand_progress_cancel,
+    hand_threads, is_save_requested_on, memory_config, new_cancel_flag, request_cancel,
+    request_save,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -25,6 +26,13 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 struct AppState {
     semaphore: Arc<Semaphore>,
     budget: Budget,
+    jobs: Arc<Mutex<HashMap<String, CancelFlag>>>,
+}
+
+#[derive(Deserialize)]
+struct StopJobRequest {
+    #[serde(default)]
+    save: bool,
 }
 
 #[derive(Serialize)]
@@ -56,6 +64,7 @@ enum EvaluateStreamEvent {
     // Boxed: the result payload dwarfs the other variants (serde output is
     // identical, so the wire contract is unchanged).
     Result(Box<DeckEvalResult>),
+    PartialResult(Box<DeckEvalResult>),
     Error {
         message: String,
     },
@@ -66,10 +75,15 @@ enum EvaluateStreamEvent {
 enum OptimizeStreamEvent {
     Progress(OptimizeProgress),
     #[serde(rename_all = "camelCase")]
-    MemoryPressure { level: PressureLevel },
+    MemoryPressure {
+        level: PressureLevel,
+    },
     Heartbeat,
     Result(Box<OptimizeResult>),
-    Error { message: String },
+    PartialResult(Box<OptimizeResult>),
+    Error {
+        message: String,
+    },
 }
 
 /// Idle gap between heartbeat NDJSON lines. Must stay well under the API
@@ -93,6 +107,7 @@ async fn main() {
     let state = AppState {
         semaphore: Arc::new(Semaphore::new(concurrency)),
         budget: Budget::default(),
+        jobs: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let app = Router::new()
@@ -102,6 +117,7 @@ async fn main() {
         .route("/solve", post(solve_handler))
         .route("/evaluate", post(evaluate_handler))
         .route("/optimize", post(optimize_handler))
+        .route("/jobs/{id}/stop", post(stop_job_handler))
         .with_state(state);
 
     let addr: SocketAddr = format!("{host}:{port}")
@@ -123,8 +139,18 @@ async fn main() {
     axum::serve(listener, app).await.expect("serve");
 }
 
-async fn health() -> StatusCode {
-    StatusCode::OK
+async fn health() -> Json<HealthResponse> {
+    Json(HealthResponse {
+        ok: true,
+        cpu_count: u16::try_from(ga_fire_engine::cpu_count()).unwrap_or(u16::MAX),
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HealthResponse {
+    ok: bool,
+    cpu_count: u16,
 }
 
 async fn version() -> Json<ga_fire_engine::EngineVersion> {
@@ -154,6 +180,7 @@ async fn solve_handler(
 
 async fn evaluate_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(mut request): Json<DeckEvalRequest>,
 ) -> Result<Response, StatusCode> {
     let permit = state
@@ -170,12 +197,15 @@ async fn evaluate_handler(
         request.max_turns,
         hand_threads(request.sim_type),
     ));
+    let run_id = run_id_from_headers(&headers);
+    let jobs = state.jobs.clone();
     stream_ndjson(move |tx| {
         // Held until the compute finishes so the concurrency limit covers the
         // actual work, not just the response setup.
         let _permit = permit;
         let hand_logger = logger.clone();
         let cancel = new_cancel_flag();
+        let _job_guard = register_job(jobs, run_id, cancel.clone());
         let pressure_stop = Arc::new(AtomicBool::new(false));
         spawn_disconnect_watch(tx.clone(), cancel.clone(), pressure_stop.clone());
         spawn_pressure_watch(tx.clone(), pressure_stop.clone(), cancel.clone());
@@ -209,7 +239,7 @@ async fn evaluate_handler(
                 };
                 send_event_or_cancel(&tx, &event, &cancel_for_progress)
             },
-            cancel,
+            cancel.clone(),
         );
         pressure_stop.store(true, Ordering::Relaxed);
         if let Some(log) = &logger {
@@ -219,7 +249,7 @@ async fn evaluate_handler(
             }
         }
         let event = match result {
-            Ok(value) => EvaluateStreamEvent::Result(Box::new(value)),
+            Ok(value) => evaluate_result_event(value, &cancel, request.samples),
             Err(error) => EvaluateStreamEvent::Error {
                 message: error.to_string(),
             },
@@ -231,6 +261,7 @@ async fn evaluate_handler(
 
 async fn optimize_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(mut request): Json<OptimizeRequest>,
 ) -> Result<Response, StatusCode> {
     let permit = state
@@ -239,9 +270,12 @@ async fn optimize_handler(
         .try_acquire_owned()
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     request.budget = merge_budget(request.budget, state.budget);
+    let run_id = run_id_from_headers(&headers);
+    let jobs = state.jobs.clone();
     stream_ndjson(move |tx| {
         let _permit = permit;
         let cancel = new_cancel_flag();
+        let _job_guard = register_job(jobs, run_id, cancel.clone());
         let pressure_stop = Arc::new(AtomicBool::new(false));
         spawn_disconnect_watch(tx.clone(), cancel.clone(), pressure_stop.clone());
         spawn_optimize_pressure_watch(tx.clone(), pressure_stop.clone(), cancel.clone());
@@ -252,14 +286,14 @@ async fn optimize_handler(
             OptimizeStreamEvent::Heartbeat,
         );
         let cancel_for_progress = cancel.clone();
-        let _cancel_guard = ga_fire_engine::install_cancel(cancel);
+        let _cancel_guard = ga_fire_engine::install_cancel(cancel.clone());
         let result = ga_fire_engine::optimize_with_progress(&request, |progress| {
             let event = OptimizeStreamEvent::Progress(progress);
             send_event_or_cancel(&tx, &event, &cancel_for_progress)
         });
         pressure_stop.store(true, Ordering::Relaxed);
         let event = match result {
-            Ok(value) => OptimizeStreamEvent::Result(Box::new(value)),
+            Ok(value) => optimize_result_event(value, &cancel, request.decks),
             Err(error) => OptimizeStreamEvent::Error {
                 message: error.to_string(),
             },
@@ -267,6 +301,86 @@ async fn optimize_handler(
         let _ = send_event(&tx, &event);
     })
     .await
+}
+
+async fn stop_job_handler(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+    Json(body): Json<StopJobRequest>,
+) -> StatusCode {
+    let jobs = state.jobs.lock().unwrap_or_else(|err| err.into_inner());
+    let Some(flag) = jobs.get(&job_id) else {
+        return StatusCode::NOT_FOUND;
+    };
+    if body.save {
+        request_save(flag);
+    } else {
+        request_cancel(flag);
+    }
+    StatusCode::ACCEPTED
+}
+
+fn run_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-run-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
+struct JobGuard {
+    id: Option<String>,
+    jobs: Arc<Mutex<HashMap<String, CancelFlag>>>,
+}
+
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.take() {
+            self.jobs
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .remove(&id);
+        }
+    }
+}
+
+fn register_job(
+    jobs: Arc<Mutex<HashMap<String, CancelFlag>>>,
+    run_id: Option<String>,
+    cancel: CancelFlag,
+) -> JobGuard {
+    if let Some(id) = run_id.as_ref() {
+        jobs.lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(id.clone(), cancel);
+    }
+    JobGuard { id: run_id, jobs }
+}
+
+fn evaluate_result_event(
+    value: DeckEvalResult,
+    cancel: &CancelFlag,
+    requested_samples: u16,
+) -> EvaluateStreamEvent {
+    if is_save_requested_on(cancel) && value.samples < usize::from(requested_samples) {
+        EvaluateStreamEvent::PartialResult(Box::new(value))
+    } else {
+        EvaluateStreamEvent::Result(Box::new(value))
+    }
+}
+
+fn optimize_result_event(
+    value: OptimizeResult,
+    cancel: &CancelFlag,
+    requested_decks: u32,
+) -> OptimizeStreamEvent {
+    let target = value.effective.decks.unwrap_or(requested_decks);
+    if is_save_requested_on(cancel) && value.decks_scored < target {
+        OptimizeStreamEvent::PartialResult(Box::new(value))
+    } else {
+        OptimizeStreamEvent::Result(Box::new(value))
+    }
 }
 
 /// Opt-in per-run diagnostics (`WORKER_LOG_RUNS=1`). Logs each hand's
@@ -344,6 +458,17 @@ impl RunLogger {
                     sample = progress.sample_index,
                     rss_mb = self.note_rss(),
                     "hand waiting for memory"
+                );
+            }
+            HandPhase::TimedOut => {
+                self.hands
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .remove(&progress.sample_index);
+                tracing::info!(
+                    sample = progress.sample_index,
+                    rss_mb = self.note_rss(),
+                    "hand timed out"
                 );
             }
             HandPhase::Rollout => {}
@@ -605,7 +730,10 @@ mod tests {
         // Read through the same parsing path via a temp file.
         let path = std::env::temp_dir().join(format!("ga-fire-test-{}.txt", std::process::id()));
         std::fs::write(&path, meminfo).unwrap();
-        assert_eq!(proc_kb_field(path.to_str().unwrap(), "MemAvailable:"), Some(12));
+        assert_eq!(
+            proc_kb_field(path.to_str().unwrap(), "MemAvailable:"),
+            Some(12)
+        );
         assert_eq!(proc_kb_field(path.to_str().unwrap(), "Missing:"), None);
         std::fs::remove_file(&path).ok();
     }

@@ -15,7 +15,7 @@ import { getCard, getCards, listDecksForCard, replaceDeckCards } from "./service
 import type { RunDispatcher } from "./services/dispatch.js";
 import { persistSolveResult } from "./services/persist.js";
 import { runHub, sseJson } from "./services/run-hub.js";
-import { fetchWorkerJson, WorkerError, checkWorkerReachable } from "./services/worker.js";
+import { fetchWorkerJson, WorkerError, checkWorkerReachable, fetchWorkerHealth } from "./services/worker.js";
 import {
   cardLeaderboard,
   getPooledSample,
@@ -30,12 +30,16 @@ import {
   cardDatabaseCardDecks,
   cardDatabasePairings,
   cardDatabasePlayMatrix,
+  type CardDatabaseSource,
 } from "./services/card-database.js";
-import {
-  cardDatabaseSwapSweep,
-  cardDatabaseSwapSweepCardRuns,
-} from "./services/card-database-swap-sweep.js";
 import { parseAttributionVersion, parseDamageBounds, parseVersionTriple } from "./lib/version.js";
+
+function parseCardDatabaseSource(value: string | null): CardDatabaseSource {
+  if (value === "all" || value === "swap_sweep") {
+    return value;
+  }
+  return "evaluate";
+}
 
 export function createApp(options: {
   db: Kysely<Database>;
@@ -434,7 +438,9 @@ export function createApp(options: {
   });
 
   app.get("/runs/queue", async (c) => {
-    const workerReachable = await checkWorkerReachable(options.workerBase);
+    const workerHealth = await fetchWorkerHealth(options.workerBase);
+    const workerReachable = workerHealth?.ok ?? false;
+    const cpuCount = workerHealth?.cpuCount ?? 1;
     const liveRows = await options.db
       .selectFrom("runs")
       .selectAll()
@@ -446,7 +452,7 @@ export function createApp(options: {
     const finishedRows = await options.db
       .selectFrom("runs")
       .selectAll()
-      .where("status", "in", ["complete", "failed", "interrupted", "cancelled"])
+      .where("status", "in", ["complete", "partial", "failed", "interrupted", "cancelled"])
       .where("kind", "in", ["evaluate", "optimize"])
       .orderBy("completed_at", "desc")
       .limit(8)
@@ -476,6 +482,7 @@ export function createApp(options: {
 
     return c.json({
       workerReachable,
+      cpuCount,
       maxConcurrency: options.maxConcurrency,
       running: liveRows.filter((row) => row.status === "running").map(toItem),
       queued: liveRows.filter((row) => row.status === "queued").map(toItem),
@@ -611,17 +618,7 @@ export function createApp(options: {
 
   app.get("/analysis/card-database", async (c) => {
     const params = new URL(c.req.url).searchParams;
-    const source = params.get("source") ?? "evaluate";
-
-    if (source === "swap_sweep") {
-      const runIdParams = params.getAll("run_id").filter(Boolean);
-      const runFilter = params.get("run_filter") === "1";
-      const result = await cardDatabaseSwapSweep(options.db, {
-        runIds: runFilter ? runIdParams : undefined,
-      });
-      return c.json(result);
-    }
-
+    const source = parseCardDatabaseSource(params.get("source"));
     const simType = c.req.query("sim_type");
     if (!simType) {
       return c.json({ error: "sim_type is required" }, 400);
@@ -661,6 +658,7 @@ export function createApp(options: {
     const deckIdParams = params.getAll("deck_id").filter(Boolean);
     const deckFilter = params.get("deck_filter") === "1";
     const result = await cardDatabase(options.db, {
+      source,
       simType,
       version,
       attributionVersion,
@@ -673,18 +671,8 @@ export function createApp(options: {
 
   app.get("/analysis/card-database/:cardId/decks", async (c) => {
     const params = new URL(c.req.url).searchParams;
-    const source = params.get("source") ?? "evaluate";
+    const source = parseCardDatabaseSource(params.get("source"));
     const cardId = c.req.param("cardId");
-
-    if (source === "swap_sweep") {
-      const runIdParams = params.getAll("run_id").filter(Boolean);
-      const runFilter = params.get("run_filter") === "1";
-      const runs = await cardDatabaseSwapSweepCardRuns(options.db, cardId, {
-        runIds: runFilter ? runIdParams : undefined,
-      });
-      return c.json(runs);
-    }
-
     const simType = c.req.query("sim_type");
     if (!simType) {
       return c.json({ error: "sim_type is required" }, 400);
@@ -700,6 +688,7 @@ export function createApp(options: {
     const deckIdParams = params.getAll("deck_id").filter(Boolean);
     const deckFilter = params.get("deck_filter") === "1";
     const decks = await cardDatabaseCardDecks(options.db, {
+      source,
       cardId,
       simType,
       version,
@@ -715,6 +704,7 @@ export function createApp(options: {
       return c.json({ error: "sim_type is required" }, 400);
     }
     const params = new URL(c.req.url).searchParams;
+    const source = parseCardDatabaseSource(params.get("source"));
     const version = parseVersionTriple(params);
     if ("error" in version) {
       return c.json({ error: version.error }, 400);
@@ -726,6 +716,7 @@ export function createApp(options: {
     const deckIdParams = params.getAll("deck_id").filter(Boolean);
     const deckFilter = params.get("deck_filter") === "1";
     const matrix = await cardDatabasePlayMatrix(options.db, {
+      source,
       cardId: c.req.param("cardId"),
       simType,
       version,
@@ -741,6 +732,7 @@ export function createApp(options: {
       return c.json({ error: "sim_type is required" }, 400);
     }
     const params = new URL(c.req.url).searchParams;
+    const source = parseCardDatabaseSource(params.get("source"));
     const version = parseVersionTriple(params);
     if ("error" in version) {
       return c.json({ error: version.error }, 400);
@@ -752,6 +744,7 @@ export function createApp(options: {
     const deckIdParams = params.getAll("deck_id").filter(Boolean);
     const deckFilter = params.get("deck_filter") === "1";
     const pairings = await cardDatabasePairings(options.db, {
+      source,
       cardId: c.req.param("cardId"),
       simType,
       version,
@@ -936,6 +929,17 @@ export function createApp(options: {
     options.dispatcher.cancel(runId);
     await options.db.deleteFrom("runs").where("id", "=", runId).execute();
     return c.body(null, 204);
+  });
+
+  app.post("/runs/:id/save", async (c) => {
+    const runId = c.req.param("id");
+    const outcome = options.dispatcher.requestSave(runId);
+    if (outcome === "queued") {
+      await options.db.deleteFrom("runs").where("id", "=", runId).execute();
+      runHub.publish(runId, { type: "cancelled" });
+      return c.body(null, 204);
+    }
+    return c.json({ status: "stopping" }, 202);
   });
 
   return app;

@@ -146,6 +146,7 @@ export async function persistEvaluateResult(
   db: Kysely<Database>,
   runId: string,
   result: DeckEvalResult,
+  status: "complete" | "partial" = "complete",
 ): Promise<void> {
   const effective = result.effective;
   const handGroups = new Map<
@@ -181,7 +182,7 @@ export async function persistEvaluateResult(
     await trx
       .updateTable("runs")
       .set({
-        status: "complete",
+        status,
         completed_at: new Date(),
         elapsed_ms: result.elapsedMs,
         mean_damage: result.mean,
@@ -241,6 +242,7 @@ export async function persistOptimizeResult(
   db: Kysely<Database>,
   runId: string,
   result: OptimizeResult,
+  status: "complete" | "partial" = "complete",
 ): Promise<void> {
   const effective = result.effective;
 
@@ -248,7 +250,7 @@ export async function persistOptimizeResult(
     await trx
       .updateTable("runs")
       .set({
-        status: "complete",
+        status,
         completed_at: new Date(),
         elapsed_ms: result.elapsedMs,
         best_score: result.bestScore,

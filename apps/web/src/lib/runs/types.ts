@@ -1,6 +1,6 @@
 import type { DeckResult, RatioResult } from "@/features/workbench/types";
 
-export type HandPhase = "started" | "throttled" | "rollout" | "done";
+export type HandPhase = "started" | "throttled" | "rollout" | "done" | "timedOut";
 
 export type MemoryPressureLevel = "squeeze" | "parked";
 
@@ -75,6 +75,7 @@ export interface QueueRunItem {
 
 export interface RunQueueResponse {
   workerReachable: boolean;
+  cpuCount: number;
   maxConcurrency: number;
   running: QueueRunItem[];
   queued: QueueRunItem[];
@@ -85,9 +86,13 @@ export function isLiveRunStatus(status: string): boolean {
   return status === "queued" || status === "running";
 }
 
+export function isPersistedResultStatus(status: string): boolean {
+  return status === "complete" || status === "partial";
+}
+
 export function isTerminalRunStatus(status: string): boolean {
   return (
-    status === "complete" ||
+    isPersistedResultStatus(status) ||
     status === "failed" ||
     status === "interrupted" ||
     status === "cancelled"
@@ -104,7 +109,7 @@ export function isUnsuccessfulTerminalStatus(status: string): boolean {
 }
 
 export function isFinishedQueueStatus(status: string): boolean {
-  return status === "complete" || isUnsuccessfulTerminalStatus(status);
+  return isPersistedResultStatus(status) || isUnsuccessfulTerminalStatus(status);
 }
 
 export function queueSummaryLabel(

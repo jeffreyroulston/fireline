@@ -42,6 +42,11 @@ export function HandBuilder({
   turns,
   simType,
   rollouts,
+  cpuCount,
+  maxThreads,
+  glimpseEnabled,
+  maxHandDurationSecs,
+  maxCardDraw,
   busy,
   onHandChange,
   onDrawnChange,
@@ -55,6 +60,10 @@ export function HandBuilder({
   onTurnsChange,
   onSimTypeChange,
   onRolloutsChange,
+  onMaxThreadsChange,
+  onGlimpseEnabledChange,
+  onMaxHandDurationSecsChange,
+  onMaxCardDrawChange,
   onSolve,
   onCancel,
   decksLoading = false,
@@ -73,6 +82,11 @@ export function HandBuilder({
   turns: number;
   simType: SimType;
   rollouts: number;
+  cpuCount?: number;
+  maxThreads: number | null;
+  glimpseEnabled: boolean;
+  maxHandDurationSecs: number | null;
+  maxCardDraw: number | null;
   busy: boolean;
   onHandChange: (hand: CardId[]) => void;
   onDrawnChange: (drawn: CardId[]) => void;
@@ -86,6 +100,10 @@ export function HandBuilder({
   onTurnsChange: (value: number) => void;
   onSimTypeChange: (value: SimType) => void;
   onRolloutsChange: (value: number) => void;
+  onMaxThreadsChange: (value: number | null) => void;
+  onGlimpseEnabledChange: (value: boolean) => void;
+  onMaxHandDurationSecsChange: (value: number | null) => void;
+  onMaxCardDrawChange: (value: number | null) => void;
   onSolve: () => void;
   onCancel: () => void;
   decksLoading?: boolean;
@@ -264,10 +282,19 @@ export function HandBuilder({
           rollouts={rollouts}
           seed={shuffled ? seed : undefined}
           orderedPile={isDeckMode && shuffled}
+          cpuCount={cpuCount}
+          maxThreads={maxThreads}
+          glimpseEnabled={glimpseEnabled}
+          maxHandDurationSecs={maxHandDurationSecs}
+          maxCardDraw={maxCardDraw}
           onFirstChange={onGoFirstChange}
           onTurnsChange={onTurnsChange}
           onSimTypeChange={onSimTypeChange}
           onRolloutsChange={onRolloutsChange}
+          onMaxThreadsChange={onMaxThreadsChange}
+          onGlimpseEnabledChange={onGlimpseEnabledChange}
+          onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
+          onMaxCardDrawChange={onMaxCardDrawChange}
         />
         <ActionBar
           label="Calculate maximum damage"

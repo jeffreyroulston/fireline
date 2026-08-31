@@ -10,6 +10,7 @@ export function ActionBar({
   busy,
   onRun,
   onCancel,
+  onSave,
   progress,
   monteCarloRollouts,
 }: {
@@ -17,6 +18,7 @@ export function ActionBar({
   busy: boolean;
   onRun: () => void;
   onCancel: () => void;
+  onSave?: () => void;
   progress?: OptimizeProgress | null;
   monteCarloRollouts?: number;
 }) {
@@ -43,6 +45,14 @@ export function ActionBar({
             Cancel
           </button>
         )}
+        {busy && onSave ? (
+          <button
+            className={buttonVariants({ intent: "text" })}
+            onClick={onSave}
+          >
+            Cancel & save
+          </button>
+        ) : null}
       </div>
       {busy && progress && (
         <OptimizeProgressPanel

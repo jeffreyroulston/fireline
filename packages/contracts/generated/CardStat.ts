@@ -32,4 +32,20 @@ damageWhenSeen: number, damagePerPlay: number,
 /**
  * Share of all attributed card damage.
  */
-damageShare: number, };
+damageShare: number, 
+/**
+ * Sum of sample damage when this card was in the opening hand.
+ */
+withHandDamageSum: number, 
+/**
+ * Samples where this card was in the opening hand.
+ */
+withHandSamples: number, 
+/**
+ * Sum of sample damage when this card was not in the opening hand.
+ */
+withoutHandDamageSum: number, 
+/**
+ * Samples where this card was not in the opening hand.
+ */
+withoutHandSamples: number, };

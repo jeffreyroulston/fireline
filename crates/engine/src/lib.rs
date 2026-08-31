@@ -1,6 +1,7 @@
 pub mod budget;
 pub mod cancel;
 pub mod cards;
+pub mod deadline;
 pub mod deck;
 pub mod error;
 pub mod line_event;
@@ -16,14 +17,15 @@ pub mod version;
 mod bindings;
 
 pub use budget::Budget;
-pub use cards::{CardDef, card_catalog};
 pub use cancel::{
-    CancelFlag, install as install_cancel, new_flag as new_cancel_flag, request as request_cancel,
+    CancelFlag, install as install_cancel, is_save_requested, is_save_requested_on,
+    new_flag as new_cancel_flag, request as request_cancel, request_save,
 };
+pub use cards::{CardDef, card_catalog};
 pub use deck::{
     DeckEvalRequest, DeckEvalResult, EvalProgress, HandPhase, HandProgress, OptimizeProgress,
-    OptimizeRequest, OptimizeResult, Strategy, SwapConfig, count_legal_decks, draw_opening_hands,
-    evaluate, evaluate_with_hand_progress, evaluate_with_hand_progress_cancel,
+    OptimizeRequest, OptimizeResult, Strategy, SwapConfig, count_legal_decks, cpu_count,
+    draw_opening_hands, evaluate, evaluate_with_hand_progress, evaluate_with_hand_progress_cancel,
     evaluate_with_progress, evaluate_with_progress_cancel, evaluate_with_serial_progress,
     hand_threads, optimize, optimize_with_progress,
 };
@@ -34,9 +36,7 @@ pub use line_event::{
 };
 pub use model::{EffectiveRequest, PassResult, SimType, SolveRequest, SolveResult};
 pub use pressure::{PressureLevel, current_pressure, memory_config};
-pub use solver::{
-    opening_hand_hash, solve, solve_cards, solve_pass, solve_with_progress,
-};
+pub use solver::{opening_hand_hash, solve, solve_cards, solve_pass, solve_with_progress};
 pub use version::{ENGINE_VERSION, EngineVersion};
 
 pub fn solve_json(input: &str) -> Result<String> {

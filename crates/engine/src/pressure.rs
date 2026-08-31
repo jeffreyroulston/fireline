@@ -48,7 +48,9 @@ pub struct MemoryConfig {
 impl MemoryConfig {
     fn from_env() -> Self {
         let total_mb = env_u64("GA_FIRE_MEM_TOTAL_MB").or_else(detect_total_mb);
-        let hand_mem_mb = env_u64("GA_FIRE_HAND_MEM_MB").unwrap_or(DEFAULT_HAND_MEM_MB).max(256);
+        let hand_mem_mb = env_u64("GA_FIRE_HAND_MEM_MB")
+            .unwrap_or(DEFAULT_HAND_MEM_MB)
+            .max(256);
         let reserve_mb = env_u64("GA_FIRE_MEM_RESERVE_MB").unwrap_or_else(|| match total_mb {
             Some(total) => (total / 16).max(2048),
             None => 2048,
@@ -264,9 +266,7 @@ pub fn wait_while_parked() {
     }
     let mut guard = PARK_LOCK.lock().unwrap_or_else(|err| err.into_inner());
     while PARK_FLAG.load(Ordering::SeqCst) {
-        guard = PARK_CV
-            .wait(guard)
-            .unwrap_or_else(|err| err.into_inner());
+        guard = PARK_CV.wait(guard).unwrap_or_else(|err| err.into_inner());
     }
 }
 
@@ -377,10 +377,7 @@ impl MemoryGate {
 
     pub fn acquire(&self) -> MemoryPermit<'_> {
         let config = memory_config();
-        let mut in_flight = self
-            .in_flight
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
+        let mut in_flight = self.in_flight.lock().unwrap_or_else(|err| err.into_inner());
         loop {
             let available = mem_available_mb();
             if admission_ok(
@@ -412,10 +409,7 @@ impl MemoryGate {
         let config = memory_config();
         let started = std::time::Instant::now();
         let mut notified = false;
-        let mut in_flight = self
-            .in_flight
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
+        let mut in_flight = self.in_flight.lock().unwrap_or_else(|err| err.into_inner());
         loop {
             let available = mem_available_mb();
             if admission_ok(
@@ -434,10 +428,7 @@ impl MemoryGate {
                 // Drop the lock while notifying so progress callbacks can run.
                 drop(in_flight);
                 on_wait();
-                in_flight = self
-                    .in_flight
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner());
+                in_flight = self.in_flight.lock().unwrap_or_else(|err| err.into_inner());
                 continue;
             }
             let (guard, _) = self
@@ -494,8 +485,22 @@ mod tests {
 
     #[test]
     fn admission_100gb_is_cpu_capped() {
-        assert!(admission_ok(15, 16, 3072, 2048, Some(100_000), Some(80_000)));
-        assert!(!admission_ok(16, 16, 3072, 2048, Some(100_000), Some(80_000)));
+        assert!(admission_ok(
+            15,
+            16,
+            3072,
+            2048,
+            Some(100_000),
+            Some(80_000)
+        ));
+        assert!(!admission_ok(
+            16,
+            16,
+            3072,
+            2048,
+            Some(100_000),
+            Some(80_000)
+        ));
     }
 
     #[test]

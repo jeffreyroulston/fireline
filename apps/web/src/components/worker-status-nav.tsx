@@ -49,6 +49,7 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
     liveRuns,
     finishedRuns,
     cancelRun,
+    saveRun,
     dismissFinished,
     clearQueue,
   } = useRunTracker();
@@ -84,6 +85,7 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
     params.set("run", run.id);
     router.push(
       workbenchHref(targetTabForRun(run), run.deckId || activeDeckId, params),
+      { scroll: false },
     );
     setOpen(false);
   }
@@ -214,15 +216,28 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
                             Open
                           </button>
                           {isLiveRunStatus(run.status) ? (
-                            <button
-                              type="button"
-                              className={buttonVariants({ intent: "text" })}
-                              onClick={() => {
-                                void cancelRun(run.id);
-                              }}
-                            >
-                              Cancel
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                className={buttonVariants({ intent: "text" })}
+                                onClick={() => {
+                                  void cancelRun(run.id);
+                                }}
+                              >
+                                Cancel
+                              </button>
+                              {run.status === "running" ? (
+                                <button
+                                  type="button"
+                                  className={buttonVariants({ intent: "text" })}
+                                  onClick={() => {
+                                    void saveRun(run.id);
+                                  }}
+                                >
+                                  Cancel & save
+                                </button>
+                              ) : null}
+                            </>
                           ) : null}
                         </div>
                       </li>

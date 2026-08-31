@@ -28,13 +28,33 @@ export async function loadCardCatalog(workerBase: string): Promise<CardDef[]> {
 }
 
 export async function checkWorkerReachable(workerBase: string): Promise<boolean> {
+  const health = await fetchWorkerHealth(workerBase);
+  return health?.ok ?? false;
+}
+
+export async function fetchWorkerHealth(
+  workerBase: string,
+): Promise<{ ok: boolean; cpuCount: number } | null> {
   try {
     const response = await fetch(workerUrl(workerBase, "/health"), {
       signal: AbortSignal.timeout(3000),
     });
-    return response.ok;
+    if (!response.ok) {
+      return null;
+    }
+    const body = (await response.json()) as { ok?: boolean; cpuCount?: number };
+    if (typeof body.ok !== "boolean") {
+      return { ok: true, cpuCount: 1 };
+    }
+    return {
+      ok: body.ok,
+      cpuCount:
+        typeof body.cpuCount === "number" && body.cpuCount > 0
+          ? body.cpuCount
+          : 1,
+    };
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -67,10 +87,11 @@ export async function postWorkerNdjson<T>(
   path: string,
   body: unknown,
   signal?: AbortSignal,
+  headers?: Record<string, string>,
 ): Promise<{ response: Response; lines: AsyncGenerator<T> }> {
   const response = await fetch(workerUrl(workerBase, path), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body),
     signal,
   });

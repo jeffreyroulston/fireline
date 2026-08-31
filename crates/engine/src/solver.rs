@@ -10,7 +10,7 @@ use crate::{
         Action, DamageDistribution, EffectiveRequest, MAT_BLADE, MAT_DAGGER, MAT_HAMMER, MAT_RING,
         MAT_RIPPER, MAT_SOULKNIFE, MAT_TRISTAN, MAT_ZANDER, MAT_ZANDER_2, McRollout, PassResult,
         Phase, SimType, SolveRequest, SolveResult, State, TwoPassResult, Weapon,
-        resolve_materials_bitmask,
+        effective_glimpse, hand_duration, resolve_materials_bitmask, truncate_draw_queue,
     },
     random::{Rng, percentile, shuffle_cards},
 };
@@ -61,6 +61,8 @@ struct Search {
     memo_generations: u32,
     /// Set when cooperative cancel fires mid-search; visit returns early.
     aborted: bool,
+    /// Set when the per-hand wall-clock deadline fires mid-search.
+    timed_out: bool,
     /// Best damage found so far in this search (branch-and-bound incumbent).
     incumbent_damage: u8,
     /// When false (reconstruct), skip bound pruning so memo/target matching stays exact.
@@ -84,6 +86,7 @@ impl Search {
             memo_cap: memo_cap.max(1),
             memo_generations: 0,
             aborted: false,
+            timed_out: false,
             incumbent_damage: 0,
             bound_prune: true,
             hand_hash: String::new(),
@@ -99,6 +102,7 @@ impl Search {
         self.glimpse_enabled = glimpse_enabled;
         self.memo_generations = 0;
         self.aborted = false;
+        self.timed_out = false;
         self.incumbent_damage = 0;
         self.bound_prune = true;
         // Keep hand_hash / hand_label across resets within the same opening hand.
@@ -135,6 +139,11 @@ impl Search {
             self.aborted = true;
             return;
         }
+        if crate::deadline::is_expired() {
+            self.timed_out = true;
+            self.aborted = true;
+            return;
+        }
         if !crate::pressure::is_parked() {
             return;
         }
@@ -144,6 +153,9 @@ impl Search {
         crate::pressure::wait_while_parked();
         // Re-check after park: disconnect may have happened while we slept.
         if crate::cancel::is_cancel_requested() {
+            self.aborted = true;
+        } else if crate::deadline::is_expired() {
+            self.timed_out = true;
             self.aborted = true;
         }
     }
@@ -301,12 +313,15 @@ fn solve_with_progress_inner(
         .clamp(request.budget.max_turns_min, request.budget.max_turns_max);
     let rollouts = request.rollouts.clamp(1, request.budget.max_solve_rollouts);
     let materials = resolve_materials_bitmask(&request.materials);
+    let _deadline_guard = hand_duration(request.max_hand_duration_secs).map(crate::deadline::install);
+    let glimpse_oracle = effective_glimpse(request.sim_type, false, request.glimpse_enabled);
+    let max_card_draw = request.max_card_draw;
     let mut result = match request.sim_type {
         SimType::FireBrick => {
             let opening_queue = if request.go_first {
                 Vec::new()
             } else {
-                fire_brick_opening_queue(request, &hand)
+                truncate_draw_queue(fire_brick_opening_queue(request, &hand), max_card_draw)
             };
             solve_cards_with_queue(
                 &hand,
@@ -328,6 +343,8 @@ fn solve_with_progress_inner(
                     seed: request.seed,
                     materials,
                     retain_rollout_tapes,
+                    glimpse_enabled: glimpse_oracle,
+                    max_card_draw,
                 },
                 on_rollout,
             )?
@@ -342,6 +359,8 @@ fn solve_with_progress_inner(
                 request.seed,
                 ordered,
                 materials,
+                glimpse_oracle,
+                max_card_draw,
             )?
         }
         SimType::OracleOnly => {
@@ -354,6 +373,8 @@ fn solve_with_progress_inner(
                 request.seed,
                 ordered,
                 materials,
+                glimpse_oracle,
+                max_card_draw,
             )?
         }
     };
@@ -370,6 +391,10 @@ fn solve_effective(request: &SolveRequest, max_turns: u8, rollouts: u16) -> Effe
         max_turns: Some(max_turns),
         rollouts: Some(rollouts),
         budget: request.budget,
+        max_threads: request.max_threads,
+        glimpse_enabled: request.glimpse_enabled,
+        max_hand_duration_secs: request.max_hand_duration_secs,
+        max_card_draw: request.max_card_draw,
         ..Default::default()
     }
 }
@@ -459,6 +484,10 @@ fn solve_pass_with(
     search.reset(search.glimpse_enabled);
     search.set_opening_hand(hand);
     let best = search.visit(initial);
+    if search.timed_out {
+        search.reset(search.glimpse_enabled);
+        return Err(EngineError::HandTimeout);
+    }
     if search.aborted {
         search.reset(search.glimpse_enabled);
         return Err(EngineError::Cancelled);
@@ -470,6 +499,10 @@ fn solve_pass_with(
         line_stats.record_opening_draw(drawn);
     }
     search.reconstruct(initial, best, &mut tape, &mut line_stats);
+    if search.timed_out {
+        search.reset(search.glimpse_enabled);
+        return Err(EngineError::HandTimeout);
+    }
     if search.aborted {
         search.reset(search.glimpse_enabled);
         return Err(EngineError::Cancelled);
@@ -510,6 +543,8 @@ struct MonteCarloConfig {
     /// When false (deck eval), drop per-rollout event tapes after picking the
     /// headline/P50 line so completed hands do not retain N full tapes in RAM.
     retain_rollout_tapes: bool,
+    glimpse_enabled: bool,
+    max_card_draw: Option<u16>,
 }
 
 fn solve_monte_carlo(
@@ -532,7 +567,7 @@ fn solve_monte_carlo(
     let mut total_memo = 0;
     let mut stats_acc = crate::stats::DeckStatAccumulator::with_deck_and_materials(hand, materials);
     // Reuse one Search shell; reset() drops the memo table each rollout.
-    let mut search = Search::new(true);
+    let mut search = Search::new(config.glimpse_enabled);
 
     if on_rollout(0, rollouts).is_break() {
         return Err(EngineError::Cancelled);
@@ -541,6 +576,7 @@ fn solve_monte_carlo(
     for done in 1..=rollouts {
         let mut queue = remaining.to_vec();
         shuffle_cards(&mut queue, &mut rng);
+        let queue = truncate_draw_queue(queue, config.max_card_draw);
         let (pass, line_stats) =
             solve_pass_with(&mut search, hand, go_first, max_turns, &queue, materials)?;
         total_nodes += pass.nodes;
@@ -655,11 +691,14 @@ fn solve_two_pass(
     seed: u64,
     ordered: bool,
     materials: u16,
+    glimpse_oracle: bool,
+    max_card_draw: Option<u16>,
 ) -> Result<SolveResult> {
     let started = Instant::now();
     let (mut brick, brick_stats) = solve_pass(hand, go_first, max_turns, &[], false, materials)?;
-    let queue = oracle_queue(remaining, seed, ordered);
-    let (mut oracle, oracle_stats) = solve_pass(hand, go_first, max_turns, &queue, true, materials)?;
+    let queue = truncate_draw_queue(oracle_queue(remaining, seed, ordered), max_card_draw);
+    let (mut oracle, oracle_stats) =
+        solve_pass(hand, go_first, max_turns, &queue, glimpse_oracle, materials)?;
     release_process_memory();
     brick.card_stats = summarize_line_stats(hand, &brick_stats, materials);
     oracle.card_stats = summarize_line_stats(hand, &oracle_stats, materials);
@@ -698,10 +737,13 @@ fn solve_oracle_only(
     seed: u64,
     ordered: bool,
     materials: u16,
+    glimpse_enabled: bool,
+    max_card_draw: Option<u16>,
 ) -> Result<SolveResult> {
     let started = Instant::now();
-    let queue = oracle_queue(remaining, seed, ordered);
-    let (pass, line_stats) = solve_pass(hand, go_first, max_turns, &queue, true, materials)?;
+    let queue = truncate_draw_queue(oracle_queue(remaining, seed, ordered), max_card_draw);
+    let (pass, line_stats) =
+        solve_pass(hand, go_first, max_turns, &queue, glimpse_enabled, materials)?;
     release_process_memory();
     Ok(SolveResult {
         sim_type: SimType::OracleOnly,
@@ -915,11 +957,7 @@ fn has_positive_damage_main_play(state: State) -> bool {
     }
 
     // Soft: Truth/prep → Blade → swing counts as a remaining damage path.
-    if !turn0_first
-        && state.champion_awake
-        && state.prep > 0
-        && state.has_material(MAT_BLADE)
-    {
+    if !turn0_first && state.champion_awake && state.prep > 0 && state.has_material(MAT_BLADE) {
         return true;
     }
 
@@ -1352,9 +1390,9 @@ fn action_deals_immediate_damage(state: &State, action: Action) -> bool {
                         .any(|ally| ally.card() == Card::Rococo);
             }
             if sacrifice {
-                return state.allies[..state.ally_len as usize].iter().any(|ally| {
-                    ally.card() != Card::Arthur && ally.card().on_death_damage() > 0
-                });
+                return state.allies[..state.ally_len as usize]
+                    .iter()
+                    .any(|ally| ally.card() != Card::Arthur && ally.card().on_death_damage() > 0);
             }
             if card.is_unique()
                 && state.allies[..state.ally_len as usize]
@@ -1396,10 +1434,7 @@ fn collapse_mate_ending_siblings(state: State, endings: Vec<Action>) -> Vec<Acti
             }
         }
     }
-    order
-        .into_iter()
-        .map(|key| best[&key].0)
-        .collect()
+    order.into_iter().map(|key| best[&key].0).collect()
 }
 
 fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
@@ -2882,7 +2917,12 @@ mod tests {
     fn draw_potential_counts_recollect_windows_and_hand_engines() {
         // Mate on turn 0 of 3 → 3 recollect draws still owed.
         let mut state = State::with_queue(
-            &[Card::IncreasingDanger, Card::Brick, Card::Brick, Card::Brick],
+            &[
+                Card::IncreasingDanger,
+                Card::Brick,
+                Card::Brick,
+                Card::Brick,
+            ],
             true,
             3,
             &[
@@ -3037,7 +3077,10 @@ mod tests {
         state.memory_len = 1;
 
         let layout_count = state.glimpse_layout_count();
-        assert!(layout_count >= 2, "need multiple Glimpse layouts to collapse");
+        assert!(
+            layout_count >= 2,
+            "need multiple Glimpse layouts to collapse"
+        );
         let endings: Vec<Action> = (0..layout_count)
             .map(|layout| Action::MaterializeZanderMemory {
                 glimpse_layout: Some(layout),
@@ -3355,6 +3398,11 @@ mod tests {
             seed: 1,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         })
         .unwrap();
         assert_eq!(
@@ -3391,6 +3439,11 @@ mod tests {
             seed: 7,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         })
         .unwrap();
         let drawn = result.events.first().and_then(|event| event.drawn);
@@ -3411,6 +3464,11 @@ mod tests {
             seed: 7,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         })
         .unwrap();
         assert_eq!(
@@ -3445,6 +3503,11 @@ mod tests {
             seed: 42,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         })
         .unwrap();
         assert_eq!(
@@ -3881,9 +3944,7 @@ mod tests {
             "{steps:?}"
         );
         assert!(
-            steps
-                .iter()
-                .all(|step| step.kind.as_str() != "glimpse"),
+            steps.iter().all(|step| step.kind.as_str() != "glimpse"),
             "Tristan must not Glimpse: {steps:?}"
         );
         let legal = actions(state, true);
@@ -4539,9 +4600,9 @@ mod tests {
             "{mate_steps:?}"
         );
         assert!(
-            mate_steps.iter().any(|step| {
-                step.kind.as_str() == "banishCrusaderRing" && step.drawn.is_some()
-            }),
+            mate_steps
+                .iter()
+                .any(|step| { step.kind.as_str() == "banishCrusaderRing" && step.drawn.is_some() }),
             "banish+draw must happen in the same Mate resolution: {mate_steps:?}"
         );
         let legal_main = actions(after_mate, false);
@@ -4644,10 +4705,7 @@ mod tests {
         ] {
             assert!(parse_card(name).is_some(), "missing {name}");
         }
-        assert_eq!(
-            parse_card("Gildas, Chronicler of Aesa"),
-            Some(Card::Gildas)
-        );
+        assert_eq!(parse_card("Gildas, Chronicler of Aesa"), Some(Card::Gildas));
         assert!(Card::Gildas.is_unique());
         assert!(Card::Incapacitate.is_fast());
         assert!(Card::UndeniableTruth.is_fast());
@@ -4747,12 +4805,7 @@ mod tests {
 
     #[test]
     fn undeniable_truth_requires_ally_sacrifice() {
-        let hand = [
-            Card::UndeniableTruth,
-            Card::Brick,
-            Card::Brick,
-            Card::Brick,
-        ];
+        let hand = [Card::UndeniableTruth, Card::Brick, Card::Brick, Card::Brick];
         let no_ally = State::with_queue(&hand, true, 1, &[]);
         assert!(
             !actions(no_ally, false).iter().any(|action| matches!(
@@ -4811,8 +4864,9 @@ mod tests {
             "{steps:?}"
         );
         assert!(
-            steps.iter().any(|step| format_line_event(step)
-                == "Undeniable Truth (draw Brick, +1 prep)"),
+            steps
+                .iter()
+                .any(|step| format_line_event(step) == "Undeniable Truth (draw Brick, +1 prep)"),
             "{steps:?}"
         );
     }
@@ -5125,8 +5179,8 @@ mod tests {
         let queue: Vec<Card> = (0..16)
             .map(|index| drill_three[index % drill_three.len()])
             .collect();
-        let (pass, _) = solve_pass(&drill_three, true, 3, &queue, true, ALL_MATERIALS)
-            .expect("solve_pass");
+        let (pass, _) =
+            solve_pass(&drill_three, true, 3, &queue, true, ALL_MATERIALS).expect("solve_pass");
         assert_eq!(pass.max_damage, 21);
         assert_eq!(
             pass.events.first().map(format_line_event).as_deref(),
@@ -5186,8 +5240,8 @@ mod tests {
         let queue: Vec<Card> = (0..16)
             .map(|index| drill_three[index % drill_three.len()])
             .collect();
-        let (pass, _) = solve_pass(&drill_three, true, 3, &queue, true, ALL_MATERIALS)
-            .expect("solve_pass");
+        let (pass, _) =
+            solve_pass(&drill_three, true, 3, &queue, true, ALL_MATERIALS).expect("solve_pass");
         let actions = labels(&pass.events);
         println!(
             "case oracle_16: damage={} actions={actions:?}",
@@ -5222,6 +5276,11 @@ mod tests {
             seed: 1,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         };
         let result = solve(&request).unwrap();
         assert_eq!(result.effective.max_turns, Some(5));
@@ -5578,6 +5637,11 @@ mod tests {
             seed: 42,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         })
         .expect("two-pass solve");
 
@@ -5647,6 +5711,11 @@ mod tests {
             seed: 42,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         };
         let two_pass = solve(&request(SimType::TwoPass)).expect("two-pass solve");
         let oracle = solve(&request(SimType::OracleOnly)).expect("oracle-only solve");
@@ -5672,6 +5741,11 @@ mod tests {
             seed: 1,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         });
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("need a maindeck"));
@@ -5692,6 +5766,11 @@ mod tests {
             seed: 1,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         })
         .expect("oracle with queue");
         let seed_b = solve(&SolveRequest {
@@ -5705,6 +5784,11 @@ mod tests {
             seed: 99,
             budget: crate::budget::Budget::default(),
             materials: BTreeMap::new(),
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+
+        max_card_draw: None,
         })
         .expect("oracle with same queue");
         assert_eq!(seed_a.max_damage, seed_b.max_damage);

@@ -9,9 +9,9 @@ export function WorkbenchShell() {
   const pathname = usePathname();
   const { tab, deckId } = parseWorkbenchPath(pathname);
 
-  // Tab UI lives in this layout shell while page slots stay empty, so Next's
-  // default Link scroll-to-top often never runs. Swapping a short tab for a
-  // tall one (ratio lab) then clamps scroll to the previous document bottom.
+  // Soft tab changes keep this shell mounted while the page slot is only a
+  // scroll anchor. Reset window scroll here; nav Links use scroll={false} so
+  // Next doesn't fight us (or miss entirely when the page used to return null).
   useLayoutEffect(() => {
     if (!tab) return;
     window.scrollTo(0, 0);

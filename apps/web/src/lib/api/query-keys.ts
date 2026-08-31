@@ -8,7 +8,7 @@ export const queryKeys = {
   versionGroups: (
     scope: string,
     sim: string,
-    kind: "evaluate" | "optimize",
+    kind: "evaluate" | "optimize" | "all",
     epoch = 0,
   ) => ["versionGroups", scope, sim, kind, epoch] as const,
   pooledDamage: (filtersKey: string, epoch = 0) =>
