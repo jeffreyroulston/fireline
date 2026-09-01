@@ -103,7 +103,7 @@ export function hasReserveSelection(action: PlaytestAction): boolean {
     case "playAction":
     case "blazingThrow":
       return (
-        (action.reservedHandIndices?.length ?? 0) > 0 ||
+        (action.reserved_hand_indices?.length ?? 0) > 0 ||
         (action.reserved?.length ?? 0) > 0
       );
     default:
@@ -145,7 +145,7 @@ export function withReservedHandIndices(
       return {
         ...action,
         reserved: [],
-        reservedHandIndices: reservedHandIndices,
+        reserved_hand_indices: reservedHandIndices,
       };
     default:
       return action;

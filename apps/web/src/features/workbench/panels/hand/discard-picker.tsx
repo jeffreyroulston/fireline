@@ -29,8 +29,8 @@ export function needsDiscardPicker(option: {
 }
 
 export function drawnDiscardIndexFor(option: {
-  drawnDiscardIndex?: number;
-  drawn_discard_index?: number;
+  drawnDiscardIndex?: number | null;
+  drawn_discard_index?: number | null;
 }): number | null {
   const index = option.drawnDiscardIndex ?? option.drawn_discard_index;
   return index ?? null;
@@ -85,9 +85,9 @@ export function withDiscardChoice(
     case "attackOthers":
       return {
         ...action,
-        skipDiscard: "skip" in choice ? true : undefined,
-        discardHandIndex: "handIndex" in choice ? choice.handIndex : undefined,
-      } as PlaytestAction;
+        skip_discard: "skip" in choice ? true : null,
+        discard_hand_index: "handIndex" in choice ? choice.handIndex : null,
+      };
     default:
       return action;
   }
