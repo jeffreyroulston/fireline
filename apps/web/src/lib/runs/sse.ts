@@ -132,11 +132,17 @@ export function mergeOptimizeProgress(
   current: OptimizeProgress | null | undefined,
   update: OptimizeProgress,
 ): OptimizeProgress {
+  // Nested deck evals restart sample indices; drop stale in-flight bars when
+  // the optimizer moves to the next candidate list.
+  const deckAdvanced =
+    current != null &&
+    update.totalDecks > 0 &&
+    update.decksScored > current.decksScored;
   return {
     ...current,
     ...update,
     totalRollouts: update.totalRollouts ?? current?.totalRollouts,
-    hands: update.hands ?? current?.hands,
+    hands: update.hands ?? (deckAdvanced ? undefined : current?.hands),
     started: true,
   };
 }

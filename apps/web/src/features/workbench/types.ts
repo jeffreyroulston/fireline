@@ -18,7 +18,7 @@ export type Tab =
   | "history"
   | "info";
 export type JobType = "solve" | "evaluate" | "optimize";
-export type SolverMode = "hand" | "deck";
+export type SolverMode = "hand" | "deck" | "playtest";
 
 export interface SampleHand {
   hand: CardId[];
@@ -62,7 +62,8 @@ export type RatioStrategy =
   | "randomSample"
   | "hillClimb"
   | "genetic"
-  | "swapSweep";
+  | "swapSweep"
+  | "multiDeck";
 
 export interface RatioResult {
   bestCounts: DeckCounts;
@@ -75,6 +76,7 @@ export interface RatioResult {
     scoreDelta?: number | null;
     candidate?: string | null;
     cardStats?: CardStat[];
+    damages?: number[];
   }[];
   history: { iteration: number; score: number }[];
 }

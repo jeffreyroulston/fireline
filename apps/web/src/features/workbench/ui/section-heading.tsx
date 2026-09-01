@@ -12,15 +12,16 @@ export function SectionHeading({
   className?: string;
 }) {
   return (
-    <div
-      className={cn(
-        typeSectionHeading,
-        "mb-4 flex justify-between [&_strong]:font-medium [&_strong]:text-foreground",
-        className,
-      )}
-    >
-      <span>{title}</span>
-      {meta}
+    <div className={cn(typeSectionHeading, "mb-4 [&_strong]:font-medium [&_strong]:text-foreground", className)}>
+      <span>
+        {title}
+        {meta != null ? (
+          <>
+            {" "}
+            [<span className="font-medium text-foreground">{meta}</span>]
+          </>
+        ) : null}
+      </span>
     </div>
   );
 }

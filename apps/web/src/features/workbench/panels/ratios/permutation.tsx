@@ -1,7 +1,4 @@
 import { MAX_RATIO_DECK_ATTEMPTS, formatDecklistCount } from "@/lib/engine";
-import type { OptimizeProgress } from "@/lib/api/useRun";
-import { OptimizeProgressPanel } from "../../ui";
-import { progressPercent } from "../../lib/progress-percent";
 
 type PermutationPanelProps = Readonly<{
   legalDecklists: bigint;
@@ -11,8 +8,6 @@ type PermutationPanelProps = Readonly<{
   freeCopies: number;
   attemptCeiling: number;
   coveragePercent: number;
-  busy?: boolean;
-  progress?: OptimizeProgress | null;
 }>;
 
 export function PermutationPanel({
@@ -23,13 +18,9 @@ export function PermutationPanel({
   freeCopies,
   attemptCeiling,
   coveragePercent,
-  busy,
-  progress,
 }: PermutationPanelProps) {
-  const livePercent = progressPercent(progress);
-
   return (
-    <div className="mt-7 mb-2 grid gap-3 border border-border bg-surface p-[18px] [&_[role=status]]:mt-0.5 [&_[role=status]_.h-1]:h-1.5 [&_[role=status]_.bg-border]:bg-surface-deep">
+    <div className="mt-7 mb-2 grid gap-3 border border-border bg-surface p-[18px]">
       <div className="grid grid-cols-[auto_1fr] items-end gap-x-3.5 gap-y-1">
         <span className="col-span-full font-mono text-[10px] tracking-[0.08em] text-muted uppercase">
           LEGAL LISTS
@@ -62,9 +53,6 @@ export function PermutationPanel({
           style={{ width: `${coveragePercent}%` }}
         />
       </div>
-      {busy && progress && (
-        <OptimizeProgressPanel progress={progress} percent={livePercent} />
-      )}
       <p className="font-mono text-[11px] tracking-[0.06em] text-muted uppercase">
         Decks to try · {attemptCeiling}
         {" · "}

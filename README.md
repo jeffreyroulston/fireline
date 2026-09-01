@@ -100,7 +100,7 @@ Two knobs control throughput:
 
 Docker Compose sets both run concurrency values to `1` so a single evaluation can use all cores. Local `cargo run -p ga-fire-worker` defaults to `2` concurrent worker requests; the data API defaults to dispatching `1` run at a time unless you set `API_CONCURRENCY`.
 
-Monte Carlo / Oracle / Two-pass enable Glimpse and keep a large search memo (often 1–3 GiB peak per concurrent hand). The engine caps those sims from `MemAvailable` (`free_ram / ~3 GiB`). Fire Brick still uses the full Rayon pool. On Linux, freed pages are returned to the OS after each solve (`malloc_trim`).
+Monte Carlo / Oracle / Two-pass enable Glimpse and keep a large search memo (often 1–3 GiB peak per concurrent hand). The engine caps those sims from total RAM (`(MemTotal − reserve) / ~3 GiB`) and only pauses new hands when free RAM is in the park danger zone. Fire Brick still uses the full Rayon pool. On Linux, freed pages are returned to the OS after each solve (`malloc_trim`).
 
 Monte Carlo deck evaluations stream per-hand progress while hands run in parallel: the UI shows aggregate hand completion (`12/64 hands`) plus one live bar per concurrent opening hand as its rollouts advance. Aggregate per-rollout ticks on the shared progress channel remain reserved for the serial progress path.
 

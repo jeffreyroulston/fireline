@@ -4,7 +4,10 @@ import { useEffect, useState } from "react";
 import type { LineEvent } from "@/lib/engine";
 import { CARD_LIST } from "@/lib/engine";
 import { cn } from "@/lib/utils/cn";
-import { eventMatchesQuery } from "../lib/event-matches-query";
+import {
+  eventMatchesCard,
+  eventMatchesQuery,
+} from "../lib/event-matches-query";
 import { expandEventZones } from "../lib/expand-zones";
 import { formatLineEvent, formatLineEventRow } from "../lib/format-line-event";
 import { PHASE_LABELS, type StepDiffInfo } from "../types";
@@ -22,15 +25,18 @@ export function CombatTape({
   stepDiff,
   diffPerspective,
   query = "",
+  highlightCardId = null,
 }: {
   events: LineEvent[];
   resetKey: unknown;
   stepDiff?: StepDiffInfo[];
   diffPerspective?: "oracle" | "brick";
   query?: string;
+  highlightCardId?: string | null;
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const searching = query.trim().length > 0;
+  const highlightingCard = Boolean(highlightCardId);
   const expandedEvents = expandEventZones(events);
   const catalog = CARD_LIST;
 
@@ -39,7 +45,12 @@ export function CombatTape({
   }, [resetKey]);
 
   return (
-    <ol className={cn("m-0 list-none overflow-x-auto p-0", searching && "is-searching")}>
+    <ol
+      className={cn(
+        "m-0 list-none overflow-x-auto p-0",
+        (searching || highlightingCard) && "is-searching",
+      )}
+    >
       {expandedEvents.map((event, index) => {
         const open = expanded === index;
         const title = formatLineEvent(event, catalog);
@@ -56,6 +67,11 @@ export function CombatTape({
           diffPerspective === "oracle" && diff?.mark === "added";
         const matches =
           searching && eventMatchesQuery(event, query, catalog);
+        const cardMatch =
+          !matches &&
+          highlightingCard &&
+          highlightCardId != null &&
+          eventMatchesCard(event, highlightCardId, catalog);
 
         return (
           <li
@@ -68,6 +84,11 @@ export function CombatTape({
               matches &&
                 open &&
                 "[&_.tape-row]:bg-[color-mix(in_srgb,var(--color-accent)_22%,var(--color-surface-muted))]",
+              cardMatch &&
+                "[&_.tape-row]:bg-[color-mix(in_srgb,var(--color-primary)_14%,transparent)] [&_.tape-row]:shadow-[inset_3px_0_0_var(--color-primary)]",
+              cardMatch &&
+                open &&
+                "[&_.tape-row]:bg-[color-mix(in_srgb,var(--color-primary)_20%,var(--color-surface-muted))]",
               open && "[&_.tape-row]:bg-surface-muted",
             )}
           >

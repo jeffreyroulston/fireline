@@ -1,4 +1,14 @@
-import type { LineEvent, SolveRequest, SolveResult } from "@ga-fire/contracts";
+import type {
+  LineEvent,
+  PlaytestApplyRequest,
+  PlaytestApplyResult,
+  PlaytestInitRequest,
+  PlaytestInitResult,
+  PlaytestLegalActionsRequest,
+  PlaytestLegalActionsResult,
+  SolveRequest,
+  SolveResult,
+} from "@ga-fire/contracts";
 import {
   analysisQuery,
   prepareRequestBody,
@@ -44,6 +54,36 @@ export async function solve(
     body: JSON.stringify(request, (_key, value) =>
       typeof value === "bigint" ? Number(value) : value,
     ),
+  });
+  return response.json();
+}
+
+export async function playtestInit(
+  request: PlaytestInitRequest,
+): Promise<PlaytestInitResult> {
+  const response = await apiFetch("/playtest/init", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+  return response.json();
+}
+
+export async function playtestLegalActions(
+  request: PlaytestLegalActionsRequest,
+): Promise<PlaytestLegalActionsResult> {
+  const response = await apiFetch("/playtest/legal-actions", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+  return response.json();
+}
+
+export async function playtestApply(
+  request: PlaytestApplyRequest,
+): Promise<PlaytestApplyResult> {
+  const response = await apiFetch("/playtest/apply", {
+    method: "POST",
+    body: JSON.stringify(request),
   });
   return response.json();
 }

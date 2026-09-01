@@ -27,6 +27,11 @@ const RATIO_STRATEGIES: {
     label: "Swap sweep",
     help: "You pick one card to cut and a bunch of cards to try instead (same swap size every time). Scores your current list plus one test list per candidate, with play rate and other stats to help you pick winners.",
   },
+  {
+    id: "multiDeck",
+    label: "Multi-deck",
+    help: "Score a fixed set of decklists with the same hands-per-list settings. Queue lists from a previous run with Re-test selected, then run again to compare fresh samples side by side.",
+  },
 ];
 
 type RatioStrategyTabsProps = Readonly<{

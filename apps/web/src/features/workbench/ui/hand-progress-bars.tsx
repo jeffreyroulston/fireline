@@ -83,7 +83,16 @@ export function HandProgressBars({
 }: {
   hands: HandProgress[] | undefined;
 }) {
-  const active = (hands ?? []).filter((hand) => hand.phase !== "done");
+  const active = (hands ?? [])
+    .filter((hand) => hand.phase !== "done")
+    .sort((a, b) => {
+      const aWaiting = a.phase === "throttled" ? 1 : 0;
+      const bWaiting = b.phase === "throttled" ? 1 : 0;
+      if (aWaiting !== bWaiting) {
+        return aWaiting - bWaiting;
+      }
+      return a.sampleIndex - b.sampleIndex;
+    });
   const needsClock = active.some(
     (hand) => hand.phase !== "throttled" && hand.rolloutsDone <= 0,
   );

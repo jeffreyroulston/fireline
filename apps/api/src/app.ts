@@ -1,7 +1,17 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { sql, type Kysely } from "kysely";
-import type { EngineVersion, SolveRequest, SolveResult } from "@ga-fire/contracts";
+import type {
+  EngineVersion,
+  PlaytestApplyRequest,
+  PlaytestApplyResult,
+  PlaytestInitRequest,
+  PlaytestInitResult,
+  PlaytestLegalActionsRequest,
+  PlaytestLegalActionsResult,
+  SolveRequest,
+  SolveResult,
+} from "@ga-fire/contracts";
 import type { Database } from "./db/types.js";
 import { catalogTokenIndex, deckHash, newId, parseDeckText } from "./lib/deck.js";
 import {
@@ -88,6 +98,69 @@ export function createApp(options: {
       });
       const { sampleId } = await persistSolveResult(options.db, body, result);
       return c.json({ ...result, sampleId });
+    } catch (error) {
+      if (error instanceof WorkerError) {
+        return c.json({ error: error.message }, (error.status === 503 ? 503 : 400) as 400 | 503);
+      }
+      throw error;
+    }
+  });
+
+  app.post("/playtest/init", async (c) => {
+    const body = await c.req.json<PlaytestInitRequest>();
+    try {
+      const result = await fetchWorkerJson<PlaytestInitResult>(
+        options.workerBase,
+        "/playtest/init",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      return c.json(result);
+    } catch (error) {
+      if (error instanceof WorkerError) {
+        return c.json({ error: error.message }, (error.status === 503 ? 503 : 400) as 400 | 503);
+      }
+      throw error;
+    }
+  });
+
+  app.post("/playtest/legal-actions", async (c) => {
+    const body = await c.req.json<PlaytestLegalActionsRequest>();
+    try {
+      const result = await fetchWorkerJson<PlaytestLegalActionsResult>(
+        options.workerBase,
+        "/playtest/legal-actions",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      return c.json(result);
+    } catch (error) {
+      if (error instanceof WorkerError) {
+        return c.json({ error: error.message }, (error.status === 503 ? 503 : 400) as 400 | 503);
+      }
+      throw error;
+    }
+  });
+
+  app.post("/playtest/apply", async (c) => {
+    const body = await c.req.json<PlaytestApplyRequest>();
+    try {
+      const result = await fetchWorkerJson<PlaytestApplyResult>(
+        options.workerBase,
+        "/playtest/apply",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      return c.json(result);
     } catch (error) {
       if (error instanceof WorkerError) {
         return c.json({ error: error.message }, (error.status === 503 ? 503 : 400) as 400 | 503);

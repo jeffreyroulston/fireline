@@ -36,6 +36,8 @@ import {
   formatSignedCopies,
   ratioChangeRowClass,
   ratioChangesClass,
+  ratioCriteriaPanelClass,
+  ratioDeltaToneClass,
   ratioRankingHeaderClass,
   ratioRankingItemClass,
   ratioSaveDeckClass,
@@ -239,11 +241,15 @@ export function RatioHistoryPanel({
             )}
 
             {!loading && candidates && candidates.candidates.length > 0 && (
-              <div className="mb-[22px] bg-foreground p-7 text-white">
-                <p className="mb-2.5 font-mono text-[10px] tracking-[0.08em] text-white/55 uppercase">
-                  TOP LISTS ACROSS {groupRuns.length} RUN
-                  {groupRuns.length === 1 ? "" : "S"}
-                </p>
+              <div className={cn(ratioCriteriaPanelClass, "mb-[22px]")}>
+                <SectionHeading
+                  title={
+                    <>
+                      TOP LISTS ACROSS {groupRuns.length} RUN
+                      {groupRuns.length === 1 ? "" : "S"}
+                    </>
+                  }
+                />
                 <ol className="grid list-none grid-cols-1 gap-4 p-0">
                   {candidates.candidates.map((entry) => {
                     const entryCounts = countsFromRecord(entry.counts);
@@ -254,13 +260,13 @@ export function RatioHistoryPanel({
                         className={ratioRankingItemClass}
                       >
                         <header className={cn(ratioRankingHeaderClass, "flex-wrap")}>
-                          <span className="font-mono text-[11px] tracking-[0.08em] text-white/55">
+                          <span className="font-mono text-[11px] tracking-[0.08em] text-muted">
                             #{entry.rank}
                           </span>
                           <strong className="font-display text-[32px] leading-none text-primary">
                             {entry.bestScore.toFixed(2)}
                           </strong>
-                          <small className="font-mono text-[10px] tracking-[0.06em] text-white/55">
+                          <small className="font-mono text-[10px] tracking-[0.06em] text-muted">
                             avg {entry.avgScore.toFixed(2)} · {entry.appearances}{" "}
                             appearance{entry.appearances === 1 ? "" : "s"}
                             {entry.wins > 0
@@ -270,7 +276,7 @@ export function RatioHistoryPanel({
                         </header>
                         {changes.length > 0 && (
                           <div className={ratioChangesClass}>
-                            <p className="m-0 font-mono text-[10px] tracking-[0.06em] text-white/55 uppercase">
+                            <p className="m-0 font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
                               {changes.length} change
                               {changes.length === 1 ? "" : "s"} vs base
                             </p>
@@ -280,9 +286,7 @@ export function RatioHistoryPanel({
                                   key={`${entry.rank}-Δ-${change.id}`}
                                   className={cn(
                                     ratioChangeRowClass,
-                                    change.delta > 0
-                                      ? "[&_b]:text-[#9ed4a8]"
-                                      : "[&_b]:text-[#f0a090]",
+                                    ratioDeltaToneClass(change.delta),
                                   )}
                                 >
                                   <b className="font-mono">
@@ -290,7 +294,7 @@ export function RatioHistoryPanel({
                                   </b>
                                   <span className="grid min-w-0 gap-0.5">
                                     {CARDS[change.id]?.name ?? change.id}
-                                    <small className="font-mono text-[10px] text-white/45">
+                                    <small className="font-mono text-[10px] text-muted">
                                       {change.from}× → {change.to}×
                                     </small>
                                   </span>

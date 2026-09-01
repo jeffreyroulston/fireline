@@ -26,7 +26,7 @@ import {
   type DamageBounds,
 } from "./filtered-leaderboard.js";
 
-const COMPLETE = "complete" as const;
+const DONE_STATUSES = ["complete", "partial"] as const;
 const MAX_POOLED_SAMPLE_BARS = 200;
 
 export async function listVersionGroups(
@@ -46,7 +46,7 @@ export async function listVersionGroups(
       "attribution_version as attributionVersion",
       sql<number>`count(*)::int`.as("runCount"),
     ])
-    .where("status", "=", COMPLETE)
+    .where("status", "in", DONE_STATUSES)
     .where("rules_version", "is not", null)
     .where("sampler_version", "is not", null);
 
@@ -89,7 +89,7 @@ export async function pooledDamageDistribution(
       "samples",
       "started_at",
     ])
-    .where("status", "=", COMPLETE)
+    .where("status", "in", DONE_STATUSES)
     .where("kind", "=", "evaluate")
     .where("deck_hash", "=", options.deckHash)
     .where("sim_type", "=", options.simType)
@@ -274,7 +274,7 @@ export async function getPooledSample(
       "sample_damages as sampleDamages",
     ])
     .where("id", "=", options.runId)
-    .where("status", "=", COMPLETE)
+    .where("status", "in", DONE_STATUSES)
     .where("kind", "=", "evaluate")
     .executeTakeFirst();
 
@@ -354,7 +354,7 @@ export async function pooledSampleHighlights(
       "root_seed",
       "samples",
     ])
-    .where("status", "=", COMPLETE)
+    .where("status", "in", DONE_STATUSES)
     .where("kind", "=", "evaluate")
     .where("deck_hash", "=", options.deckHash)
     .where("sim_type", "=", options.simType)
@@ -525,7 +525,7 @@ export async function cardLeaderboard(
   const runCountRow = await db
     .selectFrom("runs")
     .select(sql<number>`count(*)::int`.as("runCount"))
-    .where("status", "=", COMPLETE)
+    .where("status", "in", DONE_STATUSES)
     .where("kind", "=", "evaluate")
     .where("deck_hash", "=", options.deckHash)
     .where("sim_type", "=", options.simType)
@@ -549,7 +549,7 @@ export async function cardLeaderboard(
       sql<number>`sum(cs.damage)::int`.as("damage"),
       sql<number>`sum(cs.damage_when_seen_sum)::int`.as("damageWhenSeenSum"),
     ])
-    .where("r.status", "=", COMPLETE)
+    .where("r.status", "in", DONE_STATUSES)
     .where("r.kind", "=", "evaluate")
     .where("r.deck_hash", "=", options.deckHash)
     .where("r.sim_type", "=", options.simType)
@@ -563,7 +563,7 @@ export async function cardLeaderboard(
   const sampleRow = await db
     .selectFrom("runs")
     .select(sql<number>`sum(coalesce(samples, 0))::int`.as("totalSamples"))
-    .where("status", "=", COMPLETE)
+    .where("status", "in", DONE_STATUSES)
     .where("kind", "=", "evaluate")
     .where("deck_hash", "=", options.deckHash)
     .where("sim_type", "=", options.simType)
@@ -635,7 +635,7 @@ export async function rankedCandidates(
       sql<number>`avg(c.score)::float8`.as("avgScore"),
       sql<number>`max(c.score)::float8`.as("bestScore"),
     ])
-    .where("r.status", "=", COMPLETE)
+    .where("r.status", "in", DONE_STATUSES)
     .where("r.kind", "=", "optimize")
     .where("r.rules_version", "=", options.version.rulesVersion)
     .where("r.sampler_version", "=", options.version.samplerVersion);

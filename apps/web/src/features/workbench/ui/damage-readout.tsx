@@ -7,17 +7,19 @@ export function DamageReadout({
   detail,
   calculating,
   size = "hero",
+  detailClassName,
 }: {
-  label: ReactNode;
+  label?: ReactNode;
   value: ReactNode;
   detail?: ReactNode;
   calculating?: boolean;
   /** `hero` for result rails; `lg` for sample / line inspectors. */
   size?: "hero" | "lg";
+  detailClassName?: string;
 }) {
   return (
-    <div className="grid grid-cols-[1fr_auto] items-end overflow-visible border-b border-foreground pb-5 [&>small]:font-mono [&>small]:text-[10px] [&>small]:tracking-[0.08em] [&>small]:text-muted [&>span]:font-mono [&>span]:text-[10px] [&>span]:tracking-[0.08em] [&>span]:text-muted">
-      <span>{label}</span>
+    <div className="grid grid-cols-[1fr_auto] items-end overflow-visible border-b border-foreground pb-5 [&>span]:font-mono [&>span]:text-[10px] [&>span]:tracking-[0.08em] [&>span]:text-muted">
+      {label != null && label !== "" ? <span>{label}</span> : null}
       <strong
         className={cn(
           "col-start-2 row-span-2 flex items-baseline font-display leading-[0.85] text-primary",
@@ -29,7 +31,16 @@ export function DamageReadout({
       >
         {value}
       </strong>
-      {detail != null && <small>{detail}</small>}
+      {detail != null && (
+        <small
+          className={cn(
+            "font-mono text-[10px] tracking-[0.08em] text-muted",
+            detailClassName,
+          )}
+        >
+          {detail}
+        </small>
+      )}
     </div>
   );
 }

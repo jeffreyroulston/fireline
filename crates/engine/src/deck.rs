@@ -253,6 +253,8 @@ pub struct OptimizeRequest {
     pub base_deck: BTreeMap<String, u8>,
     #[serde(default)]
     pub swap: Option<SwapConfig>,
+    #[serde(default)]
+    pub multi_deck: Option<MultiDeckConfig>,
     #[serde(default = "default_true")]
     pub go_first: bool,
     #[serde(default = "default_turns")]
@@ -284,6 +286,7 @@ pub enum Strategy {
     HillClimb,
     Genetic,
     SwapSweep,
+    MultiDeck,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -297,6 +300,17 @@ pub struct SwapConfig {
     pub from: String,
     pub count: u8,
     pub candidates: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
+pub struct MultiDeckConfig {
+    pub decks: Vec<BTreeMap<String, u8>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
@@ -357,7 +371,7 @@ pub struct EvalProgress {
 #[serde(rename_all = "camelCase")]
 pub enum HandPhase {
     Started,
-    /// Waiting for a memory-gate slot (machine is full of in-flight hands).
+    /// Waiting for a memory-gate slot (thread cap, planned RAM budget, or park).
     Throttled,
     Rollout,
     Done,
@@ -756,94 +770,100 @@ fn solve_unique_hands(
     let pool = shared_pool()?;
     let cache = Mutex::new(FxHashMap::default());
     let first_error = Mutex::new(None::<EngineError>);
+    // One job per hand. Rayon cannot steal the rest of a worker's chunk while
+    // that worker is inside a long solve, so a single hard hand used to freeze
+    // its leftover queue and drop the run to one thread.
     pool.install(|| {
-        unique.par_iter().for_each(|&(sim_type, key, sample_index)| {
-            if first_error
-                .lock()
-                .unwrap_or_else(|err| err.into_inner())
-                .is_some()
-            {
-                return;
-            }
-            if cancelled.load(Ordering::Relaxed)
-                || ctx.cancel.as_ref().is_some_and(crate::cancel::is_requested)
-            {
-                cancelled.store(true, Ordering::Relaxed);
-                return;
-            }
-            let _thread_permit = job_semaphore.as_ref().map(|sem| sem.acquire());
-            let _permit = gate.as_ref().map(|gate| {
-                gate.acquire_with_notify(THROTTLE_GRACE, || {
-                    let _ = report_hand_progress(
-                        on_hand_progress,
-                        HandProgress {
-                            sample_index,
-                            phase: HandPhase::Throttled,
-                            rollout: 0,
-                            total_rollouts,
-                        },
-                    );
-                })
+        unique
+            .par_iter()
+            .with_max_len(1)
+            .for_each(|&(sim_type, key, sample_index)| {
+                if first_error
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .is_some()
+                {
+                    return;
+                }
+                if cancelled.load(Ordering::Relaxed)
+                    || ctx.cancel.as_ref().is_some_and(crate::cancel::is_requested)
+                {
+                    cancelled.store(true, Ordering::Relaxed);
+                    return;
+                }
+                let _thread_permit = job_semaphore.as_ref().map(|sem| sem.acquire());
+                let _permit = gate.as_ref().map(|gate| {
+                    gate.acquire_with_notify(THROTTLE_GRACE, || {
+                        let _ = report_hand_progress(
+                            on_hand_progress,
+                            HandProgress {
+                                sample_index,
+                                phase: HandPhase::Throttled,
+                                rollout: 0,
+                                total_rollouts,
+                            },
+                        );
+                    })
+                });
+                let hands_done = completed.load(Ordering::Relaxed);
+                match solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx) {
+                    Ok((cache_key, sample)) => {
+                        cache
+                            .lock()
+                            .unwrap_or_else(|err| err.into_inner())
+                            .insert(cache_key, sample);
+                        let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                        if report_eval_progress(
+                            on_progress,
+                            EvalProgress {
+                                sample: n,
+                                total,
+                                rollout: 0,
+                                total_rollouts,
+                            },
+                        )
+                        .is_break()
+                        {
+                            cancelled.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    Err(EngineError::Cancelled) => {
+                        cancelled.store(true, Ordering::Relaxed);
+                    }
+                    Err(EngineError::HandTimeout) => {
+                        let _ = report_hand_progress(
+                            on_hand_progress,
+                            HandProgress {
+                                sample_index,
+                                phase: HandPhase::TimedOut,
+                                rollout: 0,
+                                total_rollouts,
+                            },
+                        );
+                        let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                        if report_eval_progress(
+                            on_progress,
+                            EvalProgress {
+                                sample: n,
+                                total,
+                                rollout: 0,
+                                total_rollouts,
+                            },
+                        )
+                        .is_break()
+                        {
+                            cancelled.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    Err(error) => {
+                        let mut slot = first_error.lock().unwrap_or_else(|err| err.into_inner());
+                        if slot.is_none() {
+                            *slot = Some(error);
+                        }
+                        cancelled.store(true, Ordering::Relaxed);
+                    }
+                }
             });
-            let hands_done = completed.load(Ordering::Relaxed);
-            match solve_one_unique_hand(sim_type, key, sample_index, hands_done, &ctx) {
-                Ok((cache_key, sample)) => {
-                    cache
-                        .lock()
-                        .unwrap_or_else(|err| err.into_inner())
-                        .insert(cache_key, sample);
-                    let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                    if report_eval_progress(
-                        on_progress,
-                        EvalProgress {
-                            sample: n,
-                            total,
-                            rollout: 0,
-                            total_rollouts,
-                        },
-                    )
-                    .is_break()
-                    {
-                        cancelled.store(true, Ordering::Relaxed);
-                    }
-                }
-                Err(EngineError::Cancelled) => {
-                    cancelled.store(true, Ordering::Relaxed);
-                }
-                Err(EngineError::HandTimeout) => {
-                    let _ = report_hand_progress(
-                        on_hand_progress,
-                        HandProgress {
-                            sample_index,
-                            phase: HandPhase::TimedOut,
-                            rollout: 0,
-                            total_rollouts,
-                        },
-                    );
-                    let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                    if report_eval_progress(
-                        on_progress,
-                        EvalProgress {
-                            sample: n,
-                            total,
-                            rollout: 0,
-                            total_rollouts,
-                        },
-                    )
-                    .is_break()
-                    {
-                        cancelled.store(true, Ordering::Relaxed);
-                    }
-                }
-                Err(error) => {
-                    let mut slot = first_error.lock().unwrap_or_else(|err| err.into_inner());
-                    if slot.is_none() {
-                        *slot = Some(error);
-                    }
-                    cancelled.store(true, Ordering::Relaxed);
-                }
-            }
-        });
     });
     if let Some(error) = first_error
         .into_inner()
@@ -1169,6 +1189,20 @@ pub fn optimize_with_progress(
     crate::optimize_strategies::optimize_with_progress(request, on_progress)
 }
 
+/// Like [`optimize_with_progress`], plus per-hand started / rollout / done events
+/// for the multi-bar UI (same events deck-eval streams).
+pub fn optimize_with_hand_progress(
+    request: &OptimizeRequest,
+    on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
+    on_hand_progress: impl FnMut(HandProgress) -> ControlFlow<()> + Send,
+) -> Result<OptimizeResult> {
+    crate::optimize_strategies::optimize_with_hand_progress(
+        request,
+        on_progress,
+        on_hand_progress,
+    )
+}
+
 pub(crate) fn counts_key(counts: &BTreeMap<String, u8>) -> Vec<u8> {
     counts.values().copied().collect()
 }
@@ -1367,6 +1401,7 @@ mod tests {
             strategy: Strategy::RandomSample,
             base_deck: BTreeMap::new(),
             swap: None,
+            multi_deck: None,
             go_first: true,
             max_turns: 3,
             sim_type: crate::model::SimType::FireBrick,

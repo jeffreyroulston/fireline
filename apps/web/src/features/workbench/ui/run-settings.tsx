@@ -32,6 +32,7 @@ export function RunSettings({
   glimpseEnabled,
   maxHandDurationSecs,
   maxCardDraw,
+  playtestMode = false,
   onFirstChange,
   onTurnsChange,
   onSimTypeChange,
@@ -52,6 +53,7 @@ export function RunSettings({
   glimpseEnabled: boolean;
   maxHandDurationSecs: number | null;
   maxCardDraw: number | null;
+  playtestMode?: boolean;
   onFirstChange: (value: boolean) => void;
   onTurnsChange: (value: number) => void;
   onSimTypeChange: (value: SimType) => void;
@@ -90,6 +92,7 @@ export function RunSettings({
           </select>
         </label>
       </div>
+      {!playtestMode && (
       <div className={cn(settingsRowClass, "mt-3.5")}>
         <label>
           Simulation type
@@ -120,6 +123,8 @@ export function RunSettings({
           </label>
         )}
       </div>
+      )}
+      {!playtestMode && (
       <div className={cn(settingsRowClass, "mt-3.5")}>
         <div className="grid flex-1 gap-[7px] font-mono text-[10px] tracking-[0.05em] text-muted uppercase">
           <span>Advanced</span>
@@ -226,12 +231,13 @@ export function RunSettings({
           </details>
         </div>
       </div>
+      )}
       {seed != null && (
         <p className="mt-3 font-mono text-[11px] tracking-[0.06em] text-muted [&_strong]:font-medium [&_strong]:text-foreground">
           Seed <strong>{seed}</strong>
         </p>
       )}
-      {simType !== "fire_brick" && (
+      {simType !== "fire_brick" && !playtestMode && (
         <p className="mt-2 text-xs leading-[1.4] text-muted">
           {orderedPile
             ? "Two-pass and Oracle draw the remaining shuffled pile in order. Monte Carlo still reshuffles that leftover for each rollout."

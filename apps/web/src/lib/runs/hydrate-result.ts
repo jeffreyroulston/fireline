@@ -167,5 +167,7 @@ export function hydrateRatioResult(response: FetchRunResponse): RatioResult | nu
     bestScore: run.best_score ?? best?.score ?? 0,
     top,
     history: run.optimize_history ?? [],
+    strategy:
+      (run.request_body?.strategy as RatioStrategy | undefined) ?? undefined,
   };
 }

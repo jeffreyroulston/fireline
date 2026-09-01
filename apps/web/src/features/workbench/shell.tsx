@@ -9,7 +9,6 @@ import {
   materialDeckCounts,
   parseMaterialDecklist,
   PLAYABLE_CARD_IDS,
-  type CardId,
   type DeckCounts,
 } from "@/lib/engine";
 import {
@@ -300,12 +299,14 @@ export default function FizaWorkbench({
           <LineTab
             hand={solver.hand}
             drawn={solver.drawn}
+            orderedDeck={solver.orderedDeck}
+            deckText={deckText}
+            activeMaterialCounts={activeMaterialCounts}
             solverMode={solver.solverMode}
             selectedCard={solver.selectedCard}
             decks={decks}
             activeDeck={activeDeck}
             recognizedDeckCount={solver.recognizedDeckCount}
-            remainingCount={solver.remainingCount}
             shuffled={solver.orderedDeck.length > 0}
             seed={solver.solveSeed}
             goFirst={solver.goFirst}
@@ -318,16 +319,15 @@ export default function FizaWorkbench({
             maxHandDurationSecs={solver.maxHandDurationSecs}
             maxCardDraw={solver.maxCardDraw}
             busy={solver.busy === "solve"}
+            error={solver.error}
             lineResult={solver.lineResult}
             lineHand={solver.lineHand}
             decksLoading={decksLoading}
             onHandChange={solver.setHand}
-            onDrawnChange={solver.onDrawnChange}
             onSolverModeChange={solver.onSolverModeChange}
             onSelectedCardChange={solver.setSelectedCard}
             onSwitchDeck={switchDeck}
             onDrawRandomHand={solver.drawRandomHandFromDeck}
-            onDrawCard={solver.drawCardFromDeck}
             onShuffleDeck={solver.shuffleDeckFromSeed}
             onGoFirstChange={solver.setGoFirst}
             onTurnsChange={solver.setTurns}
@@ -339,6 +339,7 @@ export default function FizaWorkbench({
             onMaxCardDrawChange={solver.setMaxCardDraw}
             onSolve={solver.solveHand}
             onCancel={solver.cancelHandSolve}
+            onError={solver.setError}
           />
         )}
 
@@ -449,6 +450,11 @@ export default function FizaWorkbench({
                 : undefined
             }
             onSaveDecklist={saveRatioDecklist}
+            onRetestSelected={(decks) => {
+              ratio.setMultiDeckLists(decks);
+              ratio.setRatioStrategy("multiDeck");
+              void solver.optimizeMultiDeck(decks);
+            }}
           />
         )}
 

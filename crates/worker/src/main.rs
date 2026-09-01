@@ -9,8 +9,10 @@ use ga_fire_engine::{
     Budget, CancelFlag, DeckEvalRequest, DeckEvalResult, ENGINE_VERSION, EvalProgress, HandPhase,
     HandProgress, OptimizeProgress, OptimizeRequest, OptimizeResult, PressureLevel, SimType,
     SolveRequest, SolveResult, card_catalog, current_pressure, evaluate_with_hand_progress_cancel,
-    hand_threads, is_save_requested_on, memory_config, new_cancel_flag, request_cancel,
-    request_save,
+    hand_threads, is_save_requested_on, memory_config, new_cancel_flag, optimize_with_hand_progress,
+    playtest_apply, playtest_init, playtest_legal_actions, PlaytestApplyRequest, PlaytestApplyResult,
+    PlaytestInitRequest, PlaytestInitResult, PlaytestLegalActionsRequest, PlaytestLegalActionsResult,
+    request_cancel, request_save,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -74,6 +76,15 @@ enum EvaluateStreamEvent {
 #[serde(rename_all = "camelCase", tag = "kind")]
 enum OptimizeStreamEvent {
     Progress(OptimizeProgress),
+    /// `rename_all` on the enum only renames the `kind` tag; field names on
+    /// struct variants need their own camelCase rename.
+    #[serde(rename_all = "camelCase")]
+    HandProgress {
+        sample_index: u16,
+        phase: HandPhase,
+        rollout: u16,
+        total_rollouts: u16,
+    },
     #[serde(rename_all = "camelCase")]
     MemoryPressure {
         level: PressureLevel,
@@ -115,6 +126,9 @@ async fn main() {
         .route("/version", get(version))
         .route("/cards", get(cards))
         .route("/solve", post(solve_handler))
+        .route("/playtest/init", post(playtest_init_handler))
+        .route("/playtest/legal-actions", post(playtest_legal_actions_handler))
+        .route("/playtest/apply", post(playtest_apply_handler))
         .route("/evaluate", post(evaluate_handler))
         .route("/optimize", post(optimize_handler))
         .route("/jobs/{id}/stop", post(stop_job_handler))
@@ -176,6 +190,44 @@ async fn solve_handler(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map(Json)
         .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+async fn playtest_init_handler(
+    Json(request): Json<PlaytestInitRequest>,
+) -> Result<Json<PlaytestInitResult>, (StatusCode, Json<PlaytestErrorBody>)> {
+    playtest_init(&request)
+        .map(Json)
+        .map_err(playtest_error)
+}
+
+async fn playtest_legal_actions_handler(
+    Json(request): Json<PlaytestLegalActionsRequest>,
+) -> Result<Json<PlaytestLegalActionsResult>, (StatusCode, Json<PlaytestErrorBody>)> {
+    playtest_legal_actions(&request)
+        .map(Json)
+        .map_err(playtest_error)
+}
+
+async fn playtest_apply_handler(
+    Json(request): Json<PlaytestApplyRequest>,
+) -> Result<Json<PlaytestApplyResult>, (StatusCode, Json<PlaytestErrorBody>)> {
+    playtest_apply(&request)
+        .map(Json)
+        .map_err(playtest_error)
+}
+
+#[derive(Serialize)]
+struct PlaytestErrorBody {
+    error: String,
+}
+
+fn playtest_error(error: ga_fire_engine::EngineError) -> (StatusCode, Json<PlaytestErrorBody>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(PlaytestErrorBody {
+            error: error.to_string(),
+        }),
+    )
 }
 
 async fn evaluate_handler(
@@ -287,10 +339,22 @@ async fn optimize_handler(
         );
         let cancel_for_progress = cancel.clone();
         let _cancel_guard = ga_fire_engine::install_cancel(cancel.clone());
-        let result = ga_fire_engine::optimize_with_progress(&request, |progress| {
-            let event = OptimizeStreamEvent::Progress(progress);
-            send_event_or_cancel(&tx, &event, &cancel_for_progress)
-        });
+        let result = optimize_with_hand_progress(
+            &request,
+            |progress| {
+                let event = OptimizeStreamEvent::Progress(progress);
+                send_event_or_cancel(&tx, &event, &cancel_for_progress)
+            },
+            |progress: HandProgress| {
+                let event = OptimizeStreamEvent::HandProgress {
+                    sample_index: progress.sample_index,
+                    phase: progress.phase,
+                    rollout: progress.rollout,
+                    total_rollouts: progress.total_rollouts,
+                };
+                send_event_or_cancel(&tx, &event, &cancel_for_progress)
+            },
+        );
         pressure_stop.store(true, Ordering::Relaxed);
         let event = match result {
             Ok(value) => optimize_result_event(value, &cancel, request.decks),

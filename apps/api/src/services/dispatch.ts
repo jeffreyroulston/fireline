@@ -34,6 +34,15 @@ type EvaluateEvent =
 
 type OptimizeEvent =
   | { kind: "progress" } & Record<string, unknown>
+  | {
+      kind: "handProgress";
+      sampleIndex?: number;
+      sample_index?: number;
+      phase: "started" | "throttled" | "rollout" | "done" | "timedOut";
+      rollout: number;
+      totalRollouts?: number;
+      total_rollouts?: number;
+    }
   | { kind: "memoryPressure"; level: "clear" | "squeeze" | "parked" }
   | { kind: "heartbeat" }
   | { kind: "result" } & OptimizeResult
@@ -246,6 +255,21 @@ export class RunDispatcher {
           if (event.kind === "progress") {
             const { kind: _kind, ...progress } = event;
             runHub.publish(runId, { type: "progress", ...progress });
+          } else if (event.kind === "handProgress") {
+            const sampleIndex =
+              event.sampleIndex ?? event.sample_index;
+            const totalRollouts =
+              event.totalRollouts ?? event.total_rollouts;
+            if (sampleIndex == null || totalRollouts == null) {
+              continue;
+            }
+            runHub.publish(runId, {
+              type: "handProgress" as const,
+              sampleIndex,
+              phase: event.phase,
+              rollout: event.rollout,
+              totalRollouts,
+            });
           } else if (event.kind === "memoryPressure") {
             runHub.publish(runId, {
               type: "memoryPressure" as const,

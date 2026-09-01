@@ -21,21 +21,22 @@ function showsDrawnStrip(mode: SimType): boolean {
   return mode === "oracle_only" || mode === "monte_carlo";
 }
 
+function openingDrawId(events: LineEvent[]): CardId | null {
+  const start = events.find((event) => event.kind === "start");
+  return start?.drawn ? (start.drawn as CardId) : null;
+}
+
 function drawnCardIds(events: LineEvent[]): CardId[] {
   return events.flatMap((event) =>
     event.drawn ? [event.drawn as CardId] : [],
   );
 }
 
-function lineEventsForSample(
-  sample: SampleHand,
-  mode: SimType,
-  mcIndex: number | null,
-): LineEvent[] {
-  if (mode === "monte_carlo" && mcIndex != null && sample.distribution) {
-    return sample.distribution.rollouts[mcIndex]?.events ?? sample.events;
-  }
-  return sample.events;
+function handStripClass(count: number): string {
+  return cn(
+    "pointer-events-none mb-3.5 grid min-h-0 gap-2",
+    count >= 8 ? "grid-cols-8" : "grid-cols-7",
+  );
 }
 
 function sampleDamageReadout(
@@ -88,18 +89,13 @@ function sampleDamageReadout(
   };
 }
 
+/** Rollout damage bars only — no per-rollout line inspector. */
 export function MonteCarloSampleDetail({
   distribution,
-  selected,
-  onSelect,
 }: {
   distribution: DamageDistribution;
-  selected: number | null;
-  onSelect: (index: number | null) => void;
 }) {
   const scaleMax = Math.max(distribution.max, 1);
-  const rollout =
-    selected !== null ? (distribution.rollouts[selected] ?? null) : null;
 
   return (
     <div className="mt-5">
@@ -107,39 +103,13 @@ export function MonteCarloSampleDetail({
         className="short"
         ariaLabel="Hand rollouts"
         scaleMax={scaleMax}
-        selectedKey={selected != null ? String(selected) : null}
-        onSelect={(key) => onSelect(key == null ? null : Number(key))}
         items={distribution.damages.map((damage, index) => ({
           key: String(index),
           damage,
           title: `Rollout ${index + 1}: ${damage}`,
+          disabled: true,
         }))}
       />
-      {rollout && (
-        <>
-          <div className="mt-5">
-            <DamageReadout
-              size="lg"
-              label={`ROLLOUT ${selected! + 1}`}
-              value={rollout.damage}
-              detail="DAMAGE"
-            />
-          </div>
-          {rollout.events.length > 0 ? (
-            <OptimalLine
-              label={`ROLLOUT ${selected! + 1}`}
-              events={rollout.events}
-              resetKey={`sample-mc-${selected}-${rollout.damage}`}
-            />
-          ) : (
-            <p className="mt-3 font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
-              Rollout line tapes are omitted from deck evaluations. The P50
-              headline tape is kept on the sample; re-run this hand in the line
-              solver for full Monte Carlo tapes.
-            </p>
-          )}
-        </>
-      )}
     </div>
   );
 }
@@ -148,31 +118,33 @@ export function LineInspector({
   sample,
   handNumber,
   mode,
-  mcIndex,
-  onMcIndexChange,
   onSendToHandSolver,
   showSendToSolver = true,
   showDamageReadout = true,
   resetKeyPrefix = "sample",
   title,
+  highlightCardId = null,
 }: {
   sample: SampleHand;
   handNumber?: number;
   mode: SimType;
-  mcIndex: number | null;
-  onMcIndexChange: (index: number | null) => void;
   onSendToHandSolver?: (sample: SampleHand) => void;
   showSendToSolver?: boolean;
   showDamageReadout?: boolean;
   resetKeyPrefix?: string;
   title?: ReactNode;
+  highlightCardId?: string | null;
 }) {
   const showingMc = mode === "monte_carlo" && Boolean(sample.distribution);
   const showingTwoPass = mode === "two_pass" && Boolean(sample.twoPass);
-  const lineEvents = lineEventsForSample(sample, mode, mcIndex);
+  const lineEvents = sample.events;
+  const openingDraw =
+    mode === "fire_brick" ? openingDrawId(lineEvents) : null;
+  const displayedHand =
+    openingDraw != null ? [...sample.hand, openingDraw] : sample.hand;
   const drawn = showsDrawnStrip(mode) ? drawnCardIds(lineEvents) : [];
   const remainingPlays = playCountsFromEvents(lineEvents);
-  const handPlayed = consumePlayedSlots(sample.hand, remainingPlays);
+  const handPlayed = consumePlayedSlots(displayedHand, remainingPlays);
   const drawnPlayed = consumePlayedSlots(drawn, remainingPlays);
   const readout = sampleDamageReadout(sample, mode, handNumber);
 
@@ -193,8 +165,11 @@ export function LineInspector({
           meta={<strong>{sample.nodes.toLocaleString()} states</strong>}
         />
       )}
-      <div className="pointer-events-none mb-3.5 grid min-h-0 grid-cols-7 gap-2" aria-label="Sampled opening hand">
-        {sample.hand.map((id, index) => (
+      <div
+        className={handStripClass(displayedHand.length)}
+        aria-label="Sampled opening hand"
+      >
+        {displayedHand.map((id, index) => (
           <HandCard
             key={`${id}-${index}`}
             id={id}
@@ -210,7 +185,7 @@ export function LineInspector({
             meta={<strong>{drawn.length} cards</strong>}
           />
           <div
-            className="pointer-events-none mb-3.5 grid min-h-0 grid-cols-7 gap-2"
+            className={handStripClass(drawn.length)}
             aria-label="Cards drawn on the line"
           >
             {drawn.map((id, index) => (
@@ -234,11 +209,7 @@ export function LineInspector({
       )}
 
       {showingMc && sample.distribution && (
-        <MonteCarloSampleDetail
-          distribution={sample.distribution}
-          selected={mcIndex}
-          onSelect={onMcIndexChange}
-        />
+        <MonteCarloSampleDetail distribution={sample.distribution} />
       )}
 
       {showingTwoPass && sample.twoPass && (
@@ -250,11 +221,12 @@ export function LineInspector({
         />
       )}
 
-      {!showingMc && !showingTwoPass && sample.events.length > 0 && (
+      {!showingTwoPass && sample.events.length > 0 && (
         <OptimalLine
           sampleId={sample.sampleId}
           events={sample.events}
           resetKey={`${resetKeyPrefix}-${handNumber ?? "line"}-${sample.damage}-${sample.nodes}`}
+          highlightCardId={highlightCardId}
         />
       )}
     </div>

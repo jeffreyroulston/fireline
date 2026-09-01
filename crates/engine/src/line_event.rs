@@ -780,6 +780,7 @@ pub fn format_line_event(event: &LineEvent) -> String {
                         | "reduce_to_ash"
                         | "smoke_out"
                         | "spark_alight"
+                        | "flurry_of_fire"
                 )
             ) {
                 card_name
@@ -903,7 +904,16 @@ pub fn format_line_event(event: &LineEvent) -> String {
             }
         }
         EventKind::OnEnterDraw => {
-            format!("Clumsy On-Enter draw ({})", short(event.drawn))
+            if let (Some(discarded), Some(drawn)) = (event.discarded, event.drawn) {
+                format!(
+                    "{} On-Enter discard {} / draw {}",
+                    name(event.card),
+                    short(Some(discarded)),
+                    short(Some(drawn))
+                )
+            } else {
+                format!("Clumsy On-Enter draw ({})", short(event.drawn))
+            }
         }
         EventKind::OnEnterLevel => {
             let self_dmg = event.kindle.unwrap_or(6);

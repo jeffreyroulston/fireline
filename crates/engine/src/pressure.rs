@@ -317,6 +317,11 @@ fn monitor_loop() {
 }
 
 /// Pure admission decision for heavy hands.
+///
+/// Live `MemAvailable` is only a danger-zone brake ([`park_mb`]). Requiring a
+/// full extra [`hand_mem_mb`] of *currently free* RAM collapses concurrency
+/// the moment one hard hand is using its budget: other workers finish, cannot
+/// replace themselves, and the run drops to a single thread.
 pub fn admission_ok(
     in_flight: usize,
     max_threads: usize,
@@ -324,6 +329,7 @@ pub fn admission_ok(
     reserve_mb: u64,
     total_mb: Option<u64>,
     available_mb: Option<u64>,
+    park_mb: u64,
 ) -> bool {
     if in_flight.saturating_add(1) > max_threads {
         return false;
@@ -338,7 +344,7 @@ pub fn admission_ok(
         }
     }
     if let Some(available) = available_mb
-        && available < hand_mem_mb
+        && available < park_mb
     {
         return false;
     }
@@ -387,6 +393,7 @@ impl MemoryGate {
                 config.reserve_mb,
                 config.total_mb,
                 available,
+                config.park_mb,
             ) {
                 *in_flight += 1;
                 return MemoryPermit(self);
@@ -419,12 +426,21 @@ impl MemoryGate {
                 config.reserve_mb,
                 config.total_mb,
                 available,
+                config.park_mb,
             ) {
                 *in_flight += 1;
                 return MemoryPermit(self);
             }
             if !notified && started.elapsed() >= grace {
                 notified = true;
+                tracing::info!(
+                    in_flight = *in_flight,
+                    available_mb = available,
+                    hand_mem_mb = config.hand_mem_mb,
+                    park_mb = config.park_mb,
+                    max_threads = self.max_threads,
+                    "memory gate waiting"
+                );
                 // Drop the lock while notifying so progress callbacks can run.
                 drop(in_flight);
                 on_wait();
@@ -472,15 +488,23 @@ mod tests {
 
     #[test]
     fn admission_respects_thread_cap() {
-        assert!(!admission_ok(4, 4, 3072, 2048, Some(48_000), Some(40_000)));
-        assert!(admission_ok(3, 4, 3072, 2048, Some(48_000), Some(40_000)));
+        assert!(!admission_ok(
+            4, 4, 3072, 2048, Some(48_000), Some(40_000), 1024
+        ));
+        assert!(admission_ok(
+            3, 4, 3072, 2048, Some(48_000), Some(40_000), 1024
+        ));
     }
 
     #[test]
     fn admission_16gb_allows_four_heavy_hands() {
         // 4 * 3072 + 2048 = 14336 <= 16384
-        assert!(admission_ok(3, 16, 3072, 2048, Some(16_384), Some(12_000)));
-        assert!(!admission_ok(4, 16, 3072, 2048, Some(16_384), Some(12_000)));
+        assert!(admission_ok(
+            3, 16, 3072, 2048, Some(16_384), Some(12_000), 1024
+        ));
+        assert!(!admission_ok(
+            4, 16, 3072, 2048, Some(16_384), Some(12_000), 1024
+        ));
     }
 
     #[test]
@@ -491,7 +515,8 @@ mod tests {
             3072,
             2048,
             Some(100_000),
-            Some(80_000)
+            Some(80_000),
+            1024
         ));
         assert!(!admission_ok(
             16,
@@ -499,20 +524,31 @@ mod tests {
             3072,
             2048,
             Some(100_000),
-            Some(80_000)
+            Some(80_000),
+            1024
         ));
     }
 
     #[test]
     fn admission_without_total_falls_back_to_threads() {
-        assert!(admission_ok(7, 8, 3072, 2048, None, Some(40_000)));
-        assert!(!admission_ok(8, 8, 3072, 2048, None, Some(40_000)));
+        assert!(admission_ok(7, 8, 3072, 2048, None, Some(40_000), 1024));
+        assert!(!admission_ok(8, 8, 3072, 2048, None, Some(40_000), 1024));
     }
 
     #[test]
-    fn admission_blocks_when_available_below_hand_budget() {
-        assert!(!admission_ok(0, 8, 3072, 2048, Some(48_000), Some(2048)));
-        assert!(admission_ok(0, 8, 3072, 2048, Some(48_000), Some(3072)));
+    fn admission_blocks_only_in_park_danger_zone() {
+        // 4 GiB free is below a full hand budget but well above park — admit.
+        assert!(admission_ok(1, 8, 3072, 2048, Some(48_000), Some(4096), 1024));
+        assert!(!admission_ok(
+            1, 8, 3072, 2048, Some(48_000), Some(512), 1024
+        ));
+    }
+
+    #[test]
+    fn admission_keeps_filling_when_one_hard_hand_has_spare_ram() {
+        assert!(admission_ok(
+            1, 10, 3072, 3865, Some(61_853), Some(40_000), 1932
+        ));
     }
 
     #[test]

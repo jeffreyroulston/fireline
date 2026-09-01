@@ -1,8 +1,8 @@
 use crate::{
     deck::{
-        DeckEvalRequest, DeckEvalResult, HistoryPoint, Metric, OptimizeProgress, OptimizeRequest,
-        OptimizeResult, RankedDeck, Strategy, consider_top, count_legal_decks, counts_key,
-        initial_counts, ranked_decks,
+        DeckEvalRequest, DeckEvalResult, HandProgress, HistoryPoint, Metric, OptimizeProgress,
+        OptimizeRequest, OptimizeResult, RankedDeck, Strategy, consider_top, count_legal_decks,
+        counts_key, initial_counts, ranked_decks,
     },
     error::{EngineError, Result},
     model::{Bounds, EffectiveRequest},
@@ -11,15 +11,26 @@ use crate::{
 };
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
+use std::sync::Mutex;
 use std::time::Instant;
 
 pub fn optimize_with_progress(
     request: &OptimizeRequest,
     on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
 ) -> Result<OptimizeResult> {
+    optimize_with_hand_progress(request, on_progress, |_| ControlFlow::Continue(()))
+}
+
+pub fn optimize_with_hand_progress(
+    request: &OptimizeRequest,
+    on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
+    on_hand_progress: impl FnMut(HandProgress) -> ControlFlow<()> + Send,
+) -> Result<OptimizeResult> {
+    let on_hand_progress = Mutex::new(on_hand_progress);
     match request.strategy {
-        Strategy::SwapSweep => optimize_swap_sweep(request, on_progress),
-        _ => optimize_search(request, on_progress),
+        Strategy::SwapSweep => optimize_swap_sweep(request, on_progress, &on_hand_progress),
+        Strategy::MultiDeck => optimize_multi_deck(request, on_progress, &on_hand_progress),
+        _ => optimize_search(request, on_progress, &on_hand_progress),
     }
 }
 
@@ -29,6 +40,7 @@ fn strategy_label(strategy: Strategy) -> &'static str {
         Strategy::HillClimb => "hillClimb",
         Strategy::Genetic => "genetic",
         Strategy::SwapSweep => "swapSweep",
+        Strategy::MultiDeck => "multiDeck",
     }
 }
 
@@ -108,61 +120,81 @@ impl OptimizeSearchState {
     }
 }
 
-struct ScoreContext<'a> {
+struct ScoreContext<'a, H> {
     request: &'a OptimizeRequest,
     target: u32,
     legal_decks: u64,
     total_hands: u64,
+    on_hand_progress: &'a Mutex<H>,
 }
 
 fn score_optimize_deck_full(
     counts: &BTreeMap<String, u8>,
-    ctx: &ScoreContext<'_>,
+    ctx: &ScoreContext<'_, impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
     decks_scored: &mut u32,
     best_score: f64,
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
 ) -> Result<DeckEvalResult> {
-    *decks_scored += 1;
     if crate::cancel::is_cancel_requested() {
         return Err(EngineError::Cancelled);
     }
-    let deck_number = *decks_scored;
+    let deck_number = *decks_scored + 1;
     let samples = ctx.request.samples;
-    crate::deck::evaluate_with_progress(
-        &DeckEvalRequest {
-            deck: counts.clone(),
-            samples,
-            go_first: ctx.request.go_first,
-            max_turns: ctx.request.max_turns,
-            seed: ctx.request.seed.wrapping_add(u64::from(deck_number) * 131),
-            sim_type: ctx.request.sim_type,
-            rollouts: ctx.request.rollouts,
-            budget: ctx.request.budget,
-            materials: ctx.request.materials.clone(),
-            max_threads: ctx.request.max_threads,
-            glimpse_enabled: ctx.request.glimpse_enabled,
-            max_hand_duration_secs: ctx.request.max_hand_duration_secs,
-            max_card_draw: ctx.request.max_card_draw,
-        },
-        |progress| {
-            let hands_simulated = u64::from(deck_number.saturating_sub(1)) * u64::from(samples)
-                + u64::from(progress.sample);
-            on_progress(OptimizeProgress {
-                decks_scored: deck_number,
-                total_decks: ctx.target,
-                legal_decks: ctx.legal_decks,
-                hands_simulated,
-                total_hands: ctx.total_hands,
-                best_score,
-            })
-        },
-    )
+    let request = DeckEvalRequest {
+        deck: counts.clone(),
+        samples,
+        go_first: ctx.request.go_first,
+        max_turns: ctx.request.max_turns,
+        seed: ctx.request.seed.wrapping_add(u64::from(deck_number) * 131),
+        sim_type: ctx.request.sim_type,
+        rollouts: ctx.request.rollouts,
+        budget: ctx.request.budget,
+        materials: ctx.request.materials.clone(),
+        max_threads: ctx.request.max_threads,
+        glimpse_enabled: ctx.request.glimpse_enabled,
+        max_hand_duration_secs: ctx.request.max_hand_duration_secs,
+        max_card_draw: ctx.request.max_card_draw,
+    };
+    let on_eval_progress = |progress: crate::deck::EvalProgress| {
+        let hands_simulated = u64::from(deck_number.saturating_sub(1)) * u64::from(samples)
+            + u64::from(progress.sample);
+        on_progress(OptimizeProgress {
+            decks_scored: deck_number,
+            total_decks: ctx.target,
+            legal_decks: ctx.legal_decks,
+            hands_simulated,
+            total_hands: ctx.total_hands,
+            best_score,
+        })
+    };
+    let on_eval_hand = |hand| {
+        ctx.on_hand_progress
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())(hand)
+    };
+    // Nested evals inherit the job flag so cancel/save abort the in-flight
+    // hand. The candidate list being scored is dropped; already-finished
+    // lists stay in the optimizer's history.
+    let eval = match crate::cancel::current_flag() {
+        Some(flag) => crate::deck::evaluate_with_hand_progress_cancel(
+            &request,
+            on_eval_progress,
+            on_eval_hand,
+            flag,
+        ),
+        None => crate::deck::evaluate_with_hand_progress(&request, on_eval_progress, on_eval_hand),
+    }?;
+    if crate::cancel::is_cancel_requested() {
+        return Err(EngineError::Cancelled);
+    }
+    *decks_scored += 1;
+    Ok(eval)
 }
 
 fn try_score_search(
     counts: BTreeMap<String, u8>,
     state: &mut OptimizeSearchState,
-    ctx: &ScoreContext<'_>,
+    ctx: &ScoreContext<'_, impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
 ) -> Result<bool> {
     let key = counts_key(&counts);
@@ -184,6 +216,7 @@ fn try_score_search(
 fn optimize_search(
     request: &OptimizeRequest,
     mut on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
+    on_hand_progress: &Mutex<impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
 ) -> Result<OptimizeResult> {
     let started = Instant::now();
     let legal_decks = count_legal_decks(&request.bounds, request.deck_size)?;
@@ -217,6 +250,7 @@ fn optimize_search(
         target,
         legal_decks,
         total_hands,
+        on_hand_progress,
     };
 
     let search = match request.strategy {
@@ -224,6 +258,7 @@ fn optimize_search(
         Strategy::HillClimb => optimize_hill_climb(request, &ctx, &mut state, &mut on_progress),
         Strategy::Genetic => optimize_genetic(request, &ctx, &mut state, &mut on_progress),
         Strategy::SwapSweep => unreachable!(),
+        Strategy::MultiDeck => unreachable!(),
     };
     if let Err(EngineError::Cancelled) = &search
         && crate::cancel::is_save_requested()
@@ -274,7 +309,7 @@ fn optimize_result_from_search(
 
 fn optimize_random_sample(
     request: &OptimizeRequest,
-    ctx: &ScoreContext<'_>,
+    ctx: &ScoreContext<'_, impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
     state: &mut OptimizeSearchState,
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
 ) -> Result<()> {
@@ -334,7 +369,7 @@ fn legal_neighbors(
 
 fn optimize_hill_climb(
     request: &OptimizeRequest,
-    ctx: &ScoreContext<'_>,
+    ctx: &ScoreContext<'_, impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
     state: &mut OptimizeSearchState,
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
 ) -> Result<()> {
@@ -493,7 +528,7 @@ fn mutate(counts: &mut BTreeMap<String, u8>, bounds: &BTreeMap<String, Bounds>, 
 
 fn optimize_genetic(
     request: &OptimizeRequest,
-    ctx: &ScoreContext<'_>,
+    ctx: &ScoreContext<'_, impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
     state: &mut OptimizeSearchState,
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
 ) -> Result<()> {
@@ -610,6 +645,7 @@ pub fn apply_fixed_swap(
 fn optimize_swap_sweep(
     request: &OptimizeRequest,
     mut on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
+    on_hand_progress: &Mutex<impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
 ) -> Result<OptimizeResult> {
     let started = Instant::now();
     let swap = request
@@ -647,6 +683,7 @@ fn optimize_swap_sweep(
         target,
         legal_decks,
         total_hands,
+        on_hand_progress,
     };
 
     let mut decks_scored = 0_u32;
@@ -745,6 +782,162 @@ fn optimize_swap_sweep(
     ))
 }
 
+fn deck_total(counts: &BTreeMap<String, u8>) -> u32 {
+    counts.values().map(|copies| u32::from(*copies)).sum()
+}
+
+fn optimize_multi_deck(
+    request: &OptimizeRequest,
+    mut on_progress: impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send,
+    on_hand_progress: &Mutex<impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
+) -> Result<OptimizeResult> {
+    let started = Instant::now();
+    let multi = request
+        .multi_deck
+        .as_ref()
+        .ok_or_else(|| EngineError::invalid("multi deck config is required for multi deck"))?;
+    if multi.decks.is_empty() {
+        return Err(EngineError::invalid(
+            "multi deck requires at least one decklist",
+        ));
+    }
+
+    let target = multi.decks.len() as u32;
+    let total_hands = u64::from(target) * u64::from(request.samples);
+    let legal_decks = u64::from(target);
+
+    if on_progress(OptimizeProgress {
+        decks_scored: 0,
+        total_decks: target,
+        legal_decks,
+        hands_simulated: 0,
+        total_hands,
+        best_score: 0.0,
+    })
+    .is_break()
+    {
+        return Err(EngineError::Cancelled);
+    }
+
+    let ctx = ScoreContext {
+        request,
+        target,
+        legal_decks,
+        total_hands,
+        on_hand_progress,
+    };
+
+    let mut decks_scored = 0_u32;
+    let mut history = Vec::new();
+    let mut rows: Vec<RankedDeck> = Vec::with_capacity(multi.decks.len());
+
+    for counts in &multi.decks {
+        let total = deck_total(counts);
+        if total != u32::from(request.deck_size) {
+            return Err(EngineError::invalid(format!(
+                "decklist has {total} cards; expected {}",
+                request.deck_size
+            )));
+        }
+        let eval = match score_optimize_deck_full(
+            counts,
+            &ctx,
+            &mut decks_scored,
+            rows.iter()
+                .map(|row| row.score)
+                .max_by(f64::total_cmp)
+                .unwrap_or(0.0),
+            &mut on_progress,
+        ) {
+            Ok(eval) => eval,
+            Err(EngineError::Cancelled) if crate::cancel::is_save_requested() => {
+                return Ok(finish_multi_deck(
+                    request,
+                    target,
+                    legal_decks,
+                    rows,
+                    history,
+                    decks_scored,
+                    started,
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        let score = metric_score(&eval, request.metric);
+        history.push(HistoryPoint {
+            iteration: decks_scored as u16,
+            score,
+        });
+        rows.push(RankedDeck {
+            rank: 0,
+            score,
+            counts: counts.clone(),
+            score_delta: None,
+            card_stats: eval.card_stats,
+            candidate: None,
+        });
+    }
+
+    let _ = on_progress(OptimizeProgress {
+        decks_scored,
+        total_decks: target,
+        legal_decks,
+        hands_simulated: u64::from(decks_scored) * u64::from(request.samples),
+        total_hands,
+        best_score: rows
+            .iter()
+            .map(|row| row.score)
+            .max_by(f64::total_cmp)
+            .unwrap_or(0.0),
+    });
+
+    Ok(finish_multi_deck(
+        request,
+        target,
+        legal_decks,
+        rows,
+        history,
+        decks_scored,
+        started,
+    ))
+}
+
+fn finish_multi_deck(
+    request: &OptimizeRequest,
+    target: u32,
+    legal_decks: u64,
+    mut rows: Vec<RankedDeck>,
+    history: Vec<HistoryPoint>,
+    decks_scored: u32,
+    started: Instant,
+) -> OptimizeResult {
+    rows.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for (index, row) in rows.iter_mut().enumerate() {
+        row.rank = (index + 1) as u8;
+    }
+    let best = rows
+        .first()
+        .map(|row| row.counts.clone())
+        .unwrap_or_default();
+    let best_score = rows.first().map(|row| row.score).unwrap_or(0.0);
+
+    OptimizeResult {
+        best_counts: best,
+        best_score,
+        top: rows,
+        history,
+        legal_decks,
+        decks_scored,
+        elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+        effective: build_effective(request, target),
+    }
+}
+
 #[expect(clippy::too_many_arguments)]
 fn finish_swap_sweep(
     request: &OptimizeRequest,
@@ -818,6 +1011,7 @@ mod tests {
                 count: 1,
                 candidates: vec!["sable_remnant".into(), "blazing_throw".into()],
             }),
+            multi_deck: None,
             go_first: true,
             max_turns: 3,
             sim_type: crate::model::SimType::FireBrick,
@@ -859,6 +1053,7 @@ mod tests {
                 count: 1,
                 candidates: vec!["sable_remnant".into()],
             }),
+            multi_deck: None,
             go_first: true,
             max_turns: 3,
             sim_type: crate::model::SimType::FireBrick,
@@ -900,6 +1095,44 @@ mod tests {
     }
 
     #[test]
+    fn optimize_save_discards_the_in_progress_deck() {
+        let flag = crate::cancel::new_flag();
+        let request = OptimizeRequest {
+            bounds: sample_bounds(),
+            deck_size: 7,
+            samples: 4,
+            decks: 4,
+            metric: Metric::Mean,
+            seed: 3,
+            budget: Budget::default(),
+            materials: BTreeMap::new(),
+            strategy: Strategy::RandomSample,
+            base_deck: BTreeMap::new(),
+            swap: None,
+            multi_deck: None,
+            go_first: true,
+            max_turns: 2,
+            sim_type: crate::model::SimType::FireBrick,
+            rollouts: 1,
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+            max_card_draw: None,
+        };
+        let _guard = crate::cancel::install(flag.clone());
+        let result = optimize_with_progress(&request, |progress| {
+            if progress.decks_scored >= 2 {
+                crate::cancel::request_save(&flag);
+            }
+            ControlFlow::Continue(())
+        })
+        .expect("save should keep finished lists");
+        assert_eq!(result.decks_scored, 1);
+        assert_eq!(result.history.len(), 1);
+        assert_eq!(result.top.len(), 1);
+    }
+
+    #[test]
     fn hill_climb_is_deterministic() {
         let request = OptimizeRequest {
             bounds: sample_bounds(),
@@ -913,6 +1146,7 @@ mod tests {
             strategy: Strategy::HillClimb,
             base_deck: BTreeMap::new(),
             swap: None,
+            multi_deck: None,
             go_first: true,
             max_turns: 3,
             sim_type: crate::model::SimType::FireBrick,
@@ -942,6 +1176,7 @@ mod tests {
             strategy: Strategy::Genetic,
             base_deck: BTreeMap::new(),
             swap: None,
+            multi_deck: None,
             go_first: true,
             max_turns: 3,
             sim_type: crate::model::SimType::FireBrick,

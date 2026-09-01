@@ -1,4 +1,4 @@
-import { CARDS, type CardId } from "@/lib/engine";
+import { CARDS, cardDisplayName, type CardId } from "@/lib/engine";
 import { cardImageUrl } from "@/lib/card-images";
 import { cn } from "@/lib/utils/cn";
 import {
@@ -16,14 +16,16 @@ export function HandCard({
   id,
   onClick,
   faded = false,
+  className,
 }: {
   id: CardId;
   onClick?: () => void;
   /** Dim cards that were not played on the evaluated line. */
   faded?: boolean;
+  className?: string;
 }) {
   const card = CARDS[id];
-  const name = card?.name ?? id;
+  const name = card?.name ?? cardDisplayName(id);
   const src = cardImageUrl(id);
   const isFire = card?.element === "fire";
   const face = src ? (
@@ -50,6 +52,7 @@ export function HandCard({
   const shellClass = cn(
     handCardClass,
     faded && "opacity-45 grayscale-[35%] [&_img]:border-foreground/10",
+    className,
   );
 
   if (onClick) {

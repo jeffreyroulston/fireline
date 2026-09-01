@@ -37,7 +37,7 @@ const SIM_TYPES = new Set<SimType>([
 const CARD_KINDS = new Set(["ally", "attack", "action", "item"]);
 
 /** Path segments that must never be treated as workbench modes. */
-export const RESERVED_PATH_SEGMENTS = new Set(["api"]);
+export const RESERVED_PATH_SEGMENTS = new Set(["api", "prototype"]);
 
 export function tabFromPath(mode: string): Tab | null {
   if (RESERVED_PATH_SEGMENTS.has(mode)) {

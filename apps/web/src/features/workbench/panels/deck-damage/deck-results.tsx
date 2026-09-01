@@ -96,6 +96,7 @@ export function DeckResults({
           bars={bars}
           simType={mode}
           cardHighlights={barCardHighlights}
+          highlightCardId={selectedLeaderboardCard}
           liveHands={result.hands}
           showSendToSolver
           onSendToHandSolver={onSendToHandSolver}

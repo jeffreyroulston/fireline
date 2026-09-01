@@ -15,7 +15,8 @@ export function listToCounts(cards: CardId[]): DeckCounts {
 }
 
 /** Soft cap used by the visual deck builder. */
-export function maxCopiesForCard(_id: CardId): number {
+export function maxCopiesForCard(id: CardId): number {
+  void id;
   return 4;
 }
 

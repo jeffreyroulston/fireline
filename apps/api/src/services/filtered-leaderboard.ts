@@ -72,7 +72,7 @@ export async function cardLeaderboardFromSamples(
   const runs = await db
     .selectFrom("runs")
     .select(["id", "deck_counts", "samples", "request_body"])
-    .where("status", "=", "complete")
+    .where("status", "in", ["complete", "partial"])
     .where("kind", "=", "evaluate")
     .where("deck_hash", "=", options.deckHash)
     .where("sim_type", "=", options.simType)

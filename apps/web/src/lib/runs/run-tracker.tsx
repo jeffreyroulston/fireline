@@ -155,8 +155,8 @@ function runsMapToArray(runs: Map<string, TrackedRun>): TrackedRun[] {
 
 export function RunTrackerProvider({ children }: { children: ReactNode }) {
   const [runs, setRuns] = useState<Map<string, TrackedRun>>(() => new Map());
-  const [dismissedRunIds, setDismissedRunIds] = useState<Set<string>>(() =>
-    loadDismissedRunIds(),
+  const [dismissedRunIds, setDismissedRunIds] = useState<Set<string>>(
+    () => new Set(),
   );
   const [workerStateReady, setWorkerStateReady] = useState(false);
   const [workerReachable, setWorkerReachable] = useState(true);

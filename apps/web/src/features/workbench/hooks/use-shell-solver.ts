@@ -19,6 +19,7 @@ import {
   parseDecklist,
   PLAYABLE_CARD_IDS,
   type CardId,
+  type DeckCounts,
   type SimType,
   type SolveResult,
 } from "@/lib/engine";
@@ -124,6 +125,7 @@ export type ShellSolverActions = Readonly<{
   solveHand: () => Promise<void>;
   evaluateCurrentDeck: () => Promise<void>;
   optimizeCurrentBounds: () => Promise<void>;
+  optimizeMultiDeck: (deckLists: readonly DeckCounts[]) => Promise<void>;
   cancelHandSolve: () => void;
   cancelEvaluateJob: () => void;
   saveEvaluateJob: () => void;
@@ -390,6 +392,11 @@ export function useShellSolver({
       return;
     }
 
+    if (ratio.ratioStrategy === "multiDeck") {
+      await optimizeMultiDeck(ratio.multiDeckLists);
+      return;
+    }
+
     if (ratio.ratioStrategy === "swapSweep") {
       if (!ratio.swapFrom) {
         setError("Pick a swappable card for swap sweep.");
@@ -548,6 +555,90 @@ export function useShellSolver({
     }
   }
 
+  async function optimizeMultiDeck(deckLists: readonly DeckCounts[]) {
+    if (optimizeBusy) {
+      return;
+    }
+    if (!workerReachable) {
+      setError("The simulation worker is offline. Try again when it is back.");
+      return;
+    }
+    const deckId = activeDeck?.id;
+    if (!deckId || !activeDeck) {
+      setError("Save or select a deck before running the ratio lab.");
+      return;
+    }
+    if (deckLists.length === 0) {
+      setError("Add at least one decklist to the multi-deck test.");
+      return;
+    }
+    if (deckLists.length > MAX_RATIO_DECK_ATTEMPTS) {
+      setError(
+        `Multi-deck test supports at most ${MAX_RATIO_DECK_ATTEMPTS} lists.`,
+      );
+      return;
+    }
+    for (const [index, counts] of deckLists.entries()) {
+      const total = Object.values(counts).reduce((sum, copies) => sum + copies, 0);
+      if (total !== ratio.deckSize) {
+        setError(
+          `List ${index + 1} has ${total} cards; expected ${ratio.deckSize}.`,
+        );
+        return;
+      }
+    }
+
+    const deckCount = deckLists.length;
+    setError("");
+    ratio.setRatioCriteria(null);
+    const initialProgress: OptimizeProgress = {
+      decksScored: 0,
+      totalDecks: deckCount,
+      legalDecks: deckCount,
+      handsSimulated: 0,
+      totalHands: deckCount * ratio.ratioSamples,
+      bestScore: 0,
+    };
+    try {
+      await startOptimize(
+        deckId,
+        activeDeck.name,
+        {
+          bounds: {},
+          deckSize: ratio.deckSize,
+          samples: ratio.ratioSamples,
+          decks: deckCount,
+          metric: ratio.metric,
+          strategy: "multiDeck",
+          baseDeck: {},
+          swap: null,
+          multiDeck: { decks: [...deckLists] },
+          seed: makeSeed() as unknown as bigint,
+          materials: activeMaterialCounts,
+          budget: DEFAULT_BUDGET,
+          goFirst,
+          maxTurns: turns,
+          simType,
+          rollouts,
+          ...advancedRunFields(
+            simType,
+            maxThreads,
+            glimpseEnabled,
+            maxHandDurationSecs,
+            maxCardDraw,
+          ),
+        },
+        initialProgress,
+      );
+    } catch (optimizeError) {
+      setError(
+        optimizeError instanceof Error
+          ? optimizeError.message
+          : "Multi-deck test failed.",
+      );
+    }
+  }
+
   function cancelHandSolve() {
     setBusy(null);
     setError("Calculation cancelled.");
@@ -632,7 +723,19 @@ export function useShellSolver({
   }
 
   function shuffleDeckFromSeed() {
-    dealShuffledPile(makeSeed());
+    const pile = cardsFromCounts(listToCounts(parseDecklist(deckText)));
+    if (pile.length < OPENING_HAND_SIZE) {
+      setError(
+        `Need at least ${OPENING_HAND_SIZE} recognized cards in the selected deck to shuffle.`,
+      );
+      return;
+    }
+    const seed = makeSeed();
+    setSolveSeed(seed);
+    setOrderedDeck(shuffleDeck(pile, seed));
+    setDrawn([]);
+    setLineResult(null);
+    setError("");
   }
 
   function drawCardFromDeck() {
@@ -736,6 +839,7 @@ export function useShellSolver({
     solveHand,
     evaluateCurrentDeck,
     optimizeCurrentBounds,
+    optimizeMultiDeck,
     cancelHandSolve,
     cancelEvaluateJob,
     saveEvaluateJob,

@@ -16,6 +16,7 @@ export function OptimalLine({
   stepDiff,
   diffPerspective,
   meta,
+  highlightCardId = null,
 }: {
   label?: string;
   sampleId?: string | null;
@@ -24,6 +25,7 @@ export function OptimalLine({
   stepDiff?: StepDiffInfo[];
   diffPerspective?: "oracle" | "brick";
   meta?: ReactNode;
+  highlightCardId?: string | null;
 }) {
   const [query, setQuery] = useState("");
 
@@ -78,6 +80,7 @@ export function OptimalLine({
         stepDiff={stepDiff}
         diffPerspective={diffPerspective}
         query={trimmed}
+        highlightCardId={highlightCardId}
       />
     </div>
   );

@@ -7,8 +7,8 @@
 //! finished hands instead of discarding the job.
 
 use std::cell::RefCell;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 thread_local! {
     static CURRENT: RefCell<Option<CancelFlag>> = const { RefCell::new(None) };
@@ -66,6 +66,13 @@ pub fn is_save_requested() -> bool {
     })
 }
 
+/// The flag installed on this thread, if any. Nested deck evals clone it onto
+/// rayon workers so cancel/save abort the in-flight hand instead of waiting
+/// for the current candidate list to finish.
+pub fn current_flag() -> Option<CancelFlag> {
+    CURRENT.with(|slot| slot.borrow().clone())
+}
+
 /// Install `flag` for the current thread until the guard drops (restores prior).
 pub fn install(flag: CancelFlag) -> CancelInstallGuard {
     CURRENT.with(|slot| {
@@ -114,5 +121,16 @@ mod tests {
         let _guard = install(flag);
         assert!(is_cancel_requested());
         assert!(is_save_requested());
+    }
+
+    #[test]
+    fn current_flag_tracks_install() {
+        assert!(current_flag().is_none());
+        let flag = new_flag();
+        {
+            let _guard = install(flag.clone());
+            assert!(Arc::ptr_eq(&current_flag().expect("installed"), &flag));
+        }
+        assert!(current_flag().is_none());
     }
 }

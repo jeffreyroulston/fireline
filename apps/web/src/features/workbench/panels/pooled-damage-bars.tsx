@@ -44,10 +44,8 @@ export function usePooledSampleSelection(
   const [sample, setSample] = useState<SampleHand | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const [mcIndex, setMcIndex] = useState<number | null>(null);
 
   useEffect(() => {
-    setMcIndex(null);
     if (!runId || sampleIndex == null) {
       setSample(null);
       setLoading(false);
@@ -92,7 +90,7 @@ export function usePooledSampleSelection(
     };
   }, [runId, sampleIndex]);
 
-  return { sample, loading, loadError, mcIndex, setMcIndex };
+  return { sample, loading, loadError };
 }
 
 const historyBarsPanelClass =
@@ -188,22 +186,20 @@ export function PooledSampleDetail({
   sample,
   loading,
   loadError,
-  mcIndex,
-  onMcIndexChange,
   showSendToSolver = false,
   onSendToHandSolver,
   resetKeyPrefix,
+  highlightCardId = null,
 }: {
   selectedBar: PooledSampleBar | null;
   simType: SimType;
   sample: SampleHand | null;
   loading: boolean;
   loadError: string;
-  mcIndex: number | null;
-  onMcIndexChange: (index: number | null) => void;
   showSendToSolver?: boolean;
   onSendToHandSolver?: (sample: SampleHand) => void;
   resetKeyPrefix?: string;
+  highlightCardId?: string | null;
 }) {
   const detailRef = useRef<HTMLDivElement>(null);
 
@@ -233,14 +229,13 @@ export function PooledSampleDetail({
           sample={sample}
           handNumber={selectedBar.sampleIndex + 1}
           mode={simType}
-          mcIndex={mcIndex}
-          onMcIndexChange={onMcIndexChange}
           showSendToSolver={showSendToSolver}
           onSendToHandSolver={onSendToHandSolver}
           resetKeyPrefix={
             resetKeyPrefix ??
             `line-${selectedBar.runId}-${selectedBar.sampleIndex}`
           }
+          highlightCardId={highlightCardId}
         />
       )}
     </div>

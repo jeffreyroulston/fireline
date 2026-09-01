@@ -11,7 +11,7 @@ import {
   type CardId,
   type DeckCounts,
 } from "@/lib/engine";
-import { snapshotRatioCriteria } from "../panels/ratios";
+import { snapshotRatioCriteria, deckCountsTotal, isSameDeckCounts } from "../panels/ratios/shared";
 import type { RatioRefineCriteria, RatioStrategy } from "../types";
 import { refineBounds, REFINE_COPY_CEILING } from "../utils";
 
@@ -30,6 +30,7 @@ export type RatioStateSnapshot = Readonly<{
   swapFrom: CardId | "";
   swapCount: number;
   swapCandidates: Partial<Record<CardId, boolean>>;
+  multiDeckLists: DeckCounts[];
   ratioCriteria: RatioRefineCriteria | null;
   ratioBaseCounts: DeckCounts;
   ratioRecognizedCount: number;
@@ -54,6 +55,10 @@ export type RatioStateActions = Readonly<{
   setRatioStrategy: (value: RatioStrategy) => void;
   setSwapFrom: (value: CardId | "") => void;
   setSwapCount: (value: number) => void;
+  setMultiDeckLists: (value: DeckCounts[]) => void;
+  appendMultiDeckList: (counts: DeckCounts) => string | null;
+  removeMultiDeckList: (index: number) => void;
+  clearMultiDeckLists: () => void;
   setRatioCriteria: (value: RatioRefineCriteria | null) => void;
   snapshotCriteria: (baseDeckName: string) => RatioRefineCriteria;
 }>;
@@ -80,6 +85,7 @@ export function useRatioState({
   const [swapCandidates, setSwapCandidates] = useState<
     Partial<Record<CardId, boolean>>
   >({});
+  const [multiDeckLists, setMultiDeckListsState] = useState<DeckCounts[]>([]);
   const [ratioCriteria, setRatioCriteria] =
     useState<RatioRefineCriteria | null>(null);
 
@@ -130,6 +136,7 @@ export function useRatioState({
     setRatioCriteria(null);
     setCutBudgets({});
     setReplacements({});
+    setMultiDeckListsState([]);
   }, [activeDeckId, decksHydrated]);
 
   useEffect(() => {
@@ -202,6 +209,40 @@ export function useRatioState({
     );
   }
 
+  function setMultiDeckLists(value: DeckCounts[]) {
+    setMultiDeckListsState(value);
+  }
+
+  function removeMultiDeckList(index: number) {
+    setMultiDeckListsState((current) =>
+      current.filter((_, itemIndex) => itemIndex !== index),
+    );
+  }
+
+  function clearMultiDeckLists() {
+    setMultiDeckListsState([]);
+  }
+
+  function appendMultiDeckList(counts: DeckCounts): string | null {
+    const total = deckCountsTotal(counts);
+    if (total !== deckSize) {
+      return `Deck has ${total} cards; expected ${deckSize}.`;
+    }
+    let error: string | null = null;
+    setMultiDeckListsState((current) => {
+      if (current.some((existing) => isSameDeckCounts(existing, counts))) {
+        error = "That list is already queued.";
+        return current;
+      }
+      if (current.length >= MAX_RATIO_DECK_ATTEMPTS) {
+        error = `Multi-deck test supports at most ${MAX_RATIO_DECK_ATTEMPTS} lists.`;
+        return current;
+      }
+      return [...current, counts];
+    });
+    return error;
+  }
+
   return {
     cutBudgets,
     replacements,
@@ -211,6 +252,7 @@ export function useRatioState({
     swapFrom,
     swapCount,
     swapCandidates,
+    multiDeckLists,
     ratioCriteria,
     ratioBaseCounts,
     ratioRecognizedCount,
@@ -232,6 +274,10 @@ export function useRatioState({
     setRatioStrategy,
     setSwapFrom,
     setSwapCount,
+    setMultiDeckLists,
+    appendMultiDeckList,
+    removeMultiDeckList,
+    clearMultiDeckLists,
     setRatioCriteria,
     snapshotCriteria,
   };

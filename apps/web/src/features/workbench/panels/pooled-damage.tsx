@@ -117,6 +117,67 @@ export function sampleBarsFromDeckResult(result: DeckResult): PooledSampleBar[] 
   }));
 }
 
+export function syntheticDamagesForMean(mean: number, samples: number): number[] {
+  if (samples <= 0) {
+    return [];
+  }
+  const spread = Math.max(1.2, mean * 0.11);
+  return Array.from({ length: samples }, (_, index) => {
+    const phase = (index * 0.6180339887) % 1;
+    const z = (phase - 0.5) * 2.4;
+    return Math.max(0, Math.round(mean + z * spread));
+  });
+}
+
+export function distributionFromDamages(
+  damages: number[],
+  options?: {
+    mean?: number;
+    meanEndInfluence?: number | null;
+  },
+): PooledDistribution {
+  if (damages.length === 0) {
+    const mean = options?.mean ?? 0;
+    return {
+      mean,
+      p10: mean,
+      p50: mean,
+      p90: mean,
+      min: mean,
+      max: mean,
+      meanEndInfluence: options?.meanEndInfluence ?? null,
+      buckets: [],
+      totalSamples: 0,
+    };
+  }
+  const mean = options?.mean ?? meanOf(damages);
+  return {
+    mean,
+    p10: percentileFromValues(damages, 10),
+    p50: percentileFromValues(damages, 50),
+    p90: percentileFromValues(damages, 90),
+    min: Math.min(...damages),
+    max: Math.max(...damages),
+    meanEndInfluence: options?.meanEndInfluence ?? null,
+    buckets: histogramFromDamages(damages),
+    totalSamples: damages.length,
+  };
+}
+
+export function sampleBarsFromDamages(
+  damages: number[],
+  keyPrefix = "sample",
+): PooledSampleBar[] {
+  return damages.map((damage, index) => ({
+    key: `${keyPrefix}-${index}`,
+    runId: LIVE_RUN_ID,
+    sampleIndex: index,
+    damage,
+    label: `Hand ${index + 1}: ${damage} damage`,
+    inspectable: false,
+  }));
+}
+
 function CompareStatLine({
   baseline,
   compare,
@@ -250,6 +311,7 @@ export function PooledDamagePanel({
   totalSampleBars,
   simType,
   cardHighlights,
+  highlightCardId = null,
   liveHands,
   showSendToSolver = false,
   onSendToHandSolver,
@@ -267,6 +329,7 @@ export function PooledDamagePanel({
   totalSampleBars?: number;
   simType: SimType;
   cardHighlights?: Record<string, BarCardHighlight>;
+  highlightCardId?: string | null;
   liveHands?: SampleHand[];
   showSendToSolver?: boolean;
   onSendToHandSolver?: (sample: SampleHand) => void;
@@ -314,8 +377,6 @@ export function PooledDamagePanel({
   const sample = liveHands ? liveSample : fetched.sample;
   const loading = liveHands ? false : fetched.loading;
   const loadError = liveHands ? "" : fetched.loadError;
-  const mcIndex = fetched.mcIndex;
-  const setMcIndex = fetched.setMcIndex;
 
   const firstBarKey = bars[0]?.key;
   const lastBarKey = bars.at(-1)?.key;
@@ -323,10 +384,6 @@ export function PooledDamagePanel({
   useEffect(() => {
     setSelectedKey(null);
   }, [resetKey, bars.length, firstBarKey, lastBarKey]);
-
-  useEffect(() => {
-    setMcIndex(null);
-  }, [selectedKey, setMcIndex]);
 
   useEffect(() => {
     if (parsedRange.error) {
@@ -517,10 +574,9 @@ export function PooledDamagePanel({
           sample={sample}
           loading={loading}
           loadError={loadError}
-          mcIndex={mcIndex}
-          onMcIndexChange={setMcIndex}
           showSendToSolver={showSendToSolver}
           onSendToHandSolver={onSendToHandSolver}
+          highlightCardId={highlightCardId}
         />
       )}
     </section>

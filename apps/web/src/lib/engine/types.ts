@@ -50,7 +50,9 @@ export type CardId =
   | "increasing_danger"
   | "reduce_to_ash"
   | "smoke_out"
-  | "spark_alight";
+  | "spark_alight"
+  | "package_courier"
+  | "flurry_of_fire";
 
 export type MaterialId =
   | "impact_hammer"
@@ -61,7 +63,8 @@ export type MaterialId =
   | "varuckan_soulknife"
   | "tristan_1"
   | "assassins_ripper"
-  | "grand_crusaders_ring";
+  | "grand_crusaders_ring"
+  | "spirit_of_fire";
 
 export type Phase =
   | "main"

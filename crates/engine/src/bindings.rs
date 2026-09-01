@@ -7,10 +7,15 @@ mod export {
         cards::CardDef,
         deck::{
             DeckEvalRequest, DeckEvalResult, OptimizeProgress, OptimizeRequest, OptimizeResult,
-            Strategy, SwapConfig,
+            MultiDeckConfig, Strategy, SwapConfig,
         },
         line_event::{ActionOp, AttackBonuses, EventKind, LineEvent, TapePhase},
         model::{Bounds, EffectiveRequest, SimType, SolveRequest, SolveResult},
+        playtest::{
+            PlaytestAction, PlaytestActionOption, PlaytestAllyView, PlaytestApplyResult,
+            PlaytestEngineState, PlaytestInitRequest, PlaytestInitResult, PlaytestLegalActionsRequest,
+            PlaytestLegalActionsResult, PlaytestStateView,
+        },
         stats::{CardStat, SparseLineStats},
         version::EngineVersion,
     };
@@ -30,6 +35,7 @@ mod export {
         OptimizeRequest::export_all().expect("optimize request");
         Strategy::export_all().expect("strategy");
         SwapConfig::export_all().expect("swap config");
+        MultiDeckConfig::export_all().expect("multi deck config");
         OptimizeResult::export_all().expect("optimize result");
         OptimizeProgress::export_all().expect("optimize progress");
         CardStat::export_all().expect("card stat");
@@ -40,5 +46,15 @@ mod export {
         TapePhase::export_all().expect("tape phase");
         AttackBonuses::export_all().expect("attack bonuses");
         LineEvent::export_all().expect("line event");
+        PlaytestInitRequest::export_all().expect("playtest init request");
+        PlaytestInitResult::export_all().expect("playtest init result");
+        PlaytestLegalActionsRequest::export_all().expect("playtest legal actions request");
+        PlaytestLegalActionsResult::export_all().expect("playtest legal actions result");
+        PlaytestApplyResult::export_all().expect("playtest apply result");
+        PlaytestStateView::export_all().expect("playtest state view");
+        PlaytestEngineState::export_all().expect("playtest engine state");
+        PlaytestAction::export_all().expect("playtest action");
+        PlaytestActionOption::export_all().expect("playtest action option");
+        PlaytestAllyView::export_all().expect("playtest ally view");
     }
 }

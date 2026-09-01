@@ -54,7 +54,12 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
     clearQueue,
   } = useRunTracker();
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (!open) {
@@ -69,13 +74,14 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, [open]);
 
-  const statusText = workerStateReady
-    ? workerState === "running"
-      ? queueSummary
-      : workerState === "finished"
-        ? `${finishedRuns.length} finished`
-        : statusLabel(workerState)
-    : null;
+  const statusText =
+    mounted && workerStateReady
+      ? workerState === "running"
+        ? queueSummary
+        : workerState === "finished"
+          ? `${finishedRuns.length} finished`
+          : statusLabel(workerState)
+      : null;
 
   function navigateToRun(run: TrackedRun) {
     if (!run.deckId) {

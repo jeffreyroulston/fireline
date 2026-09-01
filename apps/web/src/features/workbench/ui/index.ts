@@ -27,4 +27,5 @@ export {
 export type { DistributionStatKey } from "./distribution-stats";
 export { StatLine } from "./stat-line";
 export type { StatLineItem } from "./stat-line";
+export { LineCompare } from "./line-compare";
 export { TwoPassCompare } from "./two-pass-compare";

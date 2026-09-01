@@ -8,6 +8,7 @@ import { errorBannerClass } from "@/lib/utils/ui-classes";
 import { ActionBar, PanelTopline, RunSettings } from "../ui";
 import {
   CutBudgetPanel,
+  MultiDeckPanel,
   PermutationPanel,
   RatioControls,
   RatioDeckPicker,
@@ -54,6 +55,7 @@ type RatiosTabProps = Readonly<{
     rank: number,
     deckName?: string,
   ) => void;
+  onRetestSelected?: (decks: DeckCounts[]) => void;
 }>;
 
 export function RatiosTab({
@@ -85,12 +87,18 @@ export function RatiosTab({
   onCancelOptimize,
   onSaveOptimize,
   onSaveDecklist,
+  onRetestSelected,
 }: RatiosTabProps) {
   const optimizeFailed =
     Boolean(optimizeRun) &&
     isUnsuccessfulTerminalStatus(optimizeRun?.status ?? "");
   const ratioResult =
     optimizeFailed || optimizeBusy ? null : (optimizeRun?.ratioResult ?? null);
+
+  const usesTableResults =
+    ratio.ratioStrategy === "swapSweep" ||
+    ratio.ratioStrategy === "multiDeck" ||
+    ratioResult?.strategy === "multiDeck";
 
   return (
     <div className="grid w-full">
@@ -120,6 +128,16 @@ export function RatiosTab({
           onSwapCountChange={ratio.setSwapCount}
           onToggleCandidate={ratio.toggleSwapCandidate}
         />
+      ) : ratio.ratioStrategy === "multiDeck" ? (
+        <MultiDeckPanel
+          decks={ratio.multiDeckLists}
+          deckSize={ratio.deckSize}
+          baseCounts={ratio.ratioBaseCounts}
+          baseDeckName={activeDeck?.name}
+          onAdd={ratio.appendMultiDeckList}
+          onRemove={ratio.removeMultiDeckList}
+          onClear={ratio.clearMultiDeckLists}
+        />
       ) : (
         <>
           <CutBudgetPanel
@@ -141,8 +159,6 @@ export function RatiosTab({
             freeCopies={ratio.freeCopies}
             attemptCeiling={ratio.attemptCeiling}
             coveragePercent={ratio.coveragePercent}
-            busy={optimizeBusy}
-            progress={optimizeRun?.progress ?? null}
           />
         </>
       )}
@@ -175,24 +191,22 @@ export function RatiosTab({
         label={
           ratio.ratioStrategy === "swapSweep"
             ? "Run swap sweep"
-            : "Sample ratio space"
+            : ratio.ratioStrategy === "multiDeck"
+              ? "Run multi-deck test"
+              : "Sample ratio space"
         }
         busy={optimizeBusy}
         onRun={onOptimize}
         onCancel={onCancelOptimize}
         onSave={onSaveOptimize}
-        progress={
-          ratio.ratioStrategy === "swapSweep"
-            ? (optimizeRun?.progress ?? null)
-            : null
-        }
+        progress={optimizeRun?.progress ?? null}
         monteCarloRollouts={simType === "monte_carlo" ? rollouts : undefined}
       />
       {optimizeFailed && !optimizeBusy ? (
         <p className={cn(errorBannerClass, "mt-[30px]")} role="alert">
           {optimizeRun?.error?.trim() || "Ratio lab run failed."}
         </p>
-      ) : ratio.ratioStrategy === "swapSweep" && ratioResult ? (
+      ) : usesTableResults && ratioResult ? (
         <SwapSweepResults
           result={ratioResult}
           samples={ratio.ratioSamples}
@@ -204,6 +218,8 @@ export function RatiosTab({
           criteria={ratio.ratioCriteria}
           samples={ratio.ratioSamples}
           onSaveDecklist={onSaveDecklist}
+          onRetestSelected={onRetestSelected}
+          retestBusy={optimizeBusy}
         />
       )}
     </div>

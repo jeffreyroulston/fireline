@@ -1,10 +1,9 @@
 use crate::error::{EngineError, Result};
-#[cfg(test)]
-use crate::line_event::LineEvent;
 use crate::{
     cards::{ALL_CARDS, Card, parse_card},
     line_event::{
-        ActionOp, AttackBonuses, EventFields, EventKind, EventTape, TapePhase, push_ally_gy_death,
+        ActionOp, AttackBonuses, EventFields, EventKind, EventTape, LineEvent, TapePhase,
+        push_ally_gy_death,
     },
     model::{
         Action, DamageDistribution, EffectiveRequest, MAT_BLADE, MAT_DAGGER, MAT_HAMMER, MAT_RING,
@@ -213,7 +212,7 @@ impl Search {
             damage: state.damage,
             influence: 0,
         };
-        let mut acts = actions(state, self.glimpse_enabled);
+        let mut acts = solver_actions(state, self.glimpse_enabled);
         order_actions_damage_first(&state, &mut acts);
         for action in acts {
             let next = apply_silent(state, action);
@@ -256,11 +255,11 @@ impl Search {
         }
         let prune = self.bound_prune;
         self.bound_prune = false;
-        let mut acts = actions(state, self.glimpse_enabled);
+        let mut acts = solver_actions(state, self.glimpse_enabled);
         order_actions_damage_first(&state, &mut acts);
         for action in acts {
             let saved = tape.checkpoint();
-            let next = apply_into(state, action, tape);
+            let next = apply_into(state, action, tape, None);
             if self.visit(next) == target {
                 let burst = &tape.events[saved.events_len..];
                 stats.record_action(action, state, next, burst);
@@ -833,7 +832,7 @@ fn is_fast_phase(phase: Phase) -> bool {
     matches!(phase, Phase::Materialize | Phase::Agility)
 }
 
-const ACTION_CARDS: [Card; 14] = [
+const ACTION_CARDS: [Card; 15] = [
     Card::FieryInterference,
     Card::IntensifiedPyre,
     Card::MarkTheTarget,
@@ -848,10 +847,11 @@ const ACTION_CARDS: [Card; 14] = [
     Card::ReduceToAsh,
     Card::SmokeOut,
     Card::SparkAlight,
+    Card::FlurryOfFire,
 ];
 
 /// Action cards that deal modeled positive damage (excludes pure-draw / no-effect actions).
-const DAMAGE_ACTION_CARDS: [Card; 10] = [
+const DAMAGE_ACTION_CARDS: [Card; 11] = [
     Card::FieryInterference,
     Card::IntensifiedPyre,
     Card::MarkTheTarget,
@@ -862,6 +862,7 @@ const DAMAGE_ACTION_CARDS: [Card; 10] = [
     Card::IgniteFate,
     Card::SmokeOut,
     Card::SparkAlight,
+    Card::FlurryOfFire,
 ];
 
 fn is_pure_draw_card(card: Card) -> bool {
@@ -1113,7 +1114,7 @@ fn push_fast_ally_plays(state: State, result: &mut Vec<Action>) {
             result.push(Action::PlayAlly {
                 card,
                 kindle,
-                sacrifice: false,
+                sacrifice_ally: None,
                 hot_cake_sacrifice: false,
                 flagrant_level: None,
                 flagrant_gy_return: None,
@@ -1150,11 +1151,46 @@ fn flagrant_level_targets(state: State) -> [Option<u16>; 2] {
     targets
 }
 
+fn peppered_chef_sacrifice_targets(state: &State) -> impl Iterator<Item = u8> + '_ {
+    (0..state.ally_len).filter_map(|index| {
+        let index = index as usize;
+        if state.allies[index].card() != Card::Arthur {
+            Some(index as u8)
+        } else {
+            None
+        }
+    })
+}
+
+fn push_peppered_chef_plays(
+    state: State,
+    card: Card,
+    kindle: u8,
+    result: &mut Vec<Action>,
+) {
+    for index in peppered_chef_sacrifice_targets(&state) {
+        let mut hot_cake_options = vec![false];
+        if state.hot_cake > 0 {
+            hot_cake_options.insert(0, true);
+        }
+        for hot_cake_sacrifice in hot_cake_options {
+            result.push(Action::PlayAlly {
+                card,
+                kindle,
+                sacrifice_ally: Some(index),
+                hot_cake_sacrifice,
+                flagrant_level: None,
+                flagrant_gy_return: None,
+            });
+        }
+    }
+}
+
 fn flagrant_guide_actions(
     state: State,
     card: Card,
     kindle: u8,
-    sacrifice: bool,
+    sacrifice_ally: Option<u8>,
     hot_cake_sacrifice: bool,
 ) -> Vec<Action> {
     let mut result = Vec::new();
@@ -1166,7 +1202,7 @@ fn flagrant_guide_actions(
             result.push(Action::PlayAlly {
                 card,
                 kindle,
-                sacrifice,
+                sacrifice_ally,
                 hot_cake_sacrifice,
                 flagrant_level: Some(mat),
                 flagrant_gy_return: None,
@@ -1175,7 +1211,7 @@ fn flagrant_guide_actions(
                 result.push(Action::PlayAlly {
                     card,
                     kindle,
-                    sacrifice,
+                    sacrifice_ally,
                     hot_cake_sacrifice,
                     flagrant_level: Some(mat),
                     flagrant_gy_return: Some(gy_card),
@@ -1185,7 +1221,7 @@ fn flagrant_guide_actions(
             result.push(Action::PlayAlly {
                 card,
                 kindle,
-                sacrifice,
+                sacrifice_ally,
                 hot_cake_sacrifice,
                 flagrant_level: Some(mat),
                 flagrant_gy_return: None,
@@ -1367,6 +1403,7 @@ fn action_deals_immediate_damage(state: &State, action: Action) -> bool {
                     | Card::IgniteFate
                     | Card::SmokeOut
                     | Card::SparkAlight
+                    | Card::FlurryOfFire
             ) {
                 return true;
             }
@@ -1379,7 +1416,7 @@ fn action_deals_immediate_damage(state: &State, action: Action) -> bool {
             false
         }
         Action::PlayAlly {
-            card, sacrifice, ..
+            card, sacrifice_ally, ..
         } => {
             if card == Card::Rococo {
                 // On-enter 2 when influence is low after pay; unique replacement also
@@ -1389,10 +1426,11 @@ fn action_deals_immediate_damage(state: &State, action: Action) -> bool {
                         .iter()
                         .any(|ally| ally.card() == Card::Rococo);
             }
-            if sacrifice {
-                return state.allies[..state.ally_len as usize]
-                    .iter()
-                    .any(|ally| ally.card() != Card::Arthur && ally.card().on_death_damage() > 0);
+            if card == Card::PepperedChef
+                && let Some(index) = sacrifice_ally
+                && (index as usize) < state.ally_len as usize
+            {
+                return state.allies[index as usize].card().on_death_damage() > 0;
             }
             if card.is_unique()
                 && state.allies[..state.ally_len as usize]
@@ -1437,7 +1475,7 @@ fn collapse_mate_ending_siblings(state: State, endings: Vec<Action>) -> Vec<Acti
     order.into_iter().map(|key| best[&key].0).collect()
 }
 
-fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
+fn actions(state: State, glimpse_enabled: bool, full_glimpse_layouts: bool) -> Vec<Action> {
     if state.phase == Phase::Agility {
         let mut result = Vec::with_capacity(24);
         if state.tristan_leveled && state.agility >= 3 && state.memory_len >= 3 {
@@ -1469,7 +1507,11 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
             && (state.memory_len > 0 || state.float_gy > 0)
         {
             if glimpse_enabled && state.queue_pos < state.queue_len {
-                let layouts = state.glimpse_relevant_layouts();
+                let layouts = if full_glimpse_layouts {
+                    state.glimpse_playtest_layouts()
+                } else {
+                    state.glimpse_relevant_layouts()
+                };
                 if layouts.is_empty() {
                     // No remaining deck draws — Glimpse cannot change outcomes.
                     endings.push(Action::MaterializeZanderMemory {
@@ -1566,52 +1608,26 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
             if state.hand_len.saturating_sub(1) < reserve {
                 continue;
             }
-            if card == Card::PepperedChef && state.ally_len > 0 {
-                if state.hot_cake > 0 {
-                    result.push(Action::PlayAlly {
-                        card,
-                        kindle,
-                        sacrifice: true,
-                        hot_cake_sacrifice: true,
-                        flagrant_level: None,
-                        flagrant_gy_return: None,
-                    });
-                    result.push(Action::PlayAlly {
-                        card,
-                        kindle,
-                        sacrifice: true,
-                        hot_cake_sacrifice: false,
-                        flagrant_level: None,
-                        flagrant_gy_return: None,
-                    });
-                } else {
-                    result.push(Action::PlayAlly {
-                        card,
-                        kindle,
-                        sacrifice: true,
-                        hot_cake_sacrifice: false,
-                        flagrant_level: None,
-                        flagrant_gy_return: None,
-                    });
-                }
+            if card == Card::PepperedChef {
+                push_peppered_chef_plays(state, card, kindle, &mut result);
             }
             if state.hot_cake > 0 {
                 result.push(Action::PlayAlly {
                     card,
                     kindle,
-                    sacrifice: false,
+                    sacrifice_ally: None,
                     hot_cake_sacrifice: true,
                     flagrant_level: None,
                     flagrant_gy_return: None,
                 });
             }
             if card == Card::FlagrantGuide {
-                result.extend(flagrant_guide_actions(state, card, kindle, false, false));
+                result.extend(flagrant_guide_actions(state, card, kindle, None, false));
             }
             result.push(Action::PlayAlly {
                 card,
                 kindle,
-                sacrifice: false,
+                sacrifice_ally: None,
                 hot_cake_sacrifice: false,
                 flagrant_level: None,
                 flagrant_gy_return: None,
@@ -1646,7 +1662,8 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
                 }
             }
             let prep_options = card == Card::IgnitedStab && state.prep > 0 && state.is_assassin();
-            let double = card == Card::RendingFlames && state.is_assassin() && state.fire_gy >= 2;
+            let double =
+                card == Card::RendingFlames && state.is_assassin() && state.fire_gy >= 3;
             for wield in wield_options {
                 if prep_options {
                     result.push(Action::PlayAttack {
@@ -1740,11 +1757,236 @@ fn tape_phase(state: &State) -> TapePhase {
     }
 }
 
+/// Legal player actions for interactive playtest (Glimpse enabled for Zander layouts).
+pub fn legal_actions(state: State) -> Vec<Action> {
+    actions(state, true, true)
+}
+
+fn solver_actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
+    actions(state, glimpse_enabled, false)
+}
+
+/// Manual reserve / discard selection for interactive playtest.
+#[derive(Clone, Debug)]
+pub struct ActionPayment {
+    pub reserved: Vec<Card>,
+    pub discard: DiscardPayment,
+}
+
+/// How to resolve an optional discard effect during playtest apply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiscardPayment {
+    Auto,
+    Skip,
+    Card(Card),
+}
+
+impl Default for DiscardPayment {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PaymentRequirement {
+    pub reserve: u8,
+    pub fire_only: bool,
+    pub played_card: Option<Card>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DiscardRequirement {
+    pub optional: bool,
+    pub draw_before_discard: bool,
+}
+
+fn resolve_discard(state: &mut State, payment: DiscardPayment) -> Option<Card> {
+    match payment {
+        DiscardPayment::Auto => state.discard_for_effect(),
+        DiscardPayment::Skip => None,
+        DiscardPayment::Card(card) => {
+            if !state.remove_hand(card) {
+                return None;
+            }
+            state.send_to_gy(card);
+            Some(card)
+        }
+    }
+}
+
+fn ally_attack_discard_requirement(state: State, card: Card) -> Option<DiscardRequirement> {
+    match card {
+        Card::HastyMessenger | Card::RedHare if state.hand_len > 0 => Some(DiscardRequirement {
+            optional: true,
+            draw_before_discard: false,
+        }),
+        Card::CorhaziCourier if state.is_assassin() => Some(DiscardRequirement {
+            optional: false,
+            draw_before_discard: true,
+        }),
+        _ => None,
+    }
+}
+
+pub fn action_discard_required(state: State, action: Action) -> Option<DiscardRequirement> {
+    match action {
+        Action::PlayAlly { card, kindle, .. } if card == Card::PackageCourier => {
+            let kindle = kindle.min(card.cost()).min(state.fire_gy);
+            let reserve = card.cost().saturating_sub(kindle);
+            if state.hand_len > reserve + 1 {
+                Some(DiscardRequirement {
+                    optional: true,
+                    draw_before_discard: false,
+                })
+            } else {
+                None
+            }
+        }
+        Action::AttackArthur(index) => {
+            let index = index as usize;
+            if index >= state.ally_len as usize {
+                return None;
+            }
+            ally_attack_discard_requirement(state, state.allies[index].card())
+        }
+        Action::AttackOthers => {
+            for index in 0..state.ally_len as usize {
+                if state.allies[index].card() == Card::Arthur || !state.can_ally_attack(index) {
+                    continue;
+                }
+                if let Some(req) = ally_attack_discard_requirement(state, state.allies[index].card()) {
+                    return Some(req);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Hand slots (and optional newly drawn index) shown when picking a discard in playtest.
+pub fn action_discard_hand(state: State, action: Action) -> Option<(Vec<Card>, Option<u8>)> {
+    let req = action_discard_required(state, action)?;
+    if req.draw_before_discard {
+        simulate_draw_before_discard(state, action)
+    } else {
+        Some((state.hand_slots(), None))
+    }
+}
+
+fn simulate_draw_before_discard(mut state: State, action: Action) -> Option<(Vec<Card>, Option<u8>)> {
+    match action {
+        Action::AttackArthur(index) => {
+            let index = index as usize;
+            if index >= state.ally_len as usize {
+                return None;
+            }
+            let card = state.allies[index].card();
+            if card == Card::CorhaziCourier && state.is_assassin() {
+                let before_count = state.hand;
+                let drawn = state.draw_unknown();
+                let slots = state.hand_slots();
+                let drawn_index = drawn_slot_index(&slots, drawn, before_count[drawn.index()]);
+                Some((slots, drawn_index))
+            } else {
+                None
+            }
+        }
+        Action::AttackOthers => {
+            for index in 0..state.ally_len as usize {
+                if state.allies[index].card() == Card::Arthur || !state.can_ally_attack(index) {
+                    continue;
+                }
+                let card = state.allies[index].card();
+                if card == Card::CorhaziCourier && state.is_assassin() {
+                    let before_count = state.hand;
+                    let drawn = state.draw_unknown();
+                    let slots = state.hand_slots();
+                    let drawn_index = drawn_slot_index(&slots, drawn, before_count[drawn.index()]);
+                    return Some((slots, drawn_index));
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn drawn_slot_index(slots: &[Card], drawn: Card, before_count: u8) -> Option<u8> {
+    let mut seen = 0u8;
+    for (index, card) in slots.iter().enumerate() {
+        if *card == drawn {
+            seen += 1;
+            if seen > before_count {
+                return Some(index as u8);
+            }
+        }
+    }
+    None
+}
+
+pub fn action_payment_required(state: State, action: Action) -> Option<PaymentRequirement> {
+    match action {
+        Action::PlayAlly { card, kindle, .. } => {
+            let kindle = kindle.min(card.cost()).min(state.fire_gy);
+            Some(PaymentRequirement {
+                reserve: card.cost().saturating_sub(kindle),
+                fire_only: false,
+                played_card: Some(card),
+            })
+        }
+        Action::PlayAction {
+            card,
+            kindle,
+            imbue,
+            ..
+        } => {
+            let cost = action_cost(&state, card);
+            let kindle = kindle.min(cost).min(state.fire_gy);
+            Some(PaymentRequirement {
+                reserve: cost.saturating_sub(kindle),
+                fire_only: imbue && card.imbue() > 0,
+                played_card: Some(card),
+            })
+        }
+        Action::PlayItem { card } => Some(PaymentRequirement {
+            reserve: card.cost(),
+            fire_only: false,
+            played_card: Some(card),
+        }),
+        Action::PlayAttack { card, .. } => Some(PaymentRequirement {
+            reserve: card.cost(),
+            fire_only: false,
+            played_card: Some(card),
+        }),
+        Action::BlazingThrow(_) => Some(PaymentRequirement {
+            reserve: 1,
+            fire_only: false,
+            played_card: Some(Card::BlazingThrow),
+        }),
+        _ => None,
+    }
+}
+
+/// Apply one action and return the next board state plus combat-tape events.
+pub fn apply_action(state: State, action: Action) -> (State, Vec<LineEvent>) {
+    apply_action_with_payment(state, action, None)
+}
+
+/// Apply one action with optional manual reserve payment (playtest).
+pub fn apply_action_with_payment(
+    state: State,
+    action: Action,
+    payment: Option<ActionPayment>,
+) -> (State, Vec<LineEvent>) {
+    let mut tape = EventTape::new();
+    let next = apply_into(state, action, &mut tape, payment.as_ref());
+    (next, tape.events)
+}
+
 #[cfg(test)]
 fn apply(state: State, action: Action) -> (State, Vec<LineEvent>) {
-    let mut tape = EventTape::new();
-    let next = apply_into(state, action, &mut tape);
-    (next, tape.events)
+    apply_action(state, action)
 }
 
 /// Search expansion: mutate the board without allocating combat-tape snapshots.
@@ -1752,7 +1994,7 @@ fn apply_silent(state: State, action: Action) -> State {
     thread_local! {
         static TAPE: RefCell<EventTape> = RefCell::new(EventTape::silent());
     }
-    TAPE.with(|tape| apply_into(state, action, &mut tape.borrow_mut()))
+    TAPE.with(|tape| apply_into(state, action, &mut tape.borrow_mut(), None))
 }
 
 /// Return freed heap pages to the OS after a heavy solve.
@@ -1777,7 +2019,14 @@ unsafe extern "C" {
 #[cfg(not(target_os = "linux"))]
 fn release_process_memory() {}
 
-fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
+fn apply_into(
+    mut state: State,
+    action: Action,
+    tape: &mut EventTape,
+    payment: Option<&ActionPayment>,
+) -> State {
+    let reserved = payment.map(|payment| payment.reserved.as_slice());
+    let mut discard = payment.map(|p| p.discard).unwrap_or(DiscardPayment::Auto);
     tape.begin_action(ActionOp::from_action(action));
     match action {
         Action::Pass => begin_agility_after_pass(&mut state, tape),
@@ -1915,6 +2164,7 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
         }
         Action::MaterializeRing => {
             state.remove_material(MAT_RING);
+            state.ring_banished = true;
             tape.push(
                 state,
                 TapePhase::Materialize,
@@ -1958,6 +2208,7 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
             // Legacy / defensive: Ring now banishes as part of MaterializeRing.
             if state.ring {
                 state.ring = false;
+                state.ring_banished = true;
                 let drawn = state.draw_unknown();
                 tape.push(
                     state,
@@ -1980,12 +2231,22 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
                 );
             }
         }
-        Action::AttackArthur(index) => attack_ally(&mut state, index as usize, tape),
+        Action::AttackArthur(index) => attack_ally(&mut state, index as usize, tape, discard),
         Action::AttackOthers => {
             let mut index = 0;
             while index < state.ally_len as usize {
                 if state.allies[index].card() != Card::Arthur && state.can_ally_attack(index) {
-                    attack_ally(&mut state, index, tape);
+                    let card = state.allies[index].card();
+                    let pay = if discard != DiscardPayment::Auto
+                        && ally_attack_discard_requirement(state, card).is_some()
+                    {
+                        let pay = discard;
+                        discard = DiscardPayment::Auto;
+                        pay
+                    } else {
+                        DiscardPayment::Auto
+                    };
+                    attack_ally(&mut state, index, tape, pay);
                 }
                 index += 1;
             }
@@ -1993,7 +2254,7 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
         Action::PlayAlly {
             card,
             kindle,
-            sacrifice,
+            sacrifice_ally,
             hot_cake_sacrifice,
             flagrant_level,
             flagrant_gy_return,
@@ -2001,13 +2262,15 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
             &mut state,
             card,
             kindle,
-            sacrifice,
+            sacrifice_ally,
             hot_cake_sacrifice,
             flagrant_level,
             flagrant_gy_return,
+            reserved,
+            discard,
             tape,
         ),
-        Action::PlayItem { card } => play_item(&mut state, card, tape),
+        Action::PlayItem { card } => play_item(&mut state, card, reserved, tape),
         Action::PlayAttack {
             card,
             wield,
@@ -2021,6 +2284,7 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
             prepared,
             doubled,
             command_ally,
+            reserved,
             tape,
         ),
         Action::PlayAction {
@@ -2036,6 +2300,7 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
             prepared,
             imbue,
             sacrifice_ally,
+            reserved,
             tape,
         ),
         Action::ActivateArsonist(index) => {
@@ -2056,8 +2321,18 @@ fn apply_into(mut state: State, action: Action, tape: &mut EventTape) -> State {
             }
         }
         Action::BlazingThrow(weapon) => {
-            state.remove_hand(Card::BlazingThrow);
-            state.pay_reserve(1);
+            if let Some(cards) = reserved {
+                if state.pay_reserve_selection(cards, false).is_none() {
+                    return state;
+                }
+                if !state.remove_hand(Card::BlazingThrow) {
+                    return state;
+                }
+            } else if !state.remove_hand(Card::BlazingThrow) {
+                return state;
+            } else {
+                state.pay_reserve(1);
+            }
             state.remove_weapon(weapon);
             state.send_to_gy(Card::BlazingThrow);
             state.add_damage(4);
@@ -2130,29 +2405,46 @@ fn play_ally(
     state: &mut State,
     card: Card,
     kindle: u8,
-    sacrifice: bool,
+    sacrifice_ally: Option<u8>,
     hot_cake_sacrifice: bool,
     flagrant_level: Option<u16>,
     flagrant_gy_return: Option<Card>,
+    reserved: Option<&[Card]>,
+    discard: DiscardPayment,
     tape: &mut EventTape,
 ) {
-    state.remove_hand(card);
-    state.pay_with_kindle(card.cost(), kindle);
+    if let Some(cards) = reserved {
+        if !state.pay_with_kindle_selection(card.cost(), kindle, cards, false) {
+            return;
+        }
+        if !state.remove_hand(card) {
+            return;
+        }
+    } else {
+        state.remove_hand(card);
+        state.pay_with_kindle(card.cost(), kindle);
+    }
     let arthur = card == Card::Arthur;
     let immortal = arthur;
     let phase = tape_phase(state);
     let mut sacrificed = false;
-    if sacrifice
-        && card == Card::PepperedChef
-        && let Some(index) = (0..state.ally_len as usize).rev().find(|&index| {
-            let victim = state.allies[index].card();
-            victim != Card::Arthur
-        })
-        && let Some(victim) = state.remove_ally(index, true)
+    if card == Card::PepperedChef
+        && let Some(index) = sacrifice_ally
     {
-        sacrificed = true;
-        push_ally_gy_death(state, victim, phase, tape);
-        tape.push(*state, phase, EventKind::Sacrifice, EventFields::default());
+        let index = index as usize;
+        if index < state.ally_len as usize
+            && state.allies[index].card() != Card::Arthur
+            && let Some(victim) = state.remove_ally(index, true)
+        {
+            sacrificed = true;
+            push_ally_gy_death(state, victim, phase, tape);
+            tape.push(
+                *state,
+                phase,
+                EventKind::Sacrifice,
+                EventFields::card(victim),
+            );
+        }
     }
     // Unique: playing a second copy kills the one already on the board.
     if card.is_unique()
@@ -2189,6 +2481,19 @@ fn play_ally(
             EventKind::OnEnterDraw,
             EventFields::default().with_drawn(drawn),
         );
+    } else if card == Card::PackageCourier {
+        // On Enter: You may discard a card. If you do, draw a card.
+        if let Some(discarded) = resolve_discard(state, discard) {
+            let drawn = state.draw_unknown();
+            tape.push(
+                *state,
+                phase,
+                EventKind::OnEnterDraw,
+                EventFields::card(card)
+                    .with_discarded(discarded)
+                    .with_drawn(drawn),
+            );
+        }
     } else if card == Card::Rococo {
         let influence = state.influence();
         if influence <= 4 {
@@ -2222,9 +2527,18 @@ fn play_ally(
     }
 }
 
-fn play_item(state: &mut State, card: Card, tape: &mut EventTape) {
-    state.remove_hand(card);
-    state.pay_reserve(card.cost());
+fn play_item(state: &mut State, card: Card, reserved: Option<&[Card]>, tape: &mut EventTape) {
+    if let Some(cards) = reserved {
+        if state.pay_reserve_selection(cards, false).is_none() {
+            return;
+        }
+        if !state.remove_hand(card) {
+            return;
+        }
+    } else {
+        state.remove_hand(card);
+        state.pay_reserve(card.cost());
+    }
     if card == Card::HotCake {
         state.hot_cake = state.hot_cake.saturating_add(1);
     }
@@ -2236,7 +2550,7 @@ fn play_item(state: &mut State, card: Card, tape: &mut EventTape) {
     );
 }
 
-fn attack_ally(state: &mut State, index: usize, tape: &mut EventTape) {
+fn attack_ally(state: &mut State, index: usize, tape: &mut EventTape, discard: DiscardPayment) {
     let ally = state.allies[index];
     let card = ally.card();
     let arthur_buff = u8::from(card != Card::Arthur && state.arthur_rested());
@@ -2275,7 +2589,7 @@ fn attack_ally(state: &mut State, index: usize, tape: &mut EventTape) {
         );
     }
     if matches!(card, Card::HastyMessenger | Card::RedHare)
-        && let Some(discarded) = state.discard_for_effect()
+        && let Some(discarded) = resolve_discard(state, discard)
     {
         let drawn = state.draw_unknown();
         tape.push(
@@ -2289,7 +2603,7 @@ fn attack_ally(state: &mut State, index: usize, tape: &mut EventTape) {
     }
     if card == Card::CorhaziCourier && state.is_assassin() {
         let drawn = state.draw_unknown();
-        if let Some(discarded) = state.discard_for_effect() {
+        if let Some(discarded) = resolve_discard(state, discard) {
             if discarded.is_fire() {
                 state.add_damage(1);
             }
@@ -2312,6 +2626,7 @@ fn play_attack(
     prepared: bool,
     doubled: bool,
     command_ally: Option<u8>,
+    reserved: Option<&[Card]>,
     tape: &mut EventTape,
 ) {
     if card.is_command_automaton() {
@@ -2326,8 +2641,17 @@ fn play_attack(
             return;
         }
 
-        state.remove_hand(card);
-        state.pay_reserve(card.cost());
+        if let Some(cards) = reserved {
+            if state.pay_reserve_selection(cards, false).is_none() {
+                return;
+            }
+            if !state.remove_hand(card) {
+                return;
+            }
+        } else {
+            state.remove_hand(card);
+            state.pay_reserve(card.cost());
+        }
         let ally_attack = ally.card().power();
         let unique_bonus = u8::from(ally.card().is_unique()) * 2;
         let arthur_buff = u8::from(ally.card() != Card::Arthur && state.arthur_rested());
@@ -2362,8 +2686,17 @@ fn play_attack(
         return;
     }
 
-    state.remove_hand(card);
-    state.pay_reserve(card.cost());
+    if let Some(cards) = reserved {
+        if state.pay_reserve_selection(cards, false).is_none() {
+            return;
+        }
+        if !state.remove_hand(card) {
+            return;
+        }
+    } else {
+        state.remove_hand(card);
+        state.pay_reserve(card.cost());
+    }
     let mut power = card.power();
     if card == Card::IgnitedStab && prepared {
         state.prep -= 1;
@@ -2390,7 +2723,6 @@ fn play_attack(
         );
         state.consume_weapon(wielded);
     }
-    state.send_to_gy(card);
     state.champion_awake = false;
 
     let mut fields = EventFields::card(card);
@@ -2408,10 +2740,13 @@ fn play_attack(
     }
 
     if card == Card::RendingFlames && doubled && state.fire_gy >= 3 {
+        // Banish three Fire already in the GY; the attacking copy cannot pay its own cost.
         state.banish_fire_from_gy(3, false);
+        state.send_to_gy(card);
         state.add_damage(power * 2);
         tape.push(*state, TapePhase::Main, EventKind::Play, fields.doubled());
     } else {
+        state.send_to_gy(card);
         state.add_damage(power);
         tape.push(*state, TapePhase::Main, EventKind::Play, fields);
     }
@@ -2425,6 +2760,7 @@ fn play_action(
     prepared: bool,
     imbue: bool,
     sacrifice_ally: Option<u8>,
+    reserved: Option<&[Card]>,
     tape: &mut EventTape,
 ) {
     // Additional cost legality (Undeniable Truth): the ally must exist.
@@ -2433,22 +2769,48 @@ fn play_action(
     {
         return;
     }
-    state.remove_hand(card);
-
-    let phase = tape_phase(state);
-    if let Some(index) = sacrifice_ally
-        && let Some(victim) = state.remove_ally(index as usize, true)
-    {
-        push_ally_gy_death(state, victim, phase, tape);
-        tape.push(
-            *state,
-            phase,
-            EventKind::Sacrifice,
-            EventFields::card(victim),
-        );
-    }
-
-    let imbued = state.pay_imbue_cost(action_cost(state, card), card.imbue(), kindle, imbue);
+    let cost = action_cost(state, card);
+    let imbued = match reserved {
+        Some(cards) => {
+            let payment_ok =
+                state.pay_imbue_cost_selection(cost, card.imbue(), kindle, imbue, cards);
+            if !payment_ok {
+                return;
+            }
+            if !state.remove_hand(card) {
+                return;
+            }
+            let phase = tape_phase(state);
+            if let Some(index) = sacrifice_ally
+                && let Some(victim) = state.remove_ally(index as usize, true)
+            {
+                push_ally_gy_death(state, victim, phase, tape);
+                tape.push(
+                    *state,
+                    phase,
+                    EventKind::Sacrifice,
+                    EventFields::card(victim),
+                );
+            }
+            payment_ok
+        }
+        None => {
+            state.remove_hand(card);
+            let phase = tape_phase(state);
+            if let Some(index) = sacrifice_ally
+                && let Some(victim) = state.remove_ally(index as usize, true)
+            {
+                push_ally_gy_death(state, victim, phase, tape);
+                tape.push(
+                    *state,
+                    phase,
+                    EventKind::Sacrifice,
+                    EventFields::card(victim),
+                );
+            }
+            state.pay_imbue_cost(cost, card.imbue(), kindle, imbue)
+        }
+    };
 
     if prepared && card.prepare() > 0 {
         state.prep = state.prep.saturating_sub(card.prepare());
@@ -2495,10 +2857,17 @@ fn play_action(
         }
         Card::SmokeOut => 1,
         Card::SparkAlight => 2,
+        Card::FlurryOfFire => 1,
         // Incapacitate and Reduce to Ash have no modeled effect.
         _ => 0,
     };
-    state.add_damage(damage);
+    // Flurry of Fire deals 1 twice so Poisoned Dagger amplify applies per hit.
+    if card == Card::FlurryOfFire {
+        state.add_damage(1);
+        state.add_damage(1);
+    } else {
+        state.add_damage(damage);
+    }
 
     let mut fields = EventFields::card(card).with_kindle(kindle);
     if card.prepare() > 0 {
@@ -2520,6 +2889,7 @@ fn play_action(
         fields = fields.gy_threshold();
     }
 
+    let phase = tape_phase(state);
     tape.push(*state, phase, EventKind::Play, fields);
 }
 
@@ -2774,7 +3144,7 @@ mod tests {
         state.champion_level = 1;
         state.champion_awake = true;
 
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             !legal.iter().any(|action| matches!(
                 action,
@@ -2811,7 +3181,7 @@ mod tests {
         state.champion_level = 1;
         state.champion_awake = true;
 
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             legal.iter().any(|action| matches!(
                 action,
@@ -2837,7 +3207,7 @@ mod tests {
         state.turn = 1;
         state.champion_level = 1;
 
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             legal.iter().any(|action| matches!(
                 action,
@@ -2865,7 +3235,7 @@ mod tests {
         state.champion_level = 1;
         state.add_ally(Card::ClumsyApprentice, true, false);
 
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             !legal.iter().any(|action| matches!(
                 action,
@@ -2900,7 +3270,7 @@ mod tests {
         state.champion_awake = true;
         state.add_ally(Card::ClumsyApprentice, false, false);
 
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             legal.iter().any(|action| matches!(
                 action,
@@ -3119,7 +3489,7 @@ mod tests {
         state.memory[Card::Brick.index()] = 1;
         state.memory_len = 1;
 
-        let legal = actions(state, true);
+        let legal = solver_actions(state, true);
         let zander = legal
             .iter()
             .filter(|action| matches!(action, Action::MaterializeZanderMemory { .. }))
@@ -3154,7 +3524,7 @@ mod tests {
         state.phase = Phase::Materialize;
         state.turn = 1;
 
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             legal.iter().any(|action| matches!(
                 action,
@@ -3204,7 +3574,7 @@ mod tests {
         state.phase = Phase::Main;
         state.champion_level = 1;
 
-        let mut legal = actions(state, false);
+        let mut legal = solver_actions(state, false);
         assert!(
             legal.iter().any(|action| matches!(
                 action,
@@ -3610,12 +3980,12 @@ mod tests {
         state.champion_level = 1;
         state.champion_awake = true;
 
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert_eq!(legal.len(), 1, "{legal:?}");
         assert!(matches!(legal[0], Action::ActivateDagger), "{legal:?}");
 
         let (after, _) = apply(state, Action::ActivateDagger);
-        let legal_after = actions(after, false);
+        let legal_after = solver_actions(after, false);
         assert!(
             !legal_after
                 .iter()
@@ -3636,7 +4006,7 @@ mod tests {
         state.add_ally(Card::Arthur, true, true);
         state.add_ally(Card::ClumsyApprentice, true, false);
 
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             legal
                 .iter()
@@ -3651,7 +4021,7 @@ mod tests {
         );
 
         let (after_arthur, _) = apply(state, Action::AttackArthur(0));
-        let legal_after = actions(after_arthur, false);
+        let legal_after = solver_actions(after_arthur, false);
         assert!(
             legal_after
                 .iter()
@@ -3665,7 +4035,7 @@ mod tests {
         let mut state = State::with_queue(&[Card::ViciousSlice, Card::Brick], false, 1, &[]);
         state.champion_level = 1;
         state.champion_awake = true;
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         let attack = legal
             .iter()
             .copied()
@@ -3698,7 +4068,7 @@ mod tests {
         state.materials = MAT_BLADE;
 
         assert!(
-            actions(state, false)
+            solver_actions(state, false)
                 .iter()
                 .any(|action| matches!(action, Action::MercenaryBlade)),
             "blade should be materializable"
@@ -3710,7 +4080,7 @@ mod tests {
             "materializing the blade must not rest the champion"
         );
         assert!(
-            actions(equipped, false)
+            solver_actions(equipped, false)
                 .iter()
                 .any(|action| matches!(action, Action::AttackWithWeapon(_))),
             "awake champion with weapon must be able to swing"
@@ -3785,11 +4155,11 @@ mod tests {
             "ally attack must leave champion awake"
         );
         assert!(
-            actions(after_arthur, false)
+            solver_actions(after_arthur, false)
                 .iter()
                 .any(|action| matches!(action, Action::AttackWithWeapon(_))),
             "{:?}",
-            actions(after_arthur, false)
+            solver_actions(after_arthur, false)
         );
     }
 
@@ -3810,7 +4180,7 @@ mod tests {
         state.phase = Phase::Materialize;
         state.turn = 1;
 
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             legal.iter().any(|action| matches!(
                 action,
@@ -3865,7 +4235,7 @@ mod tests {
         state.phase = Phase::Materialize;
         state.turn = 1;
 
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             legal.iter().any(|action| matches!(
                 action,
@@ -3903,7 +4273,7 @@ mod tests {
 
         let (after_skip, _) = apply(after_play, Action::SkipMaterialize);
         assert_eq!(after_skip.phase, Phase::Main);
-        let legal_main = actions(after_skip, false);
+        let legal_main = solver_actions(after_skip, false);
         assert!(
             legal_main.iter().any(|action| matches!(
                 action,
@@ -3947,7 +4317,7 @@ mod tests {
             steps.iter().all(|step| step.kind.as_str() != "glimpse"),
             "Tristan must not Glimpse: {steps:?}"
         );
-        let legal = actions(state, true);
+        let legal = solver_actions(state, true);
         let tristan_plays = legal
             .iter()
             .filter(|action| matches!(action, Action::MaterializeTristanMemory))
@@ -3972,7 +4342,7 @@ mod tests {
         let (after_pass, _) = apply(state, Action::Pass);
         assert_eq!(after_pass.phase, Phase::Agility);
 
-        let legal = actions(after_pass, false);
+        let legal = solver_actions(after_pass, false);
         assert!(
             !legal
                 .iter()
@@ -4046,7 +4416,7 @@ mod tests {
         let (after_pass, _) = apply(state, Action::Pass);
         assert_eq!(after_pass.phase, Phase::Agility);
 
-        let legal = actions(after_pass, false);
+        let legal = solver_actions(after_pass, false);
         assert!(
             legal.iter().any(|action| matches!(
                 action,
@@ -4090,7 +4460,7 @@ mod tests {
         state.phase = Phase::Materialize;
         state.turn = 1;
 
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             !legal.iter().any(|action| matches!(
                 action,
@@ -4108,7 +4478,7 @@ mod tests {
         let mut state = State::with_queue(&[Card::Rococo, Card::Brick], false, 1, &[]);
         state.add_ally(Card::Rococo, true, false);
         state.add_ally(Card::ClumsyApprentice, true, false);
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         let play = legal
             .into_iter()
             .find(|action| {
@@ -4139,7 +4509,7 @@ mod tests {
         let mut no_auto =
             State::with_queue(&[Card::UncannyRealization, Card::Brick], false, 1, &[]);
         no_auto.add_ally(Card::ClumsyApprentice, true, false);
-        let legal = actions(no_auto, false);
+        let legal = solver_actions(no_auto, false);
         assert!(
             !legal.iter().any(|action| matches!(
                 action,
@@ -4154,7 +4524,7 @@ mod tests {
         let mut with_rococo =
             State::with_queue(&[Card::UncannyRealization, Card::Brick], false, 1, &[]);
         with_rococo.add_ally(Card::Rococo, true, false);
-        let legal = actions(with_rococo, false);
+        let legal = solver_actions(with_rococo, false);
         let command = legal
             .iter()
             .find(|action| {
@@ -4205,6 +4575,80 @@ mod tests {
     }
 
     #[test]
+    fn package_courier_on_enter_discards_then_draws() {
+        let mut state = State::with_queue(
+            &[
+                Card::PackageCourier,
+                Card::Brick,
+                Card::Brick,
+                Card::Brick,
+                Card::IgnitedStab,
+            ],
+            true,
+            1,
+            &[],
+        );
+        state.turn = 1;
+        let play = solver_actions(state, false)
+            .into_iter()
+            .find(|action| {
+                matches!(
+                    action,
+                    Action::PlayAlly {
+                        card: Card::PackageCourier,
+                        ..
+                    }
+                )
+            })
+            .expect("play Package Courier");
+        let (after, steps) = apply(state, play);
+        assert_eq!(after.ally_len, 1);
+        assert_eq!(after.allies[0].card(), Card::PackageCourier);
+        assert!(
+            steps.iter().any(|event| {
+                event.kind == EventKind::OnEnterDraw
+                    && event.discarded.is_some()
+                    && event.drawn.is_some()
+            }),
+            "expected On-Enter discard/draw: {steps:?}"
+        );
+        // Courier + 2 reserve + 1 discard = 4 cards from hand; draw puts one back.
+        assert_eq!(after.hand_len, 2);
+    }
+
+    #[test]
+    fn corhazi_courier_on_hit_discards_then_draws() {
+        let mut state = State::with_queue(
+            &[Card::Brick],
+            true,
+            1,
+            &[Card::KingdomInformant],
+        );
+        state.champion_level = 1;
+        state.champion_awake = true;
+        state.turn = 1;
+        state.add_ally(Card::CorhaziCourier, true, false);
+
+        let (after, steps) = apply(state, Action::AttackOthers);
+        assert!(after.has(Card::KingdomInformant), "{steps:?}");
+        assert!(!after.has(Card::Brick), "{steps:?}");
+        assert!(
+            steps.iter().any(|event| {
+                event.kind == EventKind::CorhaziOnHit
+                    && event.discarded == Some("brick")
+                    && event.drawn == Some("kingdom_informant")
+            }),
+            "expected On-Hit discard/draw: {steps:?}"
+        );
+        assert!(
+            steps.iter().any(|step| {
+                format_line_event(step) == "Corhazi On-Hit draw Kingd / discard Brick"
+            }),
+            "{steps:?}"
+        );
+    }
+
+    #[test]
     fn flagrant_guide_on_enter_levels_zander_and_marks_champion_damaged() {
         let mut state = State::with_queue(
             &[Card::FlagrantGuide, Card::Brick, Card::Brick, Card::Brick],
@@ -4214,7 +4658,7 @@ mod tests {
         );
         state.champion_awake = true;
         state.turn = 1;
-        let play = actions(state, false)
+        let play = solver_actions(state, false)
             .into_iter()
             .find(|action| {
                 matches!(
@@ -4269,7 +4713,7 @@ mod tests {
         );
         state.champion_awake = true;
         state.turn = 1;
-        let flagrant = actions(state, false)
+        let flagrant = solver_actions(state, false)
             .into_iter()
             .find(|action| {
                 matches!(
@@ -4287,7 +4731,7 @@ mod tests {
         state.add_hand(Card::Brick);
         state.add_hand(Card::Brick);
         state.add_hand(Card::Brick);
-        let heated = actions(state, false)
+        let heated = solver_actions(state, false)
             .into_iter()
             .find(|action| {
                 matches!(
@@ -4317,7 +4761,7 @@ mod tests {
         state.champion_awake = true;
         state.materials |= MAT_ZANDER_2;
 
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             legal.iter().any(|action| {
                 matches!(
@@ -4337,7 +4781,7 @@ mod tests {
             s.champion_level = 0;
             s
         };
-        assert!(!actions(unleveled, false).iter().any(|action| {
+        assert!(!solver_actions(unleveled, false).iter().any(|action| {
             matches!(
                 action,
                 Action::PlayAlly {
@@ -4369,7 +4813,7 @@ mod tests {
             Action::PlayAlly {
                 card: Card::FlagrantGuide,
                 kindle: 0,
-                sacrifice: false,
+                sacrifice_ally: None,
                 hot_cake_sacrifice: false,
                 flagrant_level: Some(MAT_ZANDER_2),
                 flagrant_gy_return: Some(Card::IgnitedStab),
@@ -4467,32 +4911,32 @@ mod tests {
         unleveled_mate.prep = 1;
         unleveled_mate.materials = MAT_BLADE;
         assert!(
-            !actions(unleveled_mate, false)
+            !solver_actions(unleveled_mate, false)
                 .iter()
                 .any(|action| matches!(action, Action::MercenaryBlade)),
             "mate blade requires leveled champion: {:?}",
-            actions(unleveled_mate, false)
+            solver_actions(unleveled_mate, false)
         );
 
         let mut unleveled_main = unleveled_mate;
         unleveled_main.phase = Phase::Main;
         assert!(
-            actions(unleveled_main, false)
+            solver_actions(unleveled_main, false)
                 .iter()
                 .any(|action| matches!(action, Action::MercenaryBlade)),
             "main blade only needs prep: {:?}",
-            actions(unleveled_main, false)
+            solver_actions(unleveled_main, false)
         );
 
         let mut leveled_mate = unleveled_main;
         leveled_mate.champion_level = 1;
         leveled_mate.phase = Phase::Materialize;
         assert!(
-            actions(leveled_mate, false)
+            solver_actions(leveled_mate, false)
                 .iter()
                 .any(|action| matches!(action, Action::MercenaryBlade)),
             "mate blade legal once champion is leveled: {:?}",
-            actions(leveled_mate, false)
+            solver_actions(leveled_mate, false)
         );
     }
 
@@ -4529,11 +4973,11 @@ mod tests {
         hammer_state.turn = 2;
         hammer_state.materials = MAT_HAMMER;
         assert!(
-            actions(hammer_state, false)
+            solver_actions(hammer_state, false)
                 .iter()
                 .any(|action| matches!(action, Action::MaterializeHammer)),
             "Impact Hammer should be materializable on turn 2: {:?}",
-            actions(hammer_state, false)
+            solver_actions(hammer_state, false)
         );
 
         let mut blade_state = State::with_queue(&[], false, 2, &[]);
@@ -4543,11 +4987,11 @@ mod tests {
         blade_state.prep = 1;
         blade_state.materials = MAT_BLADE;
         assert!(
-            actions(blade_state, false)
+            solver_actions(blade_state, false)
                 .iter()
                 .any(|action| matches!(action, Action::MercenaryBlade)),
             "Mercenary's Blade should be materializable on turn 2: {:?}",
-            actions(blade_state, false)
+            solver_actions(blade_state, false)
         );
 
         let (after_blade, steps) = apply(blade_state, Action::MercenaryBlade);
@@ -4568,7 +5012,7 @@ mod tests {
         state.turn = 2;
         state.materials = MAT_RING;
 
-        let legal_mate = actions(state, false);
+        let legal_mate = solver_actions(state, false);
         assert!(
             legal_mate
                 .iter()
@@ -4605,7 +5049,7 @@ mod tests {
                 .any(|step| { step.kind.as_str() == "banishCrusaderRing" && step.drawn.is_some() }),
             "banish+draw must happen in the same Mate resolution: {mate_steps:?}"
         );
-        let legal_main = actions(after_mate, false);
+        let legal_main = solver_actions(after_mate, false);
         assert!(
             !legal_main
                 .iter()
@@ -4664,14 +5108,14 @@ mod tests {
         state.champion_awake = true;
         state.champion_level = 1;
         state.add_ally(Card::ManicZealot, true, false);
-        let play = actions(state, false)
+        let play = solver_actions(state, false)
             .into_iter()
             .find(|action| {
                 matches!(
                     action,
                     Action::PlayAlly {
                         card: Card::PepperedChef,
-                        sacrifice: true,
+                        sacrifice_ally: Some(0),
                         ..
                     }
                 )
@@ -4687,6 +5131,44 @@ mod tests {
             "{steps:?}"
         );
         assert_eq!(after.agility, 2);
+    }
+
+    #[test]
+    fn peppered_chef_sacrifice_requires_non_arthur_ally() {
+        let mut state = State::with_queue(
+            &[Card::PepperedChef, Card::Brick, Card::Brick],
+            false,
+            1,
+            &[],
+        );
+        state.champion_awake = true;
+        state.add_ally(Card::Arthur, true, true);
+        state.hot_cake = 1;
+
+        let legal = solver_actions(state, false);
+        assert!(
+            !legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAlly {
+                    card: Card::PepperedChef,
+                    sacrifice_ally: Some(_),
+                    ..
+                }
+            )),
+            "Peppered Chef sacrifice needs a non-Arthur ally, not Hot Cake: {legal:?}"
+        );
+        assert!(
+            legal.iter().any(|action| matches!(
+                action,
+                Action::PlayAlly {
+                    card: Card::PepperedChef,
+                    sacrifice_ally: None,
+                    hot_cake_sacrifice: true,
+                    ..
+                }
+            )),
+            "Hot Cake buff is separate from ally sacrifice: {legal:?}"
+        );
     }
 
     #[test]
@@ -4765,7 +5247,7 @@ mod tests {
         state.turn = 1;
         state.prep = 1;
         state.add_ally(Card::CorhaziArsonist, true, false);
-        let activate = actions(state, false)
+        let activate = solver_actions(state, false)
             .into_iter()
             .find(|action| matches!(action, Action::ActivateArsonist(0)))
             .expect("Arsonist should offer prep-for-stealth activation");
@@ -4787,7 +5269,7 @@ mod tests {
         no_prep.turn = 1;
         no_prep.add_ally(Card::CorhaziArsonist, true, false);
         assert!(
-            !actions(no_prep, false)
+            !solver_actions(no_prep, false)
                 .iter()
                 .any(|action| matches!(action, Action::ActivateArsonist(_))),
             "no prep, no activation"
@@ -4808,7 +5290,7 @@ mod tests {
         let hand = [Card::UndeniableTruth, Card::Brick, Card::Brick, Card::Brick];
         let no_ally = State::with_queue(&hand, true, 1, &[]);
         assert!(
-            !actions(no_ally, false).iter().any(|action| matches!(
+            !solver_actions(no_ally, false).iter().any(|action| matches!(
                 action,
                 Action::PlayAction {
                     card: Card::UndeniableTruth,
@@ -4822,7 +5304,7 @@ mod tests {
         state.champion_awake = true;
         state.add_ally(Card::ClumsyApprentice, true, false);
         state.add_ally(Card::ManicZealot, true, false);
-        let plays: Vec<_> = actions(state, false)
+        let plays: Vec<_> = solver_actions(state, false)
             .into_iter()
             .filter(|action| {
                 matches!(
@@ -4885,7 +5367,7 @@ mod tests {
         ];
         let mut state = State::with_queue(&hand, true, 1, &[]);
         state.champion_awake = true;
-        let ignite = actions(state, false)
+        let ignite = solver_actions(state, false)
             .into_iter()
             .find(|action| {
                 matches!(
@@ -4921,7 +5403,7 @@ mod tests {
         let hand = [Card::IncreasingDanger, Card::Brick, Card::Brick];
         let mut state = State::with_queue(&hand, true, 1, &[Card::SmokeOut, Card::SparkAlight]);
         state.champion_awake = true;
-        let play = actions(state, false)
+        let play = solver_actions(state, false)
             .into_iter()
             .find(|action| {
                 matches!(
@@ -4967,11 +5449,74 @@ mod tests {
     }
 
     #[test]
+    fn flurry_of_fire_should_deal_one_twice() {
+        assert_eq!(
+            parse_card("Aenean Flurry of Fire"),
+            Some(Card::FlurryOfFire)
+        );
+        let state = State::with_queue(
+            &[Card::FlurryOfFire, Card::Brick, Card::Brick],
+            true,
+            1,
+            &[],
+        );
+        let play = Action::PlayAction {
+            card: Card::FlurryOfFire,
+            kindle: 0,
+            prepared: false,
+            imbue: false,
+            sacrifice_ally: None,
+        };
+        let (after, steps) = apply(state, play);
+        assert_eq!(after.damage, 2, "{steps:?}");
+    }
+
+    #[test]
+    fn flurry_of_fire_should_amplify_each_hit_when_poisoned_dagger_is_active() {
+        let mut state = State::with_queue(
+            &[Card::FlurryOfFire, Card::Brick, Card::Brick],
+            true,
+            1,
+            &[],
+        );
+        state.amplify = true;
+        let play = Action::PlayAction {
+            card: Card::FlurryOfFire,
+            kindle: 0,
+            prepared: false,
+            imbue: false,
+            sacrifice_ally: None,
+        };
+        let (after, steps) = apply(state, play);
+        assert_eq!(after.damage, 4, "{steps:?}");
+    }
+
+    #[test]
+    fn spark_alight_should_amplify_once_when_poisoned_dagger_is_active() {
+        let mut state = State::with_queue(
+            &[Card::SparkAlight, Card::Brick, Card::Brick],
+            true,
+            1,
+            &[],
+        );
+        state.amplify = true;
+        let play = Action::PlayAction {
+            card: Card::SparkAlight,
+            kindle: 0,
+            prepared: false,
+            imbue: false,
+            sacrifice_ally: None,
+        };
+        let (after, steps) = apply(state, play);
+        assert_eq!(after.damage, 3, "{steps:?}");
+    }
+
+    #[test]
     fn incapacitate_class_bonus_discount_and_inert_actions() {
         let hand = [Card::Incapacitate, Card::Brick, Card::Brick];
         let unleveled = State::with_queue(&hand, true, 1, &[]);
         assert!(
-            !actions(unleveled, false).iter().any(|action| matches!(
+            !solver_actions(unleveled, false).iter().any(|action| matches!(
                 action,
                 Action::PlayAction {
                     card: Card::Incapacitate,
@@ -4983,7 +5528,7 @@ mod tests {
 
         let mut leveled = State::with_queue(&hand, true, 1, &[]);
         leveled.champion_level = 1;
-        let play = actions(leveled, false)
+        let play = solver_actions(leveled, false)
             .into_iter()
             .find(|action| {
                 matches!(
@@ -5002,7 +5547,7 @@ mod tests {
 
         let ash_hand = [Card::ReduceToAsh, Card::Brick, Card::Brick, Card::Brick];
         let ash_state = State::with_queue(&ash_hand, true, 1, &[]);
-        let ash = actions(ash_state, false)
+        let ash = solver_actions(ash_state, false)
             .into_iter()
             .find(|action| {
                 matches!(
@@ -5025,7 +5570,7 @@ mod tests {
         let mut state = State::with_queue(&hand, true, 1, &[]);
         state.champion_awake = true;
         state.phase = Phase::Materialize;
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             legal.iter().any(|action| matches!(
                 action,
@@ -5302,7 +5847,7 @@ mod tests {
             1,
             &[Card::HotCake],
         );
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         let decree_actions: Vec<_> = legal
             .iter()
             .filter(|action| {
@@ -5356,7 +5901,7 @@ mod tests {
             1,
             &[Card::HotCake],
         );
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             legal.iter().any(|action| matches!(
                 action,
@@ -5485,7 +6030,7 @@ mod tests {
             1,
             &[],
         );
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             !legal.iter().any(|action| matches!(
                 action,
@@ -5571,7 +6116,7 @@ mod tests {
             1,
             &[],
         );
-        let legal = actions(state, false);
+        let legal = solver_actions(state, false);
         assert!(
             legal.iter().any(|action| matches!(
                 action,
@@ -5832,6 +6377,80 @@ mod tests {
                 .iter()
                 .any(|event| event.kind.as_str() == "levelTristan"),
             "optimal Tristan line should materialize Tristan"
+        );
+    }
+
+    #[test]
+    fn rending_flames_doubled_banishes_from_gy_before_self_enters() {
+        let mut state = State::with_queue(
+            &[
+                Card::RendingFlames,
+                Card::Brick,
+                Card::Brick,
+                Card::Brick,
+            ],
+            false,
+            2,
+            &[],
+        );
+        state.champion_level = 1;
+        state.champion_awake = true;
+        state.turn = 1;
+        state.gy[Card::RendingFlames.index()] = 2;
+        state.gy[Card::IgnitedStab.index()] = 1;
+        state.gy_total = 3;
+        state.fire_gy = 3;
+
+        let doubled_offered = solver_actions(state, false).iter().any(|action| {
+            matches!(
+                action,
+                Action::PlayAttack {
+                    card: Card::RendingFlames,
+                    doubled: true,
+                    ..
+                }
+            )
+        });
+        assert!(doubled_offered, "need three Fire in GY before doubling");
+
+        let mut sparse_gy = state;
+        sparse_gy.gy[Card::RendingFlames.index()] = 2;
+        sparse_gy.gy[Card::IgnitedStab.index()] = 0;
+        sparse_gy.gy_total = 2;
+        sparse_gy.fire_gy = 2;
+        assert!(
+            !solver_actions(sparse_gy, false).iter().any(|action| {
+                matches!(
+                    action,
+                    Action::PlayAttack {
+                        card: Card::RendingFlames,
+                        doubled: true,
+                        ..
+                    }
+                )
+            }),
+            "two Fire in GY is not enough to double"
+        );
+
+        let (after, steps) = apply(
+            state,
+            Action::PlayAttack {
+                card: Card::RendingFlames,
+                wield: None,
+                prepared: false,
+                doubled: true,
+                command_ally: None,
+            },
+        );
+        assert_eq!(after.gy_count(Card::RendingFlames), 1, "{steps:?}");
+        assert_eq!(after.gy_count(Card::IgnitedStab), 0, "{steps:?}");
+        assert_eq!(after.fire_gy, 1, "{steps:?}");
+        assert_eq!(after.damage, 6, "{steps:?}");
+        assert!(
+            steps
+                .iter()
+                .any(|step| format_line_event(step).contains("Rending Flames (Doubled)")),
+            "{steps:?}"
         );
     }
 

@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import {
   CARD_LIST,
   isPlayableDeckCard,
@@ -29,13 +30,11 @@ const toolbarActionsClass =
 
 export function HandBuilder({
   hand,
-  drawn,
   solverMode,
   selectedCard,
   decks,
   activeDeck,
   recognizedDeckCount,
-  remainingCount,
   shuffled,
   seed,
   goFirst,
@@ -49,12 +48,10 @@ export function HandBuilder({
   maxCardDraw,
   busy,
   onHandChange,
-  onDrawnChange,
   onSolverModeChange,
   onSelectedCardChange,
   onSwitchDeck,
   onDrawRandomHand,
-  onDrawCard,
   onShuffleDeck,
   onGoFirstChange,
   onTurnsChange,
@@ -67,15 +64,14 @@ export function HandBuilder({
   onSolve,
   onCancel,
   decksLoading = false,
+  playtestPanel,
 }: {
   hand: CardId[];
-  drawn: CardId[];
   solverMode: SolverMode;
   selectedCard: CardId;
   decks: SavedDeck[];
   activeDeck: SavedDeck | null;
   recognizedDeckCount: number;
-  remainingCount: number;
   shuffled: boolean;
   seed: number;
   goFirst: boolean;
@@ -89,12 +85,10 @@ export function HandBuilder({
   maxCardDraw: number | null;
   busy: boolean;
   onHandChange: (hand: CardId[]) => void;
-  onDrawnChange: (drawn: CardId[]) => void;
   onSolverModeChange: (mode: SolverMode) => void;
   onSelectedCardChange: (id: CardId) => void;
   onSwitchDeck: (deckId: string) => void;
   onDrawRandomHand: () => void;
-  onDrawCard: () => void;
   onShuffleDeck: () => void;
   onGoFirstChange: (value: boolean) => void;
   onTurnsChange: (value: number) => void;
@@ -107,11 +101,12 @@ export function HandBuilder({
   onSolve: () => void;
   onCancel: () => void;
   decksLoading?: boolean;
+  playtestPanel?: ReactNode;
 }) {
-  const isDeckMode = solverMode === "deck";
+  const isPileMode = solverMode === "deck" || solverMode === "playtest";
+  const isPlaytestMode = solverMode === "playtest";
   const canDrawHand =
     decks.length > 0 && recognizedDeckCount >= OPENING_HAND_SIZE;
-  const canDrawCard = remainingCount > 0;
   const playableCards = CARD_LIST.filter(isPlayableDeckCard).sort((a, b) =>
     a.name.localeCompare(b.name),
   );
@@ -186,7 +181,7 @@ export function HandBuilder({
               disabled={!canDrawHand}
               title={
                 canDrawHand
-                  ? "Shuffle with a new seed and deal a new opening hand"
+                  ? "Shuffle with a new seed and keep the opening hand"
                   : `Need a saved deck with at least ${OPENING_HAND_SIZE} recognized cards`
               }
             >
@@ -194,43 +189,6 @@ export function HandBuilder({
             </button>
           </div>
         </div>
-
-        {isDeckMode && (
-          <div className="mt-7 border-t border-border pt-5">
-            <SectionHeading
-              title="DRAWN"
-              meta={
-                <strong>
-                  {drawn.length} drawn · {remainingCount} left
-                </strong>
-              }
-            />
-            <CardStrip
-              ids={drawn}
-              ariaLabel="Cards drawn after the opening hand"
-              empty="Draw the next card from the remaining pile."
-              onRemove={(index) => onDrawnChange(drawn.slice(0, index))}
-            />
-            <div className={cn(toolbarClass, "mt-3")}>
-              <button
-                className={cn(
-                  buttonVariants({ intent: "secondary" }),
-                  "whitespace-nowrap max-[620px]:w-full",
-                )}
-                type="button"
-                onClick={onDrawCard}
-                disabled={!canDrawCard}
-                title={
-                  canDrawCard
-                    ? "Draw the next card from the remaining pile"
-                    : "No cards left in the deck"
-                }
-              >
-                Draw card
-              </button>
-            </div>
-          </div>
-        )}
 
         <div className="mt-[18px] flex items-end gap-3 max-[620px]:flex-col max-[620px]:items-stretch">
           <SearchableSelect
@@ -256,24 +214,6 @@ export function HandBuilder({
           >
             Add to hand
           </button>
-          {isDeckMode && (
-            <button
-              className={cn(
-                buttonVariants({ intent: "secondary" }),
-                "max-[620px]:w-full",
-              )}
-              type="button"
-              onClick={() => onDrawnChange([...drawn, selectedCard])}
-              disabled={!shuffled}
-              title={
-                shuffled
-                  ? "Take the first remaining copy of this card from the pile"
-                  : "Shuffle the deck before adding to drawn"
-              }
-            >
-              Add to drawn
-            </button>
-          )}
         </div>
         <RunSettings
           goFirst={goFirst}
@@ -281,7 +221,8 @@ export function HandBuilder({
           simType={simType}
           rollouts={rollouts}
           seed={shuffled ? seed : undefined}
-          orderedPile={isDeckMode && shuffled}
+          orderedPile={isPileMode && shuffled}
+          playtestMode={isPlaytestMode}
           cpuCount={cpuCount}
           maxThreads={maxThreads}
           glimpseEnabled={glimpseEnabled}
@@ -296,12 +237,15 @@ export function HandBuilder({
           onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
           onMaxCardDrawChange={onMaxCardDrawChange}
         />
-        <ActionBar
-          label="Calculate maximum damage"
-          busy={busy}
-          onRun={onSolve}
-          onCancel={onCancel}
-        />
+        {!isPlaytestMode && (
+          <ActionBar
+            label="Calculate maximum damage"
+            busy={busy}
+            onRun={onSolve}
+            onCancel={onCancel}
+          />
+        )}
+        {playtestPanel}
       </div>
     </div>
   );

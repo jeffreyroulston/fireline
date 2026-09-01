@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import type { CardId, SolveResult } from "@/lib/engine";
 import { cn } from "@/lib/utils/cn";
 import {
@@ -31,12 +30,6 @@ export function ResultRail({
   busy: boolean;
   hand: CardId[];
 }) {
-  const [mcIndex, setMcIndex] = useState<number | null>(null);
-
-  useEffect(() => {
-    setMcIndex(null);
-  }, [result]);
-
   if (!result) {
     if (!busy) return null;
 
@@ -148,8 +141,6 @@ export function ResultRail({
       <LineInspector
         sample={sample}
         mode={mode}
-        mcIndex={mcIndex}
-        onMcIndexChange={setMcIndex}
         showSendToSolver={false}
         showDamageReadout={false}
         resetKeyPrefix="solve"
