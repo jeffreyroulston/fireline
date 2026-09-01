@@ -20,13 +20,19 @@ export function TwoPassCompare({
   const oracleDiffCount = diff.oracle.filter(
     (entry) => entry.mark === "added",
   ).length;
+  const brickDiffCount = diff.brick.filter(
+    (entry) => entry.mark === "removed",
+  ).length;
 
   return (
     <div className={cn("mt-7 grid gap-7", compact && "mt-5 gap-5")}>
-      {oracleDiffCount > 0 && (
+      {(oracleDiffCount > 0 || brickDiffCount > 0) && (
         <p className="m-0 text-[13px] leading-[1.45] text-muted">
-          {oracleDiffCount} oracle event{oracleDiffCount === 1 ? "" : "s"} differ
-          from fire brick — highlighted below
+          {brickDiffCount > 0 && oracleDiffCount > 0
+            ? `${brickDiffCount} fire-brick event${brickDiffCount === 1 ? "" : "s"} and ${oracleDiffCount} oracle event${oracleDiffCount === 1 ? "" : "s"} differ — highlighted below`
+            : brickDiffCount > 0
+              ? `${brickDiffCount} fire-brick event${brickDiffCount === 1 ? "" : "s"} differ from oracle — highlighted below`
+              : `${oracleDiffCount} oracle event${oracleDiffCount === 1 ? "" : "s"} differ from fire brick — highlighted below`}
         </p>
       )}
       <PassLinePanel

@@ -1735,4 +1735,74 @@ mod tests {
             applied.events
         );
     }
+
+    #[test]
+    fn playtest_increasing_danger_manual_reserve_labels_correctly() {
+        use crate::line_event::format_line_event;
+
+        let init = playtest_init(&PlaytestInitRequest {
+            hand: vec![
+                Card::IncreasingDanger.id().to_string(),
+                Card::Brick.id().to_string(),
+                Card::Brick.id().to_string(),
+                Card::Brick.id().to_string(),
+            ],
+            go_first: true,
+            max_turns: 1,
+            materials: BTreeMap::new(),
+            queue: vec![Card::SmokeOut.id().to_string(), Card::SparkAlight.id().to_string()],
+        })
+        .expect("init");
+        let mut engine = init.state.engine.clone();
+        engine.turn = 1;
+
+        let legal = playtest_legal_actions(&PlaytestLegalActionsRequest {
+            state: engine.clone(),
+        })
+        .expect("legal");
+        let danger = legal
+            .actions
+            .iter()
+            .find(|opt| {
+                matches!(
+                    &opt.action,
+                    PlaytestAction::PlayAction {
+                        card,
+                        kindle: 0,
+                        imbue: false,
+                        ..
+                    } if card == Card::IncreasingDanger.id()
+                )
+            })
+            .expect("play increasing danger");
+        assert_eq!(danger.reserve_count, 2);
+
+        let mut action = danger.action.clone();
+        if let PlaytestAction::PlayAction {
+            reserved_hand_indices,
+            ..
+        } = &mut action
+        {
+            *reserved_hand_indices = vec![1, 2];
+        } else {
+            panic!("expected play action");
+        }
+
+        let applied = playtest_apply(&PlaytestApplyRequest {
+            state: engine,
+            action,
+        })
+        .expect("apply with reserve");
+        let play_event = applied
+            .events
+            .iter()
+            .find(|event| event.card.as_deref() == Some(Card::IncreasingDanger.id()))
+            .expect("Increasing Danger play event");
+        assert_ne!(play_event.imbue, Some(true));
+        assert!(
+            format_line_event(play_event).starts_with("Increasing Danger"),
+            "{}",
+            format_line_event(play_event)
+        );
+    }
 }

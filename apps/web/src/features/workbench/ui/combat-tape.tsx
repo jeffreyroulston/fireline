@@ -65,6 +65,8 @@ export function CombatTape({
         const diff = stepDiff?.[index];
         const isOracleDiff =
           diffPerspective === "oracle" && diff?.mark === "added";
+        const isBrickDiff =
+          diffPerspective === "brick" && diff?.mark === "removed";
         const matches =
           searching && eventMatchesQuery(event, query, catalog);
         const cardMatch =
@@ -79,6 +81,7 @@ export function CombatTape({
             className={cn(
               "border-b border-[color-mix(in_srgb,var(--color-border)_60%,transparent)] last:border-b-0",
               isOracleDiff && "[&_.tape-row]:border-l-[3px] [&_.tape-row]:border-secondary [&_.tape-row]:pl-2",
+              isBrickDiff && "[&_.tape-row]:border-l-[3px] [&_.tape-row]:border-primary [&_.tape-row]:pl-2",
               matches &&
                 "[&_.tape-row]:bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] [&_.tape-row]:shadow-[inset_3px_0_0_var(--color-accent)]",
               matches &&
@@ -113,6 +116,14 @@ export function CombatTape({
                   <p className="mb-3 grid gap-1 border-l-2 border-secondary py-0 pl-2.5 font-mono text-[11px] leading-[1.45]">
                     <span className="text-[9px] tracking-[0.08em] text-secondary-dark uppercase">
                       Fire brick
+                    </span>
+                    {formatLineEvent(diff.compareEvent, catalog)}
+                  </p>
+                )}
+                {isBrickDiff && diff?.compareEvent && (
+                  <p className="mb-3 grid gap-1 border-l-2 border-primary py-0 pl-2.5 font-mono text-[11px] leading-[1.45]">
+                    <span className="text-[9px] tracking-[0.08em] text-primary uppercase">
+                      Optimal
                     </span>
                     {formatLineEvent(diff.compareEvent, catalog)}
                   </p>

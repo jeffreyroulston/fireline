@@ -46,8 +46,11 @@ export function LineCompare({
         </p>
       ) : (
         <p className="m-0 text-[13px] leading-[1.45] text-muted">
-          {rightDiffCount} optimal event{rightDiffCount === 1 ? "" : "s"} differ from your
-          line — highlighted below
+          {leftDiffCount > 0 && rightDiffCount > 0
+            ? `${leftDiffCount} of your events and ${rightDiffCount} optimal event${rightDiffCount === 1 ? "" : "s"} differ — highlighted below`
+            : leftDiffCount > 0
+              ? `${leftDiffCount} of your events differ from optimal — highlighted below`
+              : `${rightDiffCount} optimal event${rightDiffCount === 1 ? "" : "s"} differ from your line — highlighted below`}
         </p>
       )}
       <PassLinePanel

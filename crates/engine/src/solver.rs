@@ -2772,11 +2772,37 @@ fn play_action(
     let cost = action_cost(state, card);
     let imbued = match reserved {
         Some(cards) => {
-            let payment_ok =
-                state.pay_imbue_cost_selection(cost, card.imbue(), kindle, imbue, cards);
-            if !payment_ok {
-                return;
-            }
+            let imbued = if card.imbue() == 0 {
+                if !state.pay_with_kindle_selection(cost, kindle, cards, imbue) {
+                    return;
+                }
+                false
+            } else if imbue {
+                if !state.pay_imbue_cost_selection(cost, card.imbue(), kindle, true, cards) {
+                    return;
+                }
+                true
+            } else {
+                let imbue_n = card.imbue();
+                let kindle_capped = kindle.min(cost).min(state.fire_gy);
+                let reserve = cost.saturating_sub(kindle_capped);
+                if cards.len() != reserve as usize {
+                    return;
+                }
+                let Some(all_fire) = state.pay_reserve_selection(cards, false) else {
+                    return;
+                };
+                let marched = state.banish_fire_from_gy(kindle_capped, true);
+                for _ in 0..marched {
+                    let already = state.allies[..state.ally_len as usize]
+                        .iter()
+                        .any(|ally| ally.card() == Card::MarchHare);
+                    if !already {
+                        state.add_ally(Card::MarchHare, true, false);
+                    }
+                }
+                reserve >= imbue_n && all_fire
+            };
             if !state.remove_hand(card) {
                 return;
             }
@@ -2792,7 +2818,7 @@ fn play_action(
                     EventFields::card(victim),
                 );
             }
-            payment_ok
+            imbued
         }
         None => {
             state.remove_hand(card);

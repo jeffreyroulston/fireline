@@ -84,7 +84,10 @@ export function twoPassEventDiff(
           mark: "added",
           compareEvent: brick[paired.brick],
         };
-        brickInfo[paired.brick] = { mark: "removed" };
+        brickInfo[paired.brick] = {
+          mark: "removed",
+          compareEvent: oracle[entry.oracle],
+        };
         index += 1;
       } else {
         oracleInfo[entry.oracle] = { mark: "added" };
@@ -98,7 +101,10 @@ export function twoPassEventDiff(
         mark: "added",
         compareEvent: brick[entry.brick],
       };
-      brickInfo[entry.brick] = { mark: "removed" };
+      brickInfo[entry.brick] = {
+        mark: "removed",
+        compareEvent: oracle[paired.oracle],
+      };
       index += 1;
     } else {
       brickInfo[entry.brick] = { mark: "removed" };

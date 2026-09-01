@@ -45,11 +45,16 @@ export function PassLinePanel({
         label={`${label.toUpperCase()} LINE`}
         events={events}
         resetKey={resetKey}
-        stepDiff={oracle ? stepDiff : undefined}
-        diffPerspective={oracle ? "oracle" : undefined}
+        stepDiff={stepDiff}
+        diffPerspective={oracle ? "oracle" : stepDiff ? "brick" : undefined}
         meta={
-          diffCount > 0 && oracle ? (
-            <em className="ml-1 not-italic font-semibold text-secondary-dark">
+          diffCount > 0 ? (
+            <em
+              className={cn(
+                "ml-1 not-italic font-semibold",
+                oracle ? "text-secondary-dark" : "text-primary",
+              )}
+            >
               {" "}
               · {diffCount} diffs
             </em>

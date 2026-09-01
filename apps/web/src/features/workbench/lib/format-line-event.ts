@@ -188,7 +188,7 @@ export function formatLineEvent(
       if (event.gyThreshold) s = "Intensified Pyre (GY 8+)";
 
       if (event.imbue === true) {
-        if (event.drawn) {
+        if (event.card === "vermilion_decree" && event.drawn) {
           s = `Vermilion Decree (Imbue, draw ${short(event.drawn)})`;
         } else if (event.card === "surging_bolt") {
           s = "Surging Bolt (Imbue)";

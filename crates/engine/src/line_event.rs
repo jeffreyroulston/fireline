@@ -826,7 +826,9 @@ pub fn format_line_event(event: &LineEvent) -> String {
                 s = "Intensified Pyre (GY 8+)".to_string();
             }
             if event.imbue == Some(true) {
-                if let Some(drawn) = event.drawn {
+                if event.card == Some("vermilion_decree")
+                    && let Some(drawn) = event.drawn
+                {
                     s = format!("Vermilion Decree (Imbue, draw {})", short(Some(drawn)));
                 } else if event.card == Some("surging_bolt") {
                     s = "Surging Bolt (Imbue)".to_string();
