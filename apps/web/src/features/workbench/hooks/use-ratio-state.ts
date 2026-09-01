@@ -12,7 +12,7 @@ import {
   type DeckCounts,
 } from "@/lib/engine";
 import { snapshotRatioCriteria, deckCountsTotal, isSameDeckCounts } from "../panels/ratios/shared";
-import type { RatioRefineCriteria, RatioStrategy } from "../types";
+import type { RatioEvalMode, RatioRefineCriteria, RatioStrategy } from "../types";
 import { refineBounds, REFINE_COPY_CEILING } from "../utils";
 
 type UseRatioStateOptions = Readonly<{
@@ -26,6 +26,7 @@ export type RatioStateSnapshot = Readonly<{
   replacements: Partial<Record<CardId, number>>;
   ratioSamples: number;
   metric: "mean" | "p50";
+  ratioEvalMode: RatioEvalMode;
   ratioStrategy: RatioStrategy;
   swapFrom: CardId | "";
   swapCount: number;
@@ -52,6 +53,7 @@ export type RatioStateActions = Readonly<{
   toggleSwapCandidate: (id: CardId) => void;
   setRatioSamples: (value: number) => void;
   setMetric: (value: "mean" | "p50") => void;
+  setRatioEvalMode: (value: RatioEvalMode) => void;
   setRatioStrategy: (value: RatioStrategy) => void;
   setSwapFrom: (value: CardId | "") => void;
   setSwapCount: (value: number) => void;
@@ -78,6 +80,7 @@ export function useRatioState({
   >({});
   const [ratioSamples, setRatioSamples] = useState(40);
   const [metric, setMetric] = useState<"mean" | "p50">("mean");
+  const [ratioEvalMode, setRatioEvalMode] = useState<RatioEvalMode>("full");
   const [ratioStrategy, setRatioStrategy] =
     useState<RatioStrategy>("randomSample");
   const [swapFrom, setSwapFrom] = useState<CardId | "">("");
@@ -248,6 +251,7 @@ export function useRatioState({
     replacements,
     ratioSamples,
     metric,
+    ratioEvalMode,
     ratioStrategy,
     swapFrom,
     swapCount,
@@ -271,6 +275,7 @@ export function useRatioState({
     toggleSwapCandidate,
     setRatioSamples,
     setMetric,
+    setRatioEvalMode,
     setRatioStrategy,
     setSwapFrom,
     setSwapCount,

@@ -489,10 +489,22 @@ mod tests {
     #[test]
     fn admission_respects_thread_cap() {
         assert!(!admission_ok(
-            4, 4, 3072, 2048, Some(48_000), Some(40_000), 1024
+            4,
+            4,
+            3072,
+            2048,
+            Some(48_000),
+            Some(40_000),
+            1024
         ));
         assert!(admission_ok(
-            3, 4, 3072, 2048, Some(48_000), Some(40_000), 1024
+            3,
+            4,
+            3072,
+            2048,
+            Some(48_000),
+            Some(40_000),
+            1024
         ));
     }
 
@@ -500,10 +512,22 @@ mod tests {
     fn admission_16gb_allows_four_heavy_hands() {
         // 4 * 3072 + 2048 = 14336 <= 16384
         assert!(admission_ok(
-            3, 16, 3072, 2048, Some(16_384), Some(12_000), 1024
+            3,
+            16,
+            3072,
+            2048,
+            Some(16_384),
+            Some(12_000),
+            1024
         ));
         assert!(!admission_ok(
-            4, 16, 3072, 2048, Some(16_384), Some(12_000), 1024
+            4,
+            16,
+            3072,
+            2048,
+            Some(16_384),
+            Some(12_000),
+            1024
         ));
     }
 
@@ -538,16 +562,36 @@ mod tests {
     #[test]
     fn admission_blocks_only_in_park_danger_zone() {
         // 4 GiB free is below a full hand budget but well above park — admit.
-        assert!(admission_ok(1, 8, 3072, 2048, Some(48_000), Some(4096), 1024));
+        assert!(admission_ok(
+            1,
+            8,
+            3072,
+            2048,
+            Some(48_000),
+            Some(4096),
+            1024
+        ));
         assert!(!admission_ok(
-            1, 8, 3072, 2048, Some(48_000), Some(512), 1024
+            1,
+            8,
+            3072,
+            2048,
+            Some(48_000),
+            Some(512),
+            1024
         ));
     }
 
     #[test]
     fn admission_keeps_filling_when_one_hard_hand_has_spare_ram() {
         assert!(admission_ok(
-            1, 10, 3072, 3865, Some(61_853), Some(40_000), 1932
+            1,
+            10,
+            3072,
+            3865,
+            Some(61_853),
+            Some(40_000),
+            1932
         ));
     }
 

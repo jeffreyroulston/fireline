@@ -457,14 +457,9 @@ impl State {
                 }
             }
             Card::ClumsyApprentice => 1,
-            Card::PackageCourier => {
-                // Cost 2; need one leftover hand card after paying to discard for the draw.
-                if self.hand_len > 3 {
-                    1
-                } else {
-                    0
-                }
-            }
+            // Cost 2; need one leftover hand card after paying to discard for the draw.
+            Card::PackageCourier if self.hand_len > 3 => 1,
+            Card::PackageCourier => 0,
             _ => 0,
         }
     }
@@ -743,7 +738,10 @@ impl State {
         } else {
             PaymentMode::Default
         };
-        if self.pay_reserve_selection(reserved, mode == PaymentMode::FireOnly).is_none() {
+        if self
+            .pay_reserve_selection(reserved, mode == PaymentMode::FireOnly)
+            .is_none()
+        {
             return false;
         }
         let marched = self.banish_fire_from_gy(kindle, true);
@@ -1427,6 +1425,9 @@ pub struct EffectiveRequest {
     pub max_hand_duration_secs: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_card_draw: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
+    pub eval_mode: Option<&'static str>,
 }
 
 impl Default for EffectiveRequest {
@@ -1450,6 +1451,7 @@ impl Default for EffectiveRequest {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
             max_card_draw: None,
+            eval_mode: None,
         }
     }
 }
@@ -1500,7 +1502,11 @@ pub struct SolveRequest {
 }
 
 /// Whether Glimpse is active for a solve pass.
-pub fn effective_glimpse(sim_type: SimType, brick_pass: bool, glimpse_enabled: Option<bool>) -> bool {
+pub fn effective_glimpse(
+    sim_type: SimType,
+    brick_pass: bool,
+    glimpse_enabled: Option<bool>,
+) -> bool {
     if sim_type == SimType::FireBrick || brick_pass {
         return false;
     }
@@ -1681,4 +1687,20 @@ const fn default_rollouts() -> u16 {
 
 const fn default_seed() -> u64 {
     42
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EffectiveRequest;
+    use crate::budget::Budget;
+    use crate::version::ENGINE_VERSION;
+
+    #[test]
+    fn effective_request_default_uses_conservative_budget() {
+        let effective = EffectiveRequest::default();
+        assert_eq!(effective.engine_version, ENGINE_VERSION);
+        assert_eq!(effective.budget, Budget::conservative());
+        assert!(effective.deck.is_empty());
+        assert!(effective.max_turns.is_none());
+    }
 }

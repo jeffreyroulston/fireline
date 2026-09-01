@@ -534,11 +534,11 @@ impl DeckStatAccumulator {
             opened_this[card.index()] = true;
         }
         let damage = u32::from(sample_damage);
-        for index in 0..CARD_COUNT {
+        for (index, opened) in opened_this.iter().enumerate().take(CARD_COUNT) {
             if self.copies[index] == 0 {
                 continue;
             }
-            if opened_this[index] {
+            if *opened {
                 self.hand_samples_with[index] += 1;
                 self.hand_damage_with[index] = self.hand_damage_with[index].saturating_add(damage);
             } else {

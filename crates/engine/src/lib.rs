@@ -7,6 +7,7 @@ pub mod error;
 pub mod line_event;
 pub mod model;
 pub mod optimize_strategies;
+mod sprt;
 pub mod playtest;
 pub mod pressure;
 mod random;
@@ -35,16 +36,28 @@ pub use line_event::{
     ActionOp, AttackBonuses, EventKind, LineEvent, TapePhase, format_line_event,
     format_line_event_row,
 };
-pub use model::{Action, EffectiveRequest, PassResult, Phase, SimType, SolveRequest, SolveResult, State, Weapon};
+pub use model::{
+    Action, EffectiveRequest, PassResult, Phase, SimType, SolveRequest, SolveResult, State, Weapon,
+};
 pub use playtest::{
-    PlaytestAction, PlaytestActionOption, PlaytestAllyView, PlaytestApplyRequest, PlaytestApplyResult,
-    PlaytestInitRequest, PlaytestInitResult, PlaytestLegalActionsRequest, PlaytestLegalActionsResult,
-    PlaytestStateView, playtest_apply, playtest_init, playtest_legal_actions,
+    PlaytestAction, PlaytestActionOption, PlaytestAllyView, PlaytestApplyRequest,
+    PlaytestApplyResult, PlaytestInitRequest, PlaytestInitResult, PlaytestLegalActionsRequest,
+    PlaytestLegalActionsResult, PlaytestStateView, playtest_apply, playtest_init,
+    playtest_legal_actions,
 };
 pub use pressure::{PressureLevel, current_pressure, memory_config};
-pub use solver::{apply_action, legal_actions, opening_hand_hash, solve, solve_cards, solve_pass, solve_with_progress};
+pub use solver::{
+    apply_action, legal_actions, opening_hand_hash, solve, solve_cards, solve_pass,
+    solve_with_progress,
+};
 pub use version::{ENGINE_VERSION, EngineVersion};
 
+/// JSON boundary for [`solve`].
+///
+/// # Errors
+///
+/// Returns [`EngineError::InvalidJson`] when `input` is not valid JSON for [`SolveRequest`],
+/// propagates [`solve`] errors, or returns [`EngineError::SerializeJson`] on output failure.
 pub fn solve_json(input: &str) -> Result<String> {
     let request: SolveRequest =
         serde_json::from_str(input).map_err(|source| EngineError::InvalidJson {
@@ -54,6 +67,12 @@ pub fn solve_json(input: &str) -> Result<String> {
     serde_json::to_string(&solve(&request)?).map_err(EngineError::SerializeJson)
 }
 
+/// JSON boundary for [`evaluate`].
+///
+/// # Errors
+///
+/// Returns [`EngineError::InvalidJson`] when `input` is not valid JSON for [`DeckEvalRequest`],
+/// propagates [`evaluate`] errors, or returns [`EngineError::SerializeJson`] on output failure.
 pub fn evaluate_json(input: &str) -> Result<String> {
     let request: DeckEvalRequest =
         serde_json::from_str(input).map_err(|source| EngineError::InvalidJson {
@@ -63,6 +82,12 @@ pub fn evaluate_json(input: &str) -> Result<String> {
     serde_json::to_string(&evaluate(&request)?).map_err(EngineError::SerializeJson)
 }
 
+/// JSON boundary for [`optimize`].
+///
+/// # Errors
+///
+/// Returns [`EngineError::InvalidJson`] when `input` is not valid JSON for [`OptimizeRequest`],
+/// propagates [`optimize`] errors, or returns [`EngineError::SerializeJson`] on output failure.
 pub fn optimize_json(input: &str) -> Result<String> {
     let request: OptimizeRequest =
         serde_json::from_str(input).map_err(|source| EngineError::InvalidJson {

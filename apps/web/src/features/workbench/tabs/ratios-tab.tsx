@@ -165,8 +165,11 @@ export function RatiosTab({
       <RatioControls
         ratioSamples={ratio.ratioSamples}
         metric={ratio.metric}
+        evalMode={ratio.ratioEvalMode}
+        strategy={ratio.ratioStrategy}
         onRatioSamplesChange={ratio.setRatioSamples}
         onMetricChange={ratio.setMetric}
+        onEvalModeChange={ratio.setRatioEvalMode}
       />
       <RunSettings
         goFirst={goFirst}

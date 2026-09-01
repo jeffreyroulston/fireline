@@ -9,6 +9,7 @@ export type {
   DeckEvalResult,
   EffectiveRequest,
   EngineVersion,
+  EvalMode,
   EventKind,
   LineEvent,
   OptimizeProgress,

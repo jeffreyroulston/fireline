@@ -15,12 +15,12 @@ const RATIO_STRATEGIES: {
   {
     id: "hillClimb",
     label: "Hill climb",
-    help: "Starts with a list and keeps making small tweaks (swap one copy of a card for another) whenever damage goes up. Restarts when it gets stuck. Uses your sample budget efficiently.",
+    help: "Starts with a list and keeps making small tweaks (swap one copy of a card for another) whenever damage goes up. Restarts when it gets stuck. With SPRT scoring, unpromising neighbors stop early so you can screen more directions.",
   },
   {
     id: "genetic",
     label: "Genetic",
-    help: "Keeps a pool of lists, mixes the best ones together, and adds random changes. Casts a wider net than hill climb when you want to explore more unusual ratios.",
+    help: "Keeps a pool of lists, mixes the best ones together, and adds random changes. Casts a wider net than hill climb when you want to explore more unusual ratios. SPRT scoring can reject weak children before a full run.",
   },
   {
     id: "swapSweep",

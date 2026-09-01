@@ -65,6 +65,8 @@ export type RatioStrategy =
   | "swapSweep"
   | "multiDeck";
 
+export type RatioEvalMode = "full" | "sprt";
+
 export interface RatioResult {
   bestCounts: DeckCounts;
   bestScore: number;

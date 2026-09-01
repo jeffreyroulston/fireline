@@ -7,8 +7,8 @@
 //! finished hands instead of discarding the job.
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 thread_local! {
     static CURRENT: RefCell<Option<CancelFlag>> = const { RefCell::new(None) };

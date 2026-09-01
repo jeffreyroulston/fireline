@@ -9,6 +9,7 @@ export type { DeckEvalRequest } from "./DeckEvalRequest.js";
 export type { DeckEvalResult } from "./DeckEvalResult.js";
 export type { EffectiveRequest } from "./EffectiveRequest.js";
 export type { EngineVersion } from "./EngineVersion.js";
+export type { EvalMode } from "./EvalMode.js";
 export type { EventKind } from "./EventKind.js";
 export type { HistoryPoint } from "./HistoryPoint.js";
 export type { LineEvent } from "./LineEvent.js";

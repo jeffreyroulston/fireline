@@ -1044,3 +1044,49 @@ pub fn format_line_event_row(event: &LineEvent) -> String {
         event.turn, phase, event.damage, allies, event.fire_gy, action, memory, hand
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ActionOp, EventKind, LineEvent, TapePhase, format_line_event};
+    use crate::cards::Card;
+    use crate::model::Action;
+
+    #[test]
+    fn action_op_maps_pass() {
+        assert_eq!(ActionOp::from_action(Action::Pass), ActionOp::Pass);
+    }
+
+    #[test]
+    fn format_line_event_start_includes_drawn_card() {
+        let event = LineEvent {
+            op: ActionOp::Start,
+            kind: EventKind::Start,
+            action_index: 0,
+            turn: 0,
+            phase: TapePhase::Main,
+            damage: 0,
+            fire_gy: 0,
+            card: None,
+            kindle: None,
+            drawn: Some(Card::Arthur.id()),
+            memory_draw: None,
+            discarded: None,
+            prepared: None,
+            imbue: None,
+            weapon: None,
+            command_ally: None,
+            bonuses: None,
+            hand: None,
+            memory: None,
+            allies: None,
+            fast: false,
+            doubled: false,
+            from_memory: false,
+            heated: false,
+            human: false,
+            gy_threshold: false,
+        };
+        let label = format_line_event(&event);
+        assert_eq!(label, "Start of Game (draw Arthu)");
+    }
+}

@@ -7,12 +7,12 @@ use axum::{
 };
 use ga_fire_engine::{
     Budget, CancelFlag, DeckEvalRequest, DeckEvalResult, ENGINE_VERSION, EvalProgress, HandPhase,
-    HandProgress, OptimizeProgress, OptimizeRequest, OptimizeResult, PressureLevel, SimType,
-    SolveRequest, SolveResult, card_catalog, current_pressure, evaluate_with_hand_progress_cancel,
-    hand_threads, is_save_requested_on, memory_config, new_cancel_flag, optimize_with_hand_progress,
-    playtest_apply, playtest_init, playtest_legal_actions, PlaytestApplyRequest, PlaytestApplyResult,
-    PlaytestInitRequest, PlaytestInitResult, PlaytestLegalActionsRequest, PlaytestLegalActionsResult,
-    request_cancel, request_save,
+    HandProgress, OptimizeProgress, OptimizeRequest, OptimizeResult, PlaytestApplyRequest,
+    PlaytestApplyResult, PlaytestInitRequest, PlaytestInitResult, PlaytestLegalActionsRequest,
+    PlaytestLegalActionsResult, PressureLevel, SimType, SolveRequest, SolveResult, card_catalog,
+    current_pressure, evaluate_with_hand_progress_cancel, hand_threads, is_save_requested_on,
+    memory_config, new_cancel_flag, optimize_with_hand_progress, playtest_apply, playtest_init,
+    playtest_legal_actions, request_cancel, request_save,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -127,7 +127,10 @@ async fn main() {
         .route("/cards", get(cards))
         .route("/solve", post(solve_handler))
         .route("/playtest/init", post(playtest_init_handler))
-        .route("/playtest/legal-actions", post(playtest_legal_actions_handler))
+        .route(
+            "/playtest/legal-actions",
+            post(playtest_legal_actions_handler),
+        )
         .route("/playtest/apply", post(playtest_apply_handler))
         .route("/evaluate", post(evaluate_handler))
         .route("/optimize", post(optimize_handler))
@@ -195,9 +198,7 @@ async fn solve_handler(
 async fn playtest_init_handler(
     Json(request): Json<PlaytestInitRequest>,
 ) -> Result<Json<PlaytestInitResult>, (StatusCode, Json<PlaytestErrorBody>)> {
-    playtest_init(&request)
-        .map(Json)
-        .map_err(playtest_error)
+    playtest_init(&request).map(Json).map_err(playtest_error)
 }
 
 async fn playtest_legal_actions_handler(
@@ -211,9 +212,7 @@ async fn playtest_legal_actions_handler(
 async fn playtest_apply_handler(
     Json(request): Json<PlaytestApplyRequest>,
 ) -> Result<Json<PlaytestApplyResult>, (StatusCode, Json<PlaytestErrorBody>)> {
-    playtest_apply(&request)
-        .map(Json)
-        .map_err(playtest_error)
+    playtest_apply(&request).map(Json).map_err(playtest_error)
 }
 
 #[derive(Serialize)]

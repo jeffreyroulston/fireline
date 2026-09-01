@@ -802,3 +802,28 @@ pub fn parse_card(value: &str) -> Option<Card> {
         _ => return None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{CARD_COUNT, Card, parse_card};
+
+    #[test]
+    fn card_count_matches_enum() {
+        assert_eq!(CARD_COUNT, 49);
+        assert_eq!(Card::FlurryOfFire.index(), CARD_COUNT - 1);
+    }
+
+    #[test]
+    fn parse_card_rejects_unknown_ids() {
+        assert!(parse_card("").is_none());
+        assert!(parse_card("not_a_real_card").is_none());
+        assert!(parse_card("fire_brick_extra").is_none());
+    }
+
+    #[test]
+    fn parse_card_normalizes_aliases() {
+        assert_eq!(parse_card("Fire-Brick"), Some(Card::Brick));
+        assert_eq!(parse_card("Arthur Young Heir"), Some(Card::Arthur));
+        assert_eq!(parse_card("aenean_spark_alight"), Some(Card::SparkAlight));
+    }
+}

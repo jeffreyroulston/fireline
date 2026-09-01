@@ -36,3 +36,23 @@ impl Default for Budget {
         Self::conservative()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Budget;
+
+    #[test]
+    fn conservative_matches_default() {
+        assert_eq!(Budget::default(), Budget::conservative());
+    }
+
+    #[test]
+    fn conservative_limits_are_expected() {
+        let budget = Budget::conservative();
+        assert_eq!(budget.max_turns_min, 2);
+        assert_eq!(budget.max_turns_max, 5);
+        assert_eq!(budget.max_solve_rollouts, 48);
+        assert_eq!(budget.max_eval_rollouts, 48);
+        assert_eq!(budget.max_optimize_decks, 5000);
+    }
+}

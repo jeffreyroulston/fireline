@@ -1,0 +1,104 @@
+//! Interactive playtest protocol between the worker and the engine.
+
+mod actions;
+mod payment;
+mod state;
+mod types;
+
+#[cfg(test)]
+mod tests;
+
+pub use types::*;
+
+use crate::error::Result;
+use crate::line_event::EventTape;
+use crate::solver::{
+    action_discard_hand, action_discard_required, action_payment_required,
+    apply_action_with_payment, legal_actions,
+};
+
+use actions::{action_to_playtest, format_action, playtest_to_action};
+use payment::payment_from_playtest_action;
+use state::{engine_to_state, materials_from_map, parse_hand, parse_queue, state_view};
+
+/// Build the initial playtest state and opening event tape.
+///
+/// # Errors
+///
+/// Returns [`EngineError::UnknownCard`] when a hand or queue entry is not recognized,
+/// or [`EngineError::InvalidRequest`] when inputs fail validation.
+pub fn playtest_init(request: &PlaytestInitRequest) -> Result<PlaytestInitResult> {
+    let hand = parse_hand(&request.hand)?;
+    let queue = parse_queue(&request.queue)?;
+    let materials = materials_from_map(&request.materials);
+    let mut state = crate::model::State::with_queue_and_materials(
+        &hand,
+        request.go_first,
+        request.max_turns,
+        &queue,
+        materials,
+    );
+    let mut tape = EventTape::new();
+    let opening_draw = if request.go_first {
+        None
+    } else {
+        Some(state.draw_unknown())
+    };
+    tape.push_start(state, opening_draw);
+    Ok(PlaytestInitResult {
+        state: state_view(state),
+        events: tape.events,
+    })
+}
+
+/// List legal actions for the current playtest state with payment/discard metadata.
+///
+/// # Errors
+///
+/// Returns [`EngineError::InvalidRequest`] when the serialized engine state is invalid.
+pub fn playtest_legal_actions(
+    request: &PlaytestLegalActionsRequest,
+) -> Result<PlaytestLegalActionsResult> {
+    let state = engine_to_state(&request.state);
+    let actions = legal_actions(state)
+        .into_iter()
+        .map(|action| {
+            let payment = action_payment_required(state, action);
+            let discard = action_discard_required(state, action);
+            let discard_hand_view = action_discard_hand(state, action);
+            PlaytestActionOption {
+                action: action_to_playtest(action),
+                label: format_action(state, action),
+                reserve_count: payment.map(|req| req.reserve).unwrap_or(0),
+                fire_only: payment.map(|req| req.fire_only).unwrap_or(false),
+                played_card: payment
+                    .and_then(|req| req.played_card)
+                    .map(|card| card.id().to_string()),
+                discard_optional: discard.map(|req| req.optional).unwrap_or(false),
+                discard_hand: discard_hand_view
+                    .as_ref()
+                    .map(|(slots, _)| slots.iter().map(|card| card.id().to_string()).collect())
+                    .unwrap_or_default(),
+                drawn_discard_index: discard_hand_view.and_then(|(_, index)| index),
+            }
+        })
+        .collect();
+    Ok(PlaytestLegalActionsResult { actions })
+}
+
+/// Apply a playtest action and return the next state plus line events.
+///
+/// # Errors
+///
+/// Returns [`EngineError::UnknownCard`] for unrecognized card ids, or
+/// [`EngineError::InvalidRequest`] when payment, reserve, or discard requirements are not met.
+pub fn playtest_apply(request: &PlaytestApplyRequest) -> Result<PlaytestApplyResult> {
+    let state = engine_to_state(&request.state);
+    let action = playtest_to_action(&request.action)?;
+    let payment = payment_from_playtest_action(&request.action, state, action)?;
+    let (next, events) = apply_action_with_payment(state, action, payment);
+    Ok(PlaytestApplyResult {
+        state: state_view(next),
+        events,
+    })
+}

@@ -1,19 +1,21 @@
 use crate::{
     deck::{
-        DeckEvalRequest, DeckEvalResult, HandProgress, HistoryPoint, Metric, OptimizeProgress,
-        OptimizeRequest, OptimizeResult, RankedDeck, Strategy, consider_top, count_legal_decks,
-        counts_key, initial_counts, ranked_decks,
+        DeckEvalRequest, DeckEvalResult, EvalMode, HandProgress, HistoryPoint, Metric,
+        OptimizeProgress, OptimizeRequest, OptimizeResult, RankedDeck, Strategy, consider_top,
+        count_legal_decks, counts_key, evaluate_with_hand_progress_range, initial_counts,
+        ranked_decks,
     },
     error::{EngineError, Result},
     model::{Bounds, EffectiveRequest},
     random::Rng,
+    sprt::{SprtDecision, SprtTest},
     version::ENGINE_VERSION,
 };
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Instant;
 
 pub fn optimize_with_progress(
@@ -34,6 +36,18 @@ pub fn optimize_with_hand_progress(
         Strategy::MultiDeck => optimize_multi_deck(request, on_progress, &on_hand_progress),
         _ => optimize_search(request, on_progress, &on_hand_progress),
     }
+}
+
+fn eval_mode_label(mode: EvalMode) -> &'static str {
+    match mode {
+        EvalMode::Full => "full",
+        EvalMode::Sprt => "sprt",
+    }
+}
+
+fn uses_sprt_screening(request: &OptimizeRequest) -> bool {
+    request.eval_mode == EvalMode::Sprt
+        && !matches!(request.strategy, Strategy::SwapSweep | Strategy::MultiDeck)
 }
 
 fn strategy_label(strategy: Strategy) -> &'static str {
@@ -80,11 +94,13 @@ fn build_effective(request: &OptimizeRequest, target: u32) -> EffectiveRequest {
         glimpse_enabled: request.glimpse_enabled,
         max_hand_duration_secs: request.max_hand_duration_secs,
         max_card_draw: request.max_card_draw,
+        eval_mode: Some(eval_mode_label(request.eval_mode)),
     }
 }
 
 struct OptimizeSearchState {
     decks_scored: u32,
+    hands_simulated: u64,
     best_score: f64,
     best: BTreeMap<String, u8>,
     top: Vec<(f64, BTreeMap<String, u8>, Vec<crate::stats::CardStat>)>,
@@ -96,6 +112,7 @@ impl OptimizeSearchState {
     fn new() -> Self {
         Self {
             decks_scored: 0,
+            hands_simulated: 0,
             best_score: 0.0,
             best: BTreeMap::new(),
             top: Vec::with_capacity(5),
@@ -130,6 +147,111 @@ struct ScoreContext<'a, H> {
     on_hand_progress: &'a Mutex<H>,
 }
 
+const SPRT_BATCH_SIZE: u16 = 4;
+
+fn report_search_progress(
+    state: &OptimizeSearchState,
+    ctx: &ScoreContext<'_, impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
+    on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
+) -> Result<()> {
+    if on_progress(OptimizeProgress {
+        decks_scored: state.decks_scored,
+        total_decks: ctx.target,
+        legal_decks: ctx.legal_decks,
+        hands_simulated: state.hands_simulated,
+        total_hands: ctx.total_hands,
+        best_score: state.best_score,
+    })
+    .is_break()
+    {
+        return Err(EngineError::Cancelled);
+    }
+    Ok(())
+}
+
+fn search_can_continue(
+    state: &OptimizeSearchState,
+    ctx: &ScoreContext<'_, impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
+) -> bool {
+    if uses_sprt_screening(ctx.request) {
+        state.decks_scored < ctx.target && state.hands_simulated < ctx.total_hands
+    } else {
+        state.decks_scored < ctx.target
+    }
+}
+
+fn deck_eval_request(
+    request: &OptimizeRequest,
+    counts: &BTreeMap<String, u8>,
+    deck_number: u32,
+) -> DeckEvalRequest {
+    DeckEvalRequest {
+        deck: counts.clone(),
+        samples: request.samples,
+        go_first: request.go_first,
+        max_turns: request.max_turns,
+        seed: request.seed.wrapping_add(u64::from(deck_number) * 131),
+        sim_type: request.sim_type,
+        rollouts: request.rollouts,
+        budget: request.budget,
+        materials: request.materials.clone(),
+        max_threads: request.max_threads,
+        glimpse_enabled: request.glimpse_enabled,
+        max_hand_duration_secs: request.max_hand_duration_secs,
+        max_card_draw: request.max_card_draw,
+    }
+}
+
+fn screen_counts_against_reference(
+    counts: &BTreeMap<String, u8>,
+    reference_score: f64,
+    deck_number: u32,
+    ctx: &ScoreContext<'_, impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
+    state: &mut OptimizeSearchState,
+    on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
+) -> Result<bool> {
+    if reference_score <= 0.0 {
+        return Ok(true);
+    }
+    let request = deck_eval_request(ctx.request, counts, deck_number);
+    let mut sprt = SprtTest::new(reference_score);
+    let mut completed = 0_u16;
+    let total = ctx.request.samples.max(1);
+
+    while completed < total {
+        if state.hands_simulated >= ctx.total_hands {
+            return Ok(false);
+        }
+        let batch_end = completed.saturating_add(SPRT_BATCH_SIZE).min(total);
+        let batch_hands = batch_end.saturating_sub(completed);
+        let on_eval_hand = |hand| {
+            ctx.on_hand_progress
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())(hand)
+        };
+        let partial = evaluate_with_hand_progress_range(
+            &request,
+            completed,
+            batch_end,
+            |_| ControlFlow::Continue(()),
+            on_eval_hand,
+        )?;
+        state.hands_simulated = state
+            .hands_simulated
+            .saturating_add(u64::from(batch_hands));
+        report_search_progress(state, ctx, on_progress)?;
+        completed = batch_end;
+
+        match sprt.observe_batch(&partial.damages) {
+            SprtDecision::Reject => return Ok(false),
+            SprtDecision::Accept => return Ok(true),
+            SprtDecision::Continue if completed >= total => return Ok(true),
+            SprtDecision::Continue => {}
+        }
+    }
+    Ok(true)
+}
+
 fn deck_parallelism() -> usize {
     static CAP: OnceLock<usize> = OnceLock::new();
     *CAP.get_or_init(|| {
@@ -139,7 +261,7 @@ fn deck_parallelism() -> usize {
             .filter(|&count| count > 0)
             .unwrap_or_else(|| {
                 std::thread::available_parallelism()
-                    .map(|count| (count.get() / 2).max(1).min(8))
+                    .map(|count| (count.get() / 2).clamp(1, 8))
                     .unwrap_or(2)
             })
     })
@@ -203,10 +325,9 @@ impl ParallelDeckControl {
 
     fn should_stop(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
-            || self
-                .cancel
-                .as_ref()
-                .is_some_and(|flag| crate::cancel::is_requested(flag) && !crate::cancel::is_save_requested_on(flag))
+            || self.cancel.as_ref().is_some_and(|flag| {
+                crate::cancel::is_requested(flag) && !crate::cancel::is_save_requested_on(flag)
+            })
     }
 }
 
@@ -259,10 +380,9 @@ fn score_single_deck(
             .unwrap_or_else(|err| err.into_inner())(hand)
     };
     let eval = if control.is_some_and(|ctrl| {
-        !ctrl
-            .cancel
-            .as_ref()
-            .is_some_and(|flag| crate::cancel::is_requested(flag) && !crate::cancel::is_save_requested_on(flag))
+        !ctrl.cancel.as_ref().is_some_and(|flag| {
+            crate::cancel::is_requested(flag) && !crate::cancel::is_save_requested_on(flag)
+        })
     }) {
         crate::deck::evaluate_with_hand_progress(&request, on_eval_progress, on_eval_hand)?
     } else {
@@ -278,7 +398,9 @@ fn score_single_deck(
                     flag,
                 )?
             }
-            _ => crate::deck::evaluate_with_hand_progress(&request, on_eval_progress, on_eval_hand)?,
+            _ => {
+                crate::deck::evaluate_with_hand_progress(&request, on_eval_progress, on_eval_hand)?
+            }
         }
     };
     if should_abort_deck(control, deck_number) {
@@ -298,7 +420,10 @@ fn score_decks_parallel(
         return Ok(Vec::new());
     }
     if decks.len() == 1 {
-        let counts = decks.into_iter().next().expect("one deck");
+        let counts = decks
+            .into_iter()
+            .next()
+            .ok_or_else(|| EngineError::invalid("internal: empty deck batch"))?;
         let deck_number = decks_scored.saturating_add(1);
         let progress = Mutex::new(on_progress);
         let eval = score_single_deck(&counts, deck_number, ctx, best_score, &progress, None)?;
@@ -344,23 +469,24 @@ fn score_decks_parallel(
                                 control.stop.store(true, Ordering::Relaxed);
                                 return;
                             }
-                            let mut outcomes = outcomes.lock().unwrap_or_else(|err| err.into_inner());
+                            let mut outcomes =
+                                outcomes.lock().unwrap_or_else(|err| err.into_inner());
                             outcomes.push((deck_number, counts, eval));
                             let kept = outcomes.len() as u32;
                             drop(outcomes);
-                            let hands_simulated =
-                                u64::from(base.saturating_add(kept)) * u64::from(ctx.request.samples);
-                            if progress
-                                .lock()
-                                .unwrap_or_else(|err| err.into_inner())(OptimizeProgress {
+                            let hands_simulated = u64::from(base.saturating_add(kept))
+                                * u64::from(ctx.request.samples);
+                            if progress.lock().unwrap_or_else(|err| err.into_inner())(
+                                OptimizeProgress {
                                     decks_scored: base.saturating_add(kept),
                                     total_decks: ctx.target,
                                     legal_decks: ctx.legal_decks,
                                     hands_simulated,
                                     total_hands: ctx.total_hands,
                                     best_score,
-                                })
-                                .is_break()
+                                },
+                            )
+                            .is_break()
                             {
                                 control.stop.store(true, Ordering::Relaxed);
                             }
@@ -370,7 +496,8 @@ fn score_decks_parallel(
                             return;
                         }
                         Err(error) => {
-                            *first_error.lock().unwrap_or_else(|err| err.into_inner()) = Some(error);
+                            *first_error.lock().unwrap_or_else(|err| err.into_inner()) =
+                                Some(error);
                             control.stop.store(true, Ordering::Relaxed);
                             return;
                         }
@@ -380,10 +507,13 @@ fn score_decks_parallel(
         }
     });
 
-    if let Some(error) = first_error.lock().unwrap_or_else(|err| err.into_inner()).take() {
-        if !matches!(error, EngineError::Cancelled) || !save_keep_partial() {
-            return Err(error);
-        }
+    if let Some(error) = first_error
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .take()
+        && (!matches!(error, EngineError::Cancelled) || !save_keep_partial())
+    {
+        return Err(error);
     }
 
     let cutoff = control.save_cutoff.load(Ordering::Relaxed);
@@ -413,11 +543,15 @@ fn score_optimize_deck_full(
     decks_scored: &mut u32,
     best_score: f64,
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
+    hands_simulated: Option<&mut u64>,
 ) -> Result<DeckEvalResult> {
     let deck_number = decks_scored.saturating_add(1);
     let progress = Mutex::new(on_progress);
     let eval = score_single_deck(counts, deck_number, ctx, best_score, &progress, None)?;
     *decks_scored = deck_number;
+    if let Some(hands) = hands_simulated {
+        *hands = hands.saturating_add(u64::from(ctx.request.samples));
+    }
     Ok(eval)
 }
 
@@ -436,7 +570,7 @@ fn try_score_search_batch(
     if to_score.is_empty() {
         return Ok(());
     }
-    to_score.sort_by(|left, right| counts_key(left).cmp(&counts_key(right)));
+    to_score.sort_by_key(counts_key);
     let results = score_decks_parallel(
         to_score,
         ctx,
@@ -447,6 +581,9 @@ fn try_score_search_batch(
     for (counts, eval) in results {
         let score = metric_score(&eval, ctx.request.metric);
         state.record(score, counts, eval.card_stats);
+        state.hands_simulated = state
+            .hands_simulated
+            .saturating_add(u64::from(ctx.request.samples));
         if state.decks_scored >= ctx.target {
             break;
         }
@@ -495,18 +632,25 @@ fn optimize_search(
     };
 
     let search = match request.strategy {
-        Strategy::RandomSample => optimize_random_sample(request, &ctx, &mut state, &mut on_progress),
+        Strategy::RandomSample => {
+            optimize_random_sample(request, &ctx, &mut state, &mut on_progress)
+        }
         Strategy::HillClimb => optimize_hill_climb(request, &ctx, &mut state, &mut on_progress),
         Strategy::Genetic => optimize_genetic(request, &ctx, &mut state, &mut on_progress),
-        Strategy::SwapSweep => unreachable!(),
-        Strategy::MultiDeck => unreachable!(),
+        Strategy::SwapSweep | Strategy::MultiDeck => Err(EngineError::invalid(
+            "swap sweep and multi-deck strategies use dedicated entry points",
+        )),
     };
     if let Err(EngineError::Cancelled) = &search
         && crate::cancel::is_save_requested()
         && !state.history.is_empty()
     {
         return Ok(optimize_result_from_search(
-            request, target, legal_decks, state, started,
+            request,
+            target,
+            legal_decks,
+            state,
+            started,
         ));
     }
     search?;
@@ -519,13 +663,17 @@ fn optimize_search(
         decks_scored: state.decks_scored,
         total_decks: target,
         legal_decks,
-        hands_simulated: u64::from(state.decks_scored) * u64::from(request.samples),
+        hands_simulated: state.hands_simulated,
         total_hands,
         best_score: state.best_score,
     });
 
     Ok(optimize_result_from_search(
-        request, target, legal_decks, state, started,
+        request,
+        target,
+        legal_decks,
+        state,
+        started,
     ))
 }
 
@@ -558,11 +706,51 @@ fn optimize_random_sample(
     let mut attempts = 0_u64;
     let max_draw_attempts = u64::from(ctx.target).saturating_mul(64).max(64);
     let batch_size = deck_parallelism();
+    let sprt = uses_sprt_screening(request);
 
-    while state.decks_scored < ctx.target && attempts < max_draw_attempts {
+    while search_can_continue(state, ctx) && attempts < max_draw_attempts {
         if state.seen.len() as u64 >= ctx.legal_decks {
             break;
         }
+        if sprt {
+            attempts += 1;
+            let counts = initial_counts(&request.bounds, request.deck_size, &mut rng)?;
+            let key = counts_key(&counts);
+            if state.seen.contains(&key) {
+                continue;
+            }
+            state.seen.insert(key);
+            let deck_number = state.decks_scored.saturating_add(1);
+            if !screen_counts_against_reference(
+                &counts,
+                state.best_score,
+                deck_number,
+                ctx,
+                state,
+                on_progress,
+            )? {
+                continue;
+            }
+            if !search_can_continue(state, ctx) {
+                break;
+            }
+            let eval = score_optimize_deck_full(
+                &counts,
+                ctx,
+                &mut state.decks_scored,
+                state.best_score,
+                on_progress,
+                Some(&mut state.hands_simulated),
+            )?;
+            let score = metric_score(&eval, request.metric);
+            state.record(score, counts, eval.card_stats);
+            report_search_progress(state, ctx, on_progress)?;
+            if save_keep_partial() {
+                break;
+            }
+            continue;
+        }
+
         let remaining = ctx.target.saturating_sub(state.decks_scored) as usize;
         let mut batch = Vec::new();
         while batch.len() < batch_size.min(remaining) && attempts < max_draw_attempts {
@@ -613,8 +801,17 @@ fn legal_neighbors(
                 continue;
             }
             let mut next = counts.clone();
-            *next.get_mut(dec).expect("dec id") -= 1;
-            *next.get_mut(inc).expect("inc id") += 1;
+            let Some(dec_count) = next.get(dec).copied() else {
+                continue;
+            };
+            let Some(inc_count) = next.get(inc).copied() else {
+                continue;
+            };
+            if dec_count == 0 {
+                continue;
+            }
+            next.insert(dec.clone(), dec_count - 1);
+            next.insert(inc.clone(), inc_count + 1);
             neighbors.push(next);
             if neighbors.len() >= cap {
                 break 'outer;
@@ -633,8 +830,9 @@ fn optimize_hill_climb(
     let mut rng = Rng::new(request.seed);
     let mut attempts = 0_u64;
     let max_draw_attempts = u64::from(ctx.target).saturating_mul(64).max(64);
+    let sprt = uses_sprt_screening(request);
 
-    while state.decks_scored < ctx.target && attempts < max_draw_attempts {
+    while search_can_continue(state, ctx) && attempts < max_draw_attempts {
         attempts += 1;
         let mut current = initial_counts(&request.bounds, request.deck_size, &mut rng)?;
         let eval = score_optimize_deck_full(
@@ -643,28 +841,80 @@ fn optimize_hill_climb(
             &mut state.decks_scored,
             state.best_score,
             on_progress,
+            Some(&mut state.hands_simulated),
         )?;
         let mut current_score = metric_score(&eval, request.metric);
         state.record(current_score, current.clone(), eval.card_stats);
         state.seen.insert(counts_key(&current));
 
         loop {
-            if state.decks_scored >= ctx.target {
+            if !search_can_continue(state, ctx) {
                 break;
             }
             let neighbors = legal_neighbors(&current, &request.bounds, NEIGHBOR_SAMPLE_CAP);
             if neighbors.is_empty() {
                 break;
             }
-            let remaining = ctx.target.saturating_sub(state.decks_scored) as usize;
             let unscored: Vec<_> = neighbors
                 .into_iter()
                 .filter(|neighbor| !state.seen.contains(&counts_key(neighbor)))
-                .take(remaining)
                 .collect();
             if unscored.is_empty() {
                 break;
             }
+
+            if sprt {
+                let mut best_neighbor: Option<(f64, BTreeMap<String, u8>)> = None;
+                for neighbor in unscored {
+                    state.seen.insert(counts_key(&neighbor));
+                    if !search_can_continue(state, ctx) {
+                        break;
+                    }
+                    let deck_number = state.decks_scored.saturating_add(1);
+                    if !screen_counts_against_reference(
+                        &neighbor,
+                        current_score,
+                        deck_number,
+                        ctx,
+                        state,
+                        on_progress,
+                    )? {
+                        continue;
+                    }
+                    if !search_can_continue(state, ctx) {
+                        break;
+                    }
+                    let eval = score_optimize_deck_full(
+                        &neighbor,
+                        ctx,
+                        &mut state.decks_scored,
+                        state.best_score,
+                        on_progress,
+                        Some(&mut state.hands_simulated),
+                    )?;
+                    let score = metric_score(&eval, request.metric);
+                    state.record(score, neighbor.clone(), eval.card_stats);
+                    report_search_progress(state, ctx, on_progress)?;
+                    if score > current_score {
+                        match &best_neighbor {
+                            Some((best, _)) if score <= *best => {}
+                            _ => best_neighbor = Some((score, neighbor)),
+                        }
+                    }
+                    if save_keep_partial() {
+                        break;
+                    }
+                }
+                let Some((best_score, next)) = best_neighbor else {
+                    break;
+                };
+                current_score = best_score;
+                current = next;
+                continue;
+            }
+
+            let remaining = ctx.target.saturating_sub(state.decks_scored) as usize;
+            let unscored: Vec<_> = unscored.into_iter().take(remaining).collect();
             for neighbor in &unscored {
                 state.seen.insert(counts_key(neighbor));
             }
@@ -681,6 +931,9 @@ fn optimize_hill_climb(
             let mut by_key = rustc_hash::FxHashMap::default();
             for (counts, eval) in results {
                 by_key.insert(counts_key(&counts), (counts, eval));
+                state.hands_simulated = state
+                    .hands_simulated
+                    .saturating_add(u64::from(ctx.request.samples));
             }
 
             let mut best_neighbor: Option<(f64, BTreeMap<String, u8>)> = None;
@@ -772,7 +1025,12 @@ fn repair_to_size(
                 ));
             }
             let id = expandable[rng.index(expandable.len())];
-            *counts.get_mut(id).expect("id") += 1;
+            let Some(count) = counts.get_mut(id) else {
+                return Err(EngineError::invalid(format!(
+                    "internal: repair deck missing bound card {id}"
+                )));
+            };
+            *count += 1;
             remaining -= 1;
         }
     } else if total > target {
@@ -788,7 +1046,12 @@ fn repair_to_size(
                 ));
             }
             let id = shrinkable[rng.index(shrinkable.len())];
-            *counts.get_mut(id).expect("id") -= 1;
+            let Some(count) = counts.get_mut(id) else {
+                return Err(EngineError::invalid(format!(
+                    "internal: repair deck missing bound card {id}"
+                )));
+            };
+            *count -= 1;
             excess -= 1;
         }
     }
@@ -811,6 +1074,7 @@ fn optimize_genetic(
     let mut rng = Rng::new(request.seed.wrapping_add(17));
     let pop_size = ctx.target.clamp(4, POP_SIZE_CAP);
     let batch_size = deck_parallelism();
+    let sprt = uses_sprt_screening(request);
     let mut population: Vec<(f64, BTreeMap<String, u8>)> = Vec::new();
     let mut seed_attempts = 0_u64;
 
@@ -829,7 +1093,7 @@ fn optimize_genetic(
         if batch.is_empty() {
             continue;
         }
-        batch.sort_by(|left, right| counts_key(left).cmp(&counts_key(right)));
+        batch.sort_by_key(counts_key);
         let results = score_decks_parallel(
             batch,
             ctx,
@@ -840,8 +1104,11 @@ fn optimize_genetic(
         for (counts, eval) in results {
             let score = metric_score(&eval, request.metric);
             state.record(score, counts.clone(), eval.card_stats);
+            state.hands_simulated = state
+                .hands_simulated
+                .saturating_add(u64::from(ctx.request.samples));
             population.push((score, counts));
-            if state.decks_scored >= ctx.target {
+            if !search_can_continue(state, ctx) {
                 break;
             }
         }
@@ -857,14 +1124,14 @@ fn optimize_genetic(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    while state.decks_scored < ctx.target && !population.is_empty() {
+    while search_can_continue(state, ctx) && !population.is_empty() {
         let mut next_generation = population
             .iter()
             .take(ELITE_COUNT)
             .map(|(score, counts)| (*score, counts.clone()))
             .collect::<Vec<_>>();
 
-        while next_generation.len() < pop_size as usize && state.decks_scored < ctx.target {
+        while next_generation.len() < pop_size as usize && search_can_continue(state, ctx) {
             let slots = pop_size as usize - next_generation.len();
             let mut children = Vec::new();
             let mut child_attempts = 0_u64;
@@ -888,7 +1155,45 @@ fn optimize_genetic(
             if children.is_empty() {
                 break;
             }
-            children.sort_by(|left, right| counts_key(left).cmp(&counts_key(right)));
+            if sprt {
+                for child in children {
+                    if !search_can_continue(state, ctx) {
+                        break;
+                    }
+                    let deck_number = state.decks_scored.saturating_add(1);
+                    if state.best_score > 0.0
+                        && !screen_counts_against_reference(
+                            &child,
+                            state.best_score,
+                            deck_number,
+                            ctx,
+                            state,
+                            on_progress,
+                        )?
+                    {
+                        continue;
+                    }
+                    if !search_can_continue(state, ctx) {
+                        break;
+                    }
+                    let eval = score_optimize_deck_full(
+                        &child,
+                        ctx,
+                        &mut state.decks_scored,
+                        state.best_score,
+                        on_progress,
+                        Some(&mut state.hands_simulated),
+                    )?;
+                    let score = metric_score(&eval, request.metric);
+                    state.record(score, child.clone(), eval.card_stats);
+                    next_generation.push((score, child));
+                    if next_generation.len() >= pop_size as usize || !search_can_continue(state, ctx)
+                    {
+                        break;
+                    }
+                }
+            } else {
+            children.sort_by_key(counts_key);
             let results = score_decks_parallel(
                 children,
                 ctx,
@@ -899,10 +1204,14 @@ fn optimize_genetic(
             for (child, eval) in results {
                 let score = metric_score(&eval, request.metric);
                 state.record(score, child.clone(), eval.card_stats);
+                state.hands_simulated = state
+                    .hands_simulated
+                    .saturating_add(u64::from(ctx.request.samples));
                 next_generation.push((score, child));
-                if next_generation.len() >= pop_size as usize || state.decks_scored >= ctx.target {
+                if next_generation.len() >= pop_size as usize || !search_can_continue(state, ctx) {
                     break;
                 }
+            }
             }
             if save_keep_partial() {
                 break;
@@ -949,7 +1258,12 @@ pub fn apply_fixed_swap(
         )));
     }
     let mut next = base.clone();
-    *next.get_mut(from).expect("from") -= count;
+    let Some(from_entry) = next.get_mut(from) else {
+        return Err(EngineError::invalid(format!(
+            "internal: swap source missing {from}"
+        )));
+    };
+    *from_entry -= count;
     if next[from] == 0 {
         next.remove(from);
     }
@@ -1011,6 +1325,7 @@ fn optimize_swap_sweep(
         &mut decks_scored,
         0.0,
         &mut on_progress,
+        None,
     )?;
     let baseline_score = metric_score(&baseline_eval, request.metric);
     let mut best_score = baseline_score;
@@ -1172,7 +1487,7 @@ fn optimize_multi_deck(
         }
     }
 
-    let deck_list: Vec<_> = multi.decks.iter().cloned().collect();
+    let deck_list = multi.decks.to_vec();
     let scored = match score_decks_parallel(
         deck_list.clone(),
         &ctx,
@@ -1359,6 +1674,7 @@ mod tests {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
             max_card_draw: None,
+            eval_mode: EvalMode::Full,
         })
         .unwrap();
         assert!(result.decks_scored >= 3);
@@ -1401,6 +1717,7 @@ mod tests {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
             max_card_draw: None,
+            eval_mode: EvalMode::Full,
         })
         .unwrap();
         let candidate = result
@@ -1457,6 +1774,7 @@ mod tests {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
             max_card_draw: None,
+            eval_mode: EvalMode::Full,
         };
         let _guard = crate::cancel::install(flag.clone());
         let result = optimize_with_progress(&request, |progress| {
@@ -1494,6 +1812,7 @@ mod tests {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
             max_card_draw: None,
+            eval_mode: EvalMode::Full,
         };
         let one = optimize(&request).unwrap();
         let two = optimize(&request).unwrap();
@@ -1524,9 +1843,41 @@ mod tests {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
             max_card_draw: None,
+            eval_mode: EvalMode::Full,
         };
         let one = optimize(&request).unwrap();
         let two = optimize(&request).unwrap();
         assert_eq!(one.best_score, two.best_score);
+    }
+
+    #[test]
+    fn sprt_hill_climb_is_deterministic() {
+        let request = OptimizeRequest {
+            bounds: sample_bounds(),
+            deck_size: 7,
+            samples: 8,
+            decks: 4,
+            metric: Metric::Mean,
+            seed: 13,
+            budget: Budget::default(),
+            materials: BTreeMap::new(),
+            strategy: Strategy::HillClimb,
+            base_deck: BTreeMap::new(),
+            swap: None,
+            multi_deck: None,
+            go_first: true,
+            max_turns: 3,
+            sim_type: crate::model::SimType::FireBrick,
+            rollouts: 1,
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+            max_card_draw: None,
+            eval_mode: EvalMode::Sprt,
+        };
+        let one = optimize(&request).unwrap();
+        let two = optimize(&request).unwrap();
+        assert_eq!(one.best_score, two.best_score);
+        assert_eq!(one.effective.eval_mode, Some("sprt"));
     }
 }
