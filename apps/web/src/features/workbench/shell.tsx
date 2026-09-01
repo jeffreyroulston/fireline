@@ -453,7 +453,6 @@ export default function FizaWorkbench({
             onRetestSelected={(decks) => {
               ratio.setMultiDeckLists(decks);
               ratio.setRatioStrategy("multiDeck");
-              void solver.optimizeMultiDeck(decks);
             }}
           />
         )}

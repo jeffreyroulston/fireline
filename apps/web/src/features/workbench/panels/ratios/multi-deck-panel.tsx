@@ -11,8 +11,11 @@ import { buttonVariants } from "@/lib/utils/variants";
 import { cn } from "@/lib/utils";
 import { SecondaryActionButton } from "@/components/secondary-action-button";
 import { SectionHeading } from "../../ui";
+import { RatioChangeCards } from "./ratio-change-cards";
 import {
   deckCountsTotal,
+  deckDiffEntries,
+  isSameDeckCounts,
   ratioCriteriaPanelClass,
   ratioRefineHintClass,
   ratioSaveDeckClass,
@@ -120,15 +123,23 @@ export function MultiDeckPanel({
         <ol className="grid list-none gap-2 p-0">
           {decks.map((counts, index) => {
             const total = deckCountsTotal(counts);
+            const isBaseline = isSameDeckCounts(baseCounts, counts);
+            const changes = isBaseline
+              ? []
+              : deckDiffEntries(baseCounts, counts);
             return (
               <li
                 key={`multi-deck-${index}-${formatDecklist(counts).slice(0, 40)}`}
-                className="flex flex-wrap items-center justify-between gap-3 border border-border bg-surface px-3 py-2.5"
+                className="flex flex-wrap items-start justify-between gap-3 border border-border bg-surface px-3 py-2.5"
               >
-                <div className="grid min-w-0 gap-0.5">
-                  <span className="font-mono text-[11px] tracking-[0.06em] text-foreground uppercase">
-                    List {index + 1}
-                  </span>
+                <div className="grid min-w-0 flex-1 gap-2">
+                  {isBaseline ? (
+                    <span className="font-mono text-[11px] tracking-[0.06em] text-foreground uppercase">
+                      {baseDeckName?.trim() || "Current deck"}
+                    </span>
+                  ) : (
+                    <RatioChangeCards changes={changes} />
+                  )}
                   <span className="font-mono text-[10px] text-muted">
                     {total} cards
                     {total !== deckSize ? ` · expected ${deckSize}` : ""}

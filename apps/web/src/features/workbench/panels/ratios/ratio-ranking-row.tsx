@@ -25,6 +25,7 @@ type RatioRankingVariant = "search" | "multiDeck";
 type RatioRankingRowProps = Readonly<{
   entry: RatioRankingRowEntry;
   baseCounts: DeckCounts;
+  baseDeckName?: string;
   baselineScore?: number | null;
   bestScore?: number | null;
   variant?: RatioRankingVariant;
@@ -36,6 +37,7 @@ type RatioRankingRowProps = Readonly<{
 export function RatioRankingRow({
   entry,
   baseCounts,
+  baseDeckName,
   baselineScore = null,
   bestScore = null,
   variant = "search",
@@ -64,9 +66,11 @@ export function RatioRankingRow({
               isBaseline ? "text-primary-dark" : "text-muted",
             )}
           >
-            {isBaseline ? "Baseline" : `#${entry.rank}`}
+            {isBaseline
+              ? baseDeckName?.trim() || "Baseline"
+              : `#${entry.rank}`}
           </span>
-          {isBaseline && (
+          {isBaseline && !baseDeckName?.trim() && (
             <span className="font-mono text-[10px] tracking-[0.06em] text-muted uppercase">
               Current base decklist
             </span>

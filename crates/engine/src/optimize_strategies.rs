@@ -12,6 +12,8 @@ use crate::{
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 pub fn optimize_with_progress(
@@ -128,17 +130,97 @@ struct ScoreContext<'a, H> {
     on_hand_progress: &'a Mutex<H>,
 }
 
-fn score_optimize_deck_full(
+fn deck_parallelism() -> usize {
+    static CAP: OnceLock<usize> = OnceLock::new();
+    *CAP.get_or_init(|| {
+        std::env::var("GA_FIRE_DECK_PARALLEL")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|&count| count > 0)
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|count| (count.get() / 2).max(1).min(8))
+                    .unwrap_or(2)
+            })
+    })
+}
+
+struct ParallelDeckControl {
+    stop: AtomicBool,
+    save_cutoff: AtomicU32,
+    cancel: Option<crate::cancel::CancelFlag>,
+}
+
+fn save_keep_partial() -> bool {
+    crate::cancel::is_save_requested()
+        || crate::cancel::current_flag()
+            .is_some_and(|flag| crate::cancel::is_save_requested_on(&flag))
+}
+
+fn should_abort_deck(control: Option<&ParallelDeckControl>, deck_number: u32) -> bool {
+    let Some(ctrl) = control else {
+        return crate::cancel::is_cancel_requested();
+    };
+    let Some(flag) = ctrl.cancel.as_ref() else {
+        return false;
+    };
+    if !crate::cancel::is_requested(flag) {
+        return false;
+    }
+    if crate::cancel::is_save_requested_on(flag) {
+        return deck_number >= ctrl.save_cutoff.load(Ordering::Relaxed);
+    }
+    true
+}
+
+impl ParallelDeckControl {
+    fn new(cancel: Option<crate::cancel::CancelFlag>) -> Self {
+        Self {
+            stop: AtomicBool::new(false),
+            save_cutoff: AtomicU32::new(u32::MAX),
+            cancel,
+        }
+    }
+
+    fn note_progress(&self, decks_scored: u32) {
+        let save = self
+            .cancel
+            .as_ref()
+            .is_some_and(crate::cancel::is_save_requested_on)
+            || save_keep_partial();
+        if save {
+            // Record the first save cutoff only. In-flight decks with lower
+            // deck numbers can still report progress after save is requested.
+            let _ = self.save_cutoff.compare_exchange(
+                u32::MAX,
+                decks_scored,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+            self.stop.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn should_stop(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+            || self
+                .cancel
+                .as_ref()
+                .is_some_and(|flag| crate::cancel::is_requested(flag) && !crate::cancel::is_save_requested_on(flag))
+    }
+}
+
+fn score_single_deck(
     counts: &BTreeMap<String, u8>,
+    deck_number: u32,
     ctx: &ScoreContext<'_, impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
-    decks_scored: &mut u32,
     best_score: f64,
-    on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
+    on_progress: &Mutex<impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send>,
+    control: Option<&ParallelDeckControl>,
 ) -> Result<DeckEvalResult> {
-    if crate::cancel::is_cancel_requested() {
+    if should_abort_deck(control, deck_number) {
         return Err(EngineError::Cancelled);
     }
-    let deck_number = *decks_scored + 1;
     let samples = ctx.request.samples;
     let request = DeckEvalRequest {
         deck: counts.clone(),
@@ -158,59 +240,218 @@ fn score_optimize_deck_full(
     let on_eval_progress = |progress: crate::deck::EvalProgress| {
         let hands_simulated = u64::from(deck_number.saturating_sub(1)) * u64::from(samples)
             + u64::from(progress.sample);
-        on_progress(OptimizeProgress {
+        let flow = on_progress.lock().unwrap_or_else(|err| err.into_inner())(OptimizeProgress {
             decks_scored: deck_number,
             total_decks: ctx.target,
             legal_decks: ctx.legal_decks,
             hands_simulated,
             total_hands: ctx.total_hands,
             best_score,
-        })
+        });
+        if let Some(ctrl) = control {
+            ctrl.note_progress(deck_number);
+        }
+        flow
     };
     let on_eval_hand = |hand| {
         ctx.on_hand_progress
             .lock()
             .unwrap_or_else(|err| err.into_inner())(hand)
     };
-    // Nested evals inherit the job flag so cancel/save abort the in-flight
-    // hand. The candidate list being scored is dropped; already-finished
-    // lists stay in the optimizer's history.
-    let eval = match crate::cancel::current_flag() {
-        Some(flag) => crate::deck::evaluate_with_hand_progress_cancel(
-            &request,
-            on_eval_progress,
-            on_eval_hand,
-            flag,
-        ),
-        None => crate::deck::evaluate_with_hand_progress(&request, on_eval_progress, on_eval_hand),
-    }?;
-    if crate::cancel::is_cancel_requested() {
+    let eval = if control.is_some_and(|ctrl| {
+        !ctrl
+            .cancel
+            .as_ref()
+            .is_some_and(|flag| crate::cancel::is_requested(flag) && !crate::cancel::is_save_requested_on(flag))
+    }) {
+        crate::deck::evaluate_with_hand_progress(&request, on_eval_progress, on_eval_hand)?
+    } else {
+        match control
+            .and_then(|ctrl| ctrl.cancel.clone())
+            .or_else(crate::cancel::current_flag)
+        {
+            Some(flag) if crate::cancel::is_requested(&flag) => {
+                crate::deck::evaluate_with_hand_progress_cancel(
+                    &request,
+                    on_eval_progress,
+                    on_eval_hand,
+                    flag,
+                )?
+            }
+            _ => crate::deck::evaluate_with_hand_progress(&request, on_eval_progress, on_eval_hand)?,
+        }
+    };
+    if should_abort_deck(control, deck_number) {
         return Err(EngineError::Cancelled);
     }
-    *decks_scored += 1;
     Ok(eval)
 }
 
-fn try_score_search(
-    counts: BTreeMap<String, u8>,
+fn score_decks_parallel(
+    decks: Vec<BTreeMap<String, u8>>,
+    ctx: &ScoreContext<'_, impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
+    decks_scored: &mut u32,
+    best_score: f64,
+    on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
+) -> Result<Vec<(BTreeMap<String, u8>, DeckEvalResult)>> {
+    if decks.is_empty() {
+        return Ok(Vec::new());
+    }
+    if decks.len() == 1 {
+        let counts = decks.into_iter().next().expect("one deck");
+        let deck_number = decks_scored.saturating_add(1);
+        let progress = Mutex::new(on_progress);
+        let eval = score_single_deck(&counts, deck_number, ctx, best_score, &progress, None)?;
+        *decks_scored = deck_number;
+        return Ok(vec![(counts, eval)]);
+    }
+
+    let base = *decks_scored;
+    let job_cancel = crate::cancel::current_flag();
+    let control = ParallelDeckControl::new(job_cancel);
+    let next_index = AtomicU32::new(0);
+    let outcomes = Mutex::new(Vec::<(u32, BTreeMap<String, u8>, DeckEvalResult)>::new());
+    let first_error = Mutex::new(None::<EngineError>);
+    let progress = Mutex::new(on_progress);
+    let workers = deck_parallelism().min(decks.len());
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let index = next_index.fetch_add(1, Ordering::Relaxed) as usize;
+                    if index >= decks.len() {
+                        return;
+                    }
+                    let deck_number = base.saturating_add(index as u32).saturating_add(1);
+                    if deck_number >= control.save_cutoff.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    if control.should_stop() && !save_keep_partial() {
+                        return;
+                    }
+                    let counts = decks[index].clone();
+                    match score_single_deck(
+                        &counts,
+                        deck_number,
+                        ctx,
+                        best_score,
+                        &progress,
+                        Some(&control),
+                    ) {
+                        Ok(eval) => {
+                            if deck_number >= control.save_cutoff.load(Ordering::Relaxed) {
+                                control.stop.store(true, Ordering::Relaxed);
+                                return;
+                            }
+                            let mut outcomes = outcomes.lock().unwrap_or_else(|err| err.into_inner());
+                            outcomes.push((deck_number, counts, eval));
+                            let kept = outcomes.len() as u32;
+                            drop(outcomes);
+                            let hands_simulated =
+                                u64::from(base.saturating_add(kept)) * u64::from(ctx.request.samples);
+                            if progress
+                                .lock()
+                                .unwrap_or_else(|err| err.into_inner())(OptimizeProgress {
+                                    decks_scored: base.saturating_add(kept),
+                                    total_decks: ctx.target,
+                                    legal_decks: ctx.legal_decks,
+                                    hands_simulated,
+                                    total_hands: ctx.total_hands,
+                                    best_score,
+                                })
+                                .is_break()
+                            {
+                                control.stop.store(true, Ordering::Relaxed);
+                            }
+                        }
+                        Err(EngineError::Cancelled) => {
+                            control.stop.store(true, Ordering::Relaxed);
+                            return;
+                        }
+                        Err(error) => {
+                            *first_error.lock().unwrap_or_else(|err| err.into_inner()) = Some(error);
+                            control.stop.store(true, Ordering::Relaxed);
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    if let Some(error) = first_error.lock().unwrap_or_else(|err| err.into_inner()).take() {
+        if !matches!(error, EngineError::Cancelled) || !save_keep_partial() {
+            return Err(error);
+        }
+    }
+
+    let cutoff = control.save_cutoff.load(Ordering::Relaxed);
+    let mut kept = outcomes
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .drain(..)
+        .filter(|(deck_number, _, _)| *deck_number < cutoff)
+        .collect::<Vec<_>>();
+    kept.sort_by_key(|(deck_number, _, _)| *deck_number);
+    let scored = kept
+        .into_iter()
+        .map(|(_, counts, eval)| (counts, eval))
+        .collect::<Vec<_>>();
+    *decks_scored = base.saturating_add(scored.len() as u32);
+
+    if control.should_stop() && !save_keep_partial() && scored.len() < decks.len() {
+        return Err(EngineError::Cancelled);
+    }
+
+    Ok(scored)
+}
+
+fn score_optimize_deck_full(
+    counts: &BTreeMap<String, u8>,
+    ctx: &ScoreContext<'_, impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
+    decks_scored: &mut u32,
+    best_score: f64,
+    on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
+) -> Result<DeckEvalResult> {
+    let deck_number = decks_scored.saturating_add(1);
+    let progress = Mutex::new(on_progress);
+    let eval = score_single_deck(counts, deck_number, ctx, best_score, &progress, None)?;
+    *decks_scored = deck_number;
+    Ok(eval)
+}
+
+fn try_score_search_batch(
+    counts_list: Vec<BTreeMap<String, u8>>,
     state: &mut OptimizeSearchState,
     ctx: &ScoreContext<'_, impl FnMut(HandProgress) -> ControlFlow<()> + Send>,
     on_progress: &mut (impl FnMut(OptimizeProgress) -> ControlFlow<()> + Send),
-) -> Result<bool> {
-    let key = counts_key(&counts);
-    if !state.seen.insert(key) {
-        return Ok(false);
+) -> Result<()> {
+    let mut to_score = Vec::new();
+    for counts in counts_list {
+        if state.seen.insert(counts_key(&counts)) {
+            to_score.push(counts);
+        }
     }
-    let eval = score_optimize_deck_full(
-        &counts,
+    if to_score.is_empty() {
+        return Ok(());
+    }
+    to_score.sort_by(|left, right| counts_key(left).cmp(&counts_key(right)));
+    let results = score_decks_parallel(
+        to_score,
         ctx,
         &mut state.decks_scored,
         state.best_score,
         on_progress,
     )?;
-    let score = metric_score(&eval, ctx.request.metric);
-    state.record(score, counts, eval.card_stats);
-    Ok(true)
+    for (counts, eval) in results {
+        let score = metric_score(&eval, ctx.request.metric);
+        state.record(score, counts, eval.card_stats);
+        if state.decks_scored >= ctx.target {
+            break;
+        }
+    }
+    Ok(())
 }
 
 fn optimize_search(
@@ -316,14 +557,30 @@ fn optimize_random_sample(
     let mut rng = Rng::new(request.seed);
     let mut attempts = 0_u64;
     let max_draw_attempts = u64::from(ctx.target).saturating_mul(64).max(64);
+    let batch_size = deck_parallelism();
 
     while state.decks_scored < ctx.target && attempts < max_draw_attempts {
-        attempts += 1;
         if state.seen.len() as u64 >= ctx.legal_decks {
             break;
         }
-        let counts = initial_counts(&request.bounds, request.deck_size, &mut rng)?;
-        try_score_search(counts, state, ctx, on_progress)?;
+        let remaining = ctx.target.saturating_sub(state.decks_scored) as usize;
+        let mut batch = Vec::new();
+        while batch.len() < batch_size.min(remaining) && attempts < max_draw_attempts {
+            attempts += 1;
+            let counts = initial_counts(&request.bounds, request.deck_size, &mut rng)?;
+            let key = counts_key(&counts);
+            if state.seen.contains(&key) {
+                continue;
+            }
+            batch.push(counts);
+        }
+        if batch.is_empty() {
+            continue;
+        }
+        try_score_search_batch(batch, state, ctx, on_progress)?;
+        if save_keep_partial() {
+            break;
+        }
     }
     Ok(())
 }
@@ -399,28 +656,47 @@ fn optimize_hill_climb(
             if neighbors.is_empty() {
                 break;
             }
+            let remaining = ctx.target.saturating_sub(state.decks_scored) as usize;
+            let unscored: Vec<_> = neighbors
+                .into_iter()
+                .filter(|neighbor| !state.seen.contains(&counts_key(neighbor)))
+                .take(remaining)
+                .collect();
+            if unscored.is_empty() {
+                break;
+            }
+            for neighbor in &unscored {
+                state.seen.insert(counts_key(neighbor));
+            }
+            let results = score_decks_parallel(
+                unscored.clone(),
+                ctx,
+                &mut state.decks_scored,
+                state.best_score,
+                on_progress,
+            )?;
+            if save_keep_partial() {
+                break;
+            }
+            let mut by_key = rustc_hash::FxHashMap::default();
+            for (counts, eval) in results {
+                by_key.insert(counts_key(&counts), (counts, eval));
+            }
+
             let mut best_neighbor: Option<(f64, BTreeMap<String, u8>)> = None;
-            for neighbor in neighbors {
-                if state.seen.contains(&counts_key(&neighbor)) {
+            for neighbor in unscored {
+                let Some((counts, eval)) = by_key.remove(&counts_key(&neighbor)) else {
                     continue;
-                }
-                let eval = score_optimize_deck_full(
-                    &neighbor,
-                    ctx,
-                    &mut state.decks_scored,
-                    state.best_score,
-                    on_progress,
-                )?;
+                };
                 let score = metric_score(&eval, request.metric);
-                state.record(score, neighbor.clone(), eval.card_stats);
-                state.seen.insert(counts_key(&neighbor));
+                state.record(score, counts.clone(), eval.card_stats);
                 if state.decks_scored >= ctx.target {
                     break;
                 }
                 if score > current_score {
                     match &best_neighbor {
                         Some((best, _)) if score <= *best => {}
-                        _ => best_neighbor = Some((score, neighbor)),
+                        _ => best_neighbor = Some((score, counts)),
                     }
                 }
             }
@@ -534,27 +810,42 @@ fn optimize_genetic(
 ) -> Result<()> {
     let mut rng = Rng::new(request.seed.wrapping_add(17));
     let pop_size = ctx.target.clamp(4, POP_SIZE_CAP);
+    let batch_size = deck_parallelism();
     let mut population: Vec<(f64, BTreeMap<String, u8>)> = Vec::new();
     let mut seed_attempts = 0_u64;
 
     while population.len() < pop_size as usize && seed_attempts < u64::from(pop_size) * 64 {
-        seed_attempts += 1;
-        let counts = initial_counts(&request.bounds, request.deck_size, &mut rng)?;
-        if state.seen.contains(&counts_key(&counts)) {
+        let remaining = pop_size as usize - population.len();
+        let mut batch = Vec::new();
+        while batch.len() < batch_size.min(remaining) && seed_attempts < u64::from(pop_size) * 64 {
+            seed_attempts += 1;
+            let counts = initial_counts(&request.bounds, request.deck_size, &mut rng)?;
+            if state.seen.contains(&counts_key(&counts)) {
+                continue;
+            }
+            state.seen.insert(counts_key(&counts));
+            batch.push(counts);
+        }
+        if batch.is_empty() {
             continue;
         }
-        let eval = score_optimize_deck_full(
-            &counts,
+        batch.sort_by(|left, right| counts_key(left).cmp(&counts_key(right)));
+        let results = score_decks_parallel(
+            batch,
             ctx,
             &mut state.decks_scored,
             state.best_score,
             on_progress,
         )?;
-        let score = metric_score(&eval, request.metric);
-        state.record(score, counts.clone(), eval.card_stats);
-        state.seen.insert(counts_key(&counts));
-        population.push((score, counts));
-        if state.decks_scored >= ctx.target {
+        for (counts, eval) in results {
+            let score = metric_score(&eval, request.metric);
+            state.record(score, counts.clone(), eval.card_stats);
+            population.push((score, counts));
+            if state.decks_scored >= ctx.target {
+                break;
+            }
+        }
+        if save_keep_partial() {
             break;
         }
     }
@@ -574,28 +865,52 @@ fn optimize_genetic(
             .collect::<Vec<_>>();
 
         while next_generation.len() < pop_size as usize && state.decks_scored < ctx.target {
-            let parent_a = tournament_select(&population, &mut rng);
-            let parent_b = tournament_select(&population, &mut rng);
-            let mut child = crossover(parent_a, parent_b, &request.bounds, &mut rng);
-            repair_to_size(&mut child, &request.bounds, request.deck_size, &mut rng)?;
-            if rng.next() % 100 < MUTATION_RATE {
-                mutate(&mut child, &request.bounds, &mut rng);
+            let slots = pop_size as usize - next_generation.len();
+            let mut children = Vec::new();
+            let mut child_attempts = 0_u64;
+            let max_child_attempts = u64::from(pop_size).saturating_mul(64);
+            while children.len() < batch_size.min(slots) && child_attempts < max_child_attempts {
+                child_attempts += 1;
+                let parent_a = tournament_select(&population, &mut rng);
+                let parent_b = tournament_select(&population, &mut rng);
+                let mut child = crossover(parent_a, parent_b, &request.bounds, &mut rng);
                 repair_to_size(&mut child, &request.bounds, request.deck_size, &mut rng)?;
+                if rng.next() % 100 < MUTATION_RATE {
+                    mutate(&mut child, &request.bounds, &mut rng);
+                    repair_to_size(&mut child, &request.bounds, request.deck_size, &mut rng)?;
+                }
+                if state.seen.contains(&counts_key(&child)) {
+                    continue;
+                }
+                state.seen.insert(counts_key(&child));
+                children.push(child);
             }
-            if state.seen.contains(&counts_key(&child)) {
-                continue;
+            if children.is_empty() {
+                break;
             }
-            let eval = score_optimize_deck_full(
-                &child,
+            children.sort_by(|left, right| counts_key(left).cmp(&counts_key(right)));
+            let results = score_decks_parallel(
+                children,
                 ctx,
                 &mut state.decks_scored,
                 state.best_score,
                 on_progress,
             )?;
-            let score = metric_score(&eval, request.metric);
-            state.record(score, child.clone(), eval.card_stats);
-            state.seen.insert(counts_key(&child));
-            next_generation.push((score, child));
+            for (child, eval) in results {
+                let score = metric_score(&eval, request.metric);
+                state.record(score, child.clone(), eval.card_stats);
+                next_generation.push((score, child));
+                if next_generation.len() >= pop_size as usize || state.decks_scored >= ctx.target {
+                    break;
+                }
+            }
+            if save_keep_partial() {
+                break;
+            }
+        }
+
+        if save_keep_partial() {
+            break;
         }
 
         next_generation.sort_by(|left, right| {
@@ -714,31 +1029,47 @@ fn optimize_swap_sweep(
     });
 
     let mut candidate_rows: Vec<RankedDeck> = Vec::new();
+    let mut candidate_decks = Vec::new();
     for candidate in &swap.candidates {
-        let counts = apply_fixed_swap(&request.base_deck, &swap.from, candidate, swap.count)?;
-        let eval = match score_optimize_deck_full(
-            &counts,
-            &ctx,
-            &mut decks_scored,
-            best_score,
-            &mut on_progress,
-        ) {
-            Ok(eval) => eval,
-            Err(EngineError::Cancelled) if crate::cancel::is_save_requested() => {
-                return Ok(finish_swap_sweep(
-                    request,
-                    target,
-                    legal_decks,
-                    best,
-                    best_score,
-                    rows,
-                    candidate_rows,
-                    history,
-                    decks_scored,
-                    started,
-                ));
-            }
-            Err(error) => return Err(error),
+        candidate_decks.push((
+            candidate.clone(),
+            apply_fixed_swap(&request.base_deck, &swap.from, candidate, swap.count)?,
+        ));
+    }
+    let candidate_results = match score_decks_parallel(
+        candidate_decks
+            .iter()
+            .map(|(_, counts)| counts.clone())
+            .collect(),
+        &ctx,
+        &mut decks_scored,
+        best_score,
+        &mut on_progress,
+    ) {
+        Ok(results) => results,
+        Err(EngineError::Cancelled) if crate::cancel::is_save_requested() => {
+            return Ok(finish_swap_sweep(
+                request,
+                target,
+                legal_decks,
+                best,
+                best_score,
+                rows,
+                candidate_rows,
+                history,
+                decks_scored,
+                started,
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    let mut by_counts = rustc_hash::FxHashMap::default();
+    for (counts, eval) in candidate_results {
+        by_counts.insert(counts_key(&counts), (counts, eval));
+    }
+    for (candidate, counts) in candidate_decks {
+        let Some((counts, eval)) = by_counts.remove(&counts_key(&counts)) else {
+            continue;
         };
         let score = metric_score(&eval, request.metric);
         if score > best_score {
@@ -755,7 +1086,7 @@ fn optimize_swap_sweep(
             counts,
             score_delta: Some(score - baseline_score),
             card_stats: eval.card_stats,
-            candidate: Some(candidate.clone()),
+            candidate: Some(candidate),
         });
     }
 
@@ -839,29 +1170,37 @@ fn optimize_multi_deck(
                 request.deck_size
             )));
         }
-        let eval = match score_optimize_deck_full(
-            counts,
-            &ctx,
-            &mut decks_scored,
-            rows.iter()
-                .map(|row| row.score)
-                .max_by(f64::total_cmp)
-                .unwrap_or(0.0),
-            &mut on_progress,
-        ) {
-            Ok(eval) => eval,
-            Err(EngineError::Cancelled) if crate::cancel::is_save_requested() => {
-                return Ok(finish_multi_deck(
-                    request,
-                    target,
-                    legal_decks,
-                    rows,
-                    history,
-                    decks_scored,
-                    started,
-                ));
-            }
-            Err(error) => return Err(error),
+    }
+
+    let deck_list: Vec<_> = multi.decks.iter().cloned().collect();
+    let scored = match score_decks_parallel(
+        deck_list.clone(),
+        &ctx,
+        &mut decks_scored,
+        0.0,
+        &mut on_progress,
+    ) {
+        Ok(results) => results,
+        Err(EngineError::Cancelled) if crate::cancel::is_save_requested() => {
+            return Ok(finish_multi_deck(
+                request,
+                target,
+                legal_decks,
+                rows,
+                history,
+                decks_scored,
+                started,
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    let mut by_counts = rustc_hash::FxHashMap::default();
+    for (counts, eval) in scored {
+        by_counts.insert(counts_key(&counts), (counts, eval));
+    }
+    for counts in deck_list {
+        let Some((counts, eval)) = by_counts.remove(&counts_key(&counts)) else {
+            continue;
         };
         let score = metric_score(&eval, request.metric);
         history.push(HistoryPoint {
@@ -871,7 +1210,7 @@ fn optimize_multi_deck(
         rows.push(RankedDeck {
             rank: 0,
             score,
-            counts: counts.clone(),
+            counts,
             score_delta: None,
             card_stats: eval.card_stats,
             candidate: None,

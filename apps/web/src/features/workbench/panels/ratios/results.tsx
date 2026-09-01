@@ -212,7 +212,7 @@ export function RatioResults({
                 {allVisibleSelected ? "Clear selection" : "Select visible"}
               </SecondaryActionButton>
               <span className="font-mono text-[11px] tracking-[0.06em] text-muted uppercase">
-                Queues lists into multi-deck and runs again
+                Queues lists into multi-deck test
               </span>
             </div>
           )}
@@ -243,6 +243,7 @@ export function RatioResults({
                   <RatioRankingRow
                     entry={entry}
                     baseCounts={baseCounts}
+                    baseDeckName={criteria?.baseDeckName}
                     baselineScore={baselineScore}
                     bestScore={bestChangedScore}
                     variant={isMultiDeck ? "multiDeck" : "search"}
