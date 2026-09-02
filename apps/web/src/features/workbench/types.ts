@@ -113,6 +113,22 @@ export type StepAlignment =
   | { kind: "oracle-only"; oracle: number }
   | { kind: "brick-only"; brick: number };
 
+export type MaterialLineMarks = Readonly<{
+  left: boolean[];
+  right: boolean[];
+}>;
+
+export type MaterialLineDiff = Readonly<{
+  equivalent: boolean;
+  sameDamage: boolean;
+  sameTurns: boolean;
+  sameDecisions: boolean;
+  leftDamage: number;
+  rightDamage: number;
+  divergentTurn: number | null;
+  marks: MaterialLineMarks;
+}>;
+
 export const PHASE_LABELS: Record<TapePhase, string> = {
   main: "Main",
   materialize: "Materialize",

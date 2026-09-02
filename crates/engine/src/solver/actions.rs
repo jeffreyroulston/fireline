@@ -10,9 +10,9 @@ use rustc_hash::FxHashMap;
 
 use super::apply::apply_silent;
 
-/// Optimistic damage per influence-reservation (2.5), as rational 5/2.
-const OPT_DMG_PER_RESERVE_NUM: u16 = 5;
-const OPT_DMG_PER_RESERVE_DEN: u16 = 2;
+/// Optimistic damage per influence-reservation (3), as rational 3/1.
+const OPT_DMG_PER_RESERVE_NUM: u16 = 3;
+const OPT_DMG_PER_RESERVE_DEN: u16 = 1;
 
 pub(crate) fn is_fast_phase(phase: Phase) -> bool {
     matches!(phase, Phase::PreRecollect | Phase::Agility)
@@ -474,14 +474,14 @@ pub(crate) fn reservation_budget(state: State) -> u8 {
     state.influence().saturating_mul(mains)
 }
 
-/// Optimistic remaining damage from a reservation budget at 2.5 dmg / influence.
+/// Optimistic remaining damage from a reservation budget at 3 dmg / influence.
 pub(crate) fn optimistic_remaining_from_reserve(reserve: u8) -> u8 {
     let scaled = u16::from(reserve) * OPT_DMG_PER_RESERVE_NUM / OPT_DMG_PER_RESERVE_DEN;
     scaled.min(u16::from(u8::MAX)) as u8
 }
 
 /// Zero-reserve damage still on the board / sideboard (allies, weapons, dagger).
-/// Required so `2.5 × reservation` stays admissible — board swings are not paid from I.
+/// Required so `3 × reservation` stays admissible — board swings are not paid from I.
 fn optimistic_free_board_damage(state: State) -> u8 {
     let mains = u16::from(state.max_turns.saturating_sub(state.turn).max(1));
     let mut total = 0_u16;

@@ -470,6 +470,14 @@ export function PlaytestPanel({
             <LineCompare
               resetKey={`playtest-compare-${yourDamage}-${optimalResult.maxDamage}-${lineHorizon}`}
               openingHand={hand}
+              turn2Kill={
+                turn2KillResults
+                  ? {
+                      damage: turn2KillResults.turn2.maxDamage,
+                      threshold: turn2KillResults.threshold,
+                    }
+                  : null
+              }
               left={{
                 label: "Your line",
                 damage: yourDamage,
