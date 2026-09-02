@@ -24,7 +24,17 @@ pub fn count_legal_decks(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Re
 }
 
 pub(crate) fn counts_key(counts: &BTreeMap<String, u8>) -> Vec<u8> {
-    counts.values().copied().collect()
+    let mut key = Vec::new();
+    for (id, count) in counts {
+        if *count == 0 {
+            continue;
+        }
+        key.extend(id.as_bytes());
+        key.push(0);
+        key.push(*count);
+        key.push(0);
+    }
+    key
 }
 
 fn validate_bounds(bounds: &BTreeMap<String, Bounds>, deck_size: u8) -> Result<()> {
@@ -164,4 +174,31 @@ pub(crate) fn initial_counts(
         remaining -= 1;
     }
     Ok(counts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counts_key_includes_card_identity() {
+        let left = BTreeMap::from([
+            ("arthur".into(), 2_u8),
+            ("clumsy_apprentice".into(), 2),
+            ("kingdom_informant".into(), 2),
+            ("sable_remnant".into(), 1),
+        ]);
+        let right = BTreeMap::from([
+            ("arthur".into(), 2_u8),
+            ("clumsy_apprentice".into(), 2),
+            ("kingdom_informant".into(), 2),
+            ("red_hare".into(), 1),
+        ]);
+        assert_eq!(
+            left.values().copied().collect::<Vec<_>>(),
+            right.values().copied().collect::<Vec<_>>(),
+            "these lists share a copy-count sequence and used to collide"
+        );
+        assert_ne!(counts_key(&left), counts_key(&right));
+    }
 }

@@ -1,5 +1,7 @@
 import type { SimType } from "@/lib/engine";
 import type { Tab } from "./types";
+import { patchRunSettingsParams } from "./lib/run-settings-filter";
+import type { RunSettingsFilterState } from "./lib/run-settings-filter";
 
 export const PATH_BY_TAB: Record<Tab, string> = {
   line: "hand",
@@ -20,8 +22,8 @@ export const QUERY_KEYS_BY_TAB: Record<Tab, readonly string[]> = {
   manage: [],
   deck: ["run"],
   ratios: ["run"],
-  cards: ["source", "sim", "kind", "card", "deck"],
-  history: ["sim", "vg", "ovg", "card"],
+  cards: ["source", "sim", "kind", "card", "deck", "go_first", "max_turns"],
+  history: ["sim", "vg", "ovg", "card", "go_first", "max_turns"],
   info: [],
 };
 
@@ -136,6 +138,7 @@ export function historyQueryPatch(
     vg?: string;
     ovg?: string;
     card?: string | null;
+    runSettings?: RunSettingsFilterState;
   },
 ): URLSearchParams {
   const next = new URLSearchParams(current.toString());
@@ -172,6 +175,13 @@ export function historyQueryPatch(
     }
   }
 
+  if (patch.runSettings !== undefined) {
+    return cleanQueryForTab(
+      "history",
+      patchRunSettingsParams(next, patch.runSettings),
+    );
+  }
+
   return cleanQueryForTab("history", next);
 }
 
@@ -183,6 +193,7 @@ export function cardsQueryPatch(
     kind?: string | null;
     card?: string | null;
     deck?: string | null;
+    runSettings?: RunSettingsFilterState;
   },
 ): URLSearchParams {
   const next = new URLSearchParams(current.toString());
@@ -225,6 +236,13 @@ export function cardsQueryPatch(
     } else {
       next.delete("deck");
     }
+  }
+
+  if (patch.runSettings !== undefined) {
+    return cleanQueryForTab(
+      "cards",
+      patchRunSettingsParams(next, patch.runSettings),
+    );
   }
 
   return cleanQueryForTab("cards", next);

@@ -1,5 +1,9 @@
 import type { Kysely } from "kysely";
 import type { Database } from "../db/types.js";
+import {
+  applyRunSettingsFilter,
+  type RunSettingsFilter,
+} from "./run-settings-filter.js";
 import type { VersionTriple } from "./version.js";
 
 const DONE_STATUSES = ["complete", "partial"] as const;
@@ -157,6 +161,7 @@ export async function loadEvaluateSamples(
     attributionVersion: number;
     deckHash?: string;
     deckIds?: string[];
+    runSettings?: RunSettingsFilter;
   },
 ): Promise<EvaluateSample[]> {
   if (options.deckIds !== undefined && options.deckIds.length === 0) {
@@ -188,6 +193,8 @@ export async function loadEvaluateSamples(
       query = query.where("r.deck_id", "in", options.deckIds);
     }
   }
+
+  query = applyRunSettingsFilter(query, options.runSettings, "r");
 
   const rows = await query.execute();
   return rows.map((row) => ({

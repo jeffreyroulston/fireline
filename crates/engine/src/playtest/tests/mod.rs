@@ -196,6 +196,7 @@ fn playtest_action_deserializes_reserved_hand_indices() {
         hot_cake_sacrifice: false,
         flagrant_level: None,
         flagrant_gy_return: None,
+        tristan_agility: false,
         reserved: Vec::new(),
         reserved_hand_indices: vec![1, 2],
         skip_discard: None,
@@ -234,6 +235,7 @@ fn playtest_apply_rejects_missing_reserve() {
             hot_cake_sacrifice: false,
             flagrant_level: None,
             flagrant_gy_return: None,
+            tristan_agility: false,
             reserved: vec![],
             reserved_hand_indices: vec![],
             skip_discard: None,
@@ -542,4 +544,73 @@ fn playtest_attack_others_two_hasty_discard_steps() {
         .filter(|event| event.kind == EventKind::OnAttackDraw)
         .count();
     assert_eq!(draws, 2, "{:?}", applied.events);
+}
+
+#[test]
+fn playtest_tristan_on_enter_offers_prep_or_agility() {
+    use crate::line_event::format_line_event;
+
+    let mut materials = BTreeMap::new();
+    materials.insert("tristan_1".to_string(), 1);
+    let init = playtest_init(&PlaytestInitRequest {
+        hand: vec![
+            Card::Brick.id().to_string(),
+            Card::Brick.id().to_string(),
+            Card::Brick.id().to_string(),
+            Card::Brick.id().to_string(),
+        ],
+        go_first: true,
+        max_turns: 2,
+        materials,
+        queue: vec![],
+    })
+    .expect("init");
+    let mut engine = init.state.engine;
+    engine.turn = 1;
+    engine.phase = Phase::Materialize as u8;
+    engine.memory[Card::Brick.index()] = 1;
+    engine.memory_len = 1;
+    engine.hand[Card::Brick.index()] = engine.hand[Card::Brick.index()].saturating_sub(1);
+    engine.hand_len = engine.hand_len.saturating_sub(1);
+
+    let legal = playtest_legal_actions(&PlaytestLegalActionsRequest {
+        state: engine.clone(),
+    })
+    .expect("legal");
+    let labels: Vec<&str> = legal.actions.iter().map(|opt| opt.label.as_str()).collect();
+    assert!(
+        labels.contains(&"Materialize Tristan (Prep)"),
+        "{labels:?}"
+    );
+    assert!(
+        labels.contains(&"Materialize Tristan (Agility 3)"),
+        "{labels:?}"
+    );
+
+    let agility = legal
+        .actions
+        .iter()
+        .find(|opt| {
+            matches!(
+                opt.action,
+                PlaytestAction::MaterializeTristanMemory { agility: true }
+            )
+        })
+        .expect("agility choice");
+    let applied = playtest_apply(&PlaytestApplyRequest {
+        state: engine,
+        action: agility.action.clone(),
+    })
+    .expect("apply agility");
+    assert_eq!(applied.state.agility, 3);
+    assert_eq!(applied.state.prep, 0);
+    assert!(applied.state.tristan_leveled);
+    assert!(
+        applied
+            .events
+            .iter()
+            .any(|event| format_line_event(event) == "Tristan Lvl 1 Agility 3"),
+        "{:?}",
+        applied.events
+    );
 }

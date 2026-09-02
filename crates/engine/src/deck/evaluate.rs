@@ -113,6 +113,7 @@ fn solve_sample_hand(
             phase: HandPhase::Started,
             rollout: 0,
             total_rollouts,
+            deck_number: 0,
         },
     )
     .is_break()
@@ -160,6 +161,7 @@ fn solve_sample_hand(
                         phase: HandPhase::Rollout,
                         rollout,
                         total_rollouts,
+                        deck_number: 0,
                     },
                 )
                 .is_break()
@@ -187,6 +189,7 @@ fn solve_sample_hand(
             phase: HandPhase::Done,
             rollout: total_rollouts,
             total_rollouts,
+            deck_number: 0,
         },
     )
     .is_break()
@@ -299,6 +302,7 @@ fn solve_unique_hands(
                                 phase: HandPhase::TimedOut,
                                 rollout: 0,
                                 total_rollouts,
+                                deck_number: 0,
                             },
                         );
                         let n = u16::try_from(index + 1).unwrap_or(u16::MAX);
@@ -379,6 +383,7 @@ fn solve_unique_hands(
                                 phase: HandPhase::Throttled,
                                 rollout: 0,
                                 total_rollouts,
+                                deck_number: 0,
                             },
                         );
                     })
@@ -416,6 +421,7 @@ fn solve_unique_hands(
                                 phase: HandPhase::TimedOut,
                                 rollout: 0,
                                 total_rollouts,
+                                deck_number: 0,
                             },
                         );
                         let n = completed.fetch_add(1, Ordering::Relaxed) + 1;

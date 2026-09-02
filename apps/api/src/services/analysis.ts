@@ -25,6 +25,10 @@ import {
   hasDamageBounds,
   type DamageBounds,
 } from "./filtered-leaderboard.js";
+import {
+  applyRunSettingsFilter,
+  type RunSettingsFilter,
+} from "../lib/run-settings-filter.js";
 
 const DONE_STATUSES = ["complete", "partial"] as const;
 const MAX_POOLED_SAMPLE_BARS = 200;
@@ -36,6 +40,7 @@ export async function listVersionGroups(
     deckId?: string;
     simType?: string;
     kind?: "evaluate" | "optimize";
+    runSettings?: RunSettingsFilter;
   },
 ) {
   let query = db
@@ -62,6 +67,8 @@ export async function listVersionGroups(
     query = query.where("sim_type", "=", options.simType);
   }
 
+  query = applyRunSettingsFilter(query, options.runSettings);
+
   return query
     .groupBy(["rules_version", "sampler_version", "attribution_version"])
     .orderBy("runCount", "desc")
@@ -74,9 +81,10 @@ export async function pooledDamageDistribution(
     deckHash: string;
     simType: string;
     version: VersionTriple;
+    runSettings?: RunSettingsFilter;
   },
 ) {
-  const runs = await db
+  let runsQuery = db
     .selectFrom("runs")
     .select([
       "id",
@@ -96,8 +104,11 @@ export async function pooledDamageDistribution(
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
     .where("damage_histogram", "is not", null)
-    .orderBy("started_at", "asc")
-    .execute();
+    .orderBy("started_at", "asc");
+
+  runsQuery = applyRunSettingsFilter(runsQuery, options.runSettings);
+
+  const runs = await runsQuery.execute();
 
   if (runs.length === 0) {
     return {
@@ -343,9 +354,10 @@ export async function pooledSampleHighlights(
     deckHash: string;
     simType: string;
     version: VersionTriple;
+    runSettings?: RunSettingsFilter;
   },
 ) {
-  const runs = await db
+  let runsQuery = db
     .selectFrom("runs")
     .select([
       "id",
@@ -360,8 +372,11 @@ export async function pooledSampleHighlights(
     .where("sim_type", "=", options.simType)
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
-    .orderBy("started_at", "asc")
-    .execute();
+    .orderBy("started_at", "asc");
+
+  runsQuery = applyRunSettingsFilter(runsQuery, options.runSettings);
+
+  const runs = await runsQuery.execute();
 
   if (runs.length === 0) {
     return {
@@ -509,6 +524,7 @@ export async function cardLeaderboard(
     attributionVersion: number;
     bounds?: DamageBounds;
     cards?: Array<{ id: string; name: string }>;
+    runSettings?: RunSettingsFilter;
   },
 ) {
   if (hasDamageBounds(options.bounds) && options.cards) {
@@ -519,10 +535,11 @@ export async function cardLeaderboard(
       attributionVersion: options.attributionVersion,
       bounds: options.bounds!,
       cards: options.cards,
+      runSettings: options.runSettings,
     });
   }
 
-  const runCountRow = await db
+  let runCountQuery = db
     .selectFrom("runs")
     .select(sql<number>`count(*)::int`.as("runCount"))
     .where("status", "in", DONE_STATUSES)
@@ -531,10 +548,13 @@ export async function cardLeaderboard(
     .where("sim_type", "=", options.simType)
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
-    .where("attribution_version", "=", options.attributionVersion)
-    .executeTakeFirst();
+    .where("attribution_version", "=", options.attributionVersion);
 
-  const rows = await db
+  runCountQuery = applyRunSettingsFilter(runCountQuery, options.runSettings);
+
+  const runCountRow = await runCountQuery.executeTakeFirst();
+
+  let statsQuery = db
     .selectFrom("run_card_stats as cs")
     .innerJoin("runs as r", "r.id", "cs.run_id")
     .select([
@@ -557,10 +577,13 @@ export async function cardLeaderboard(
     .where("r.sampler_version", "=", options.version.samplerVersion)
     .where("r.attribution_version", "=", options.attributionVersion)
     .groupBy("cs.card_id")
-    .orderBy(sql`sum(cs.damage) desc`)
-    .execute();
+    .orderBy(sql`sum(cs.damage) desc`);
 
-  const sampleRow = await db
+  statsQuery = applyRunSettingsFilter(statsQuery, options.runSettings, "r");
+
+  const rows = await statsQuery.execute();
+
+  let sampleQuery = db
     .selectFrom("runs")
     .select(sql<number>`sum(coalesce(samples, 0))::int`.as("totalSamples"))
     .where("status", "in", DONE_STATUSES)
@@ -569,8 +592,11 @@ export async function cardLeaderboard(
     .where("sim_type", "=", options.simType)
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
-    .where("attribution_version", "=", options.attributionVersion)
-    .executeTakeFirst();
+    .where("attribution_version", "=", options.attributionVersion);
+
+  sampleQuery = applyRunSettingsFilter(sampleQuery, options.runSettings);
+
+  const sampleRow = await sampleQuery.executeTakeFirst();
 
   const totalSamples = sampleRow?.totalSamples ?? 0;
   const totalDamage = rows.reduce((sum, row) => sum + row.damage, 0);
@@ -581,6 +607,7 @@ export async function cardLeaderboard(
     simType: options.simType,
     version: options.version,
     attributionVersion: options.attributionVersion,
+    runSettings: options.runSettings,
   });
   const handLiftByCard = computeAllHandImpacts(evaluateSamples);
 

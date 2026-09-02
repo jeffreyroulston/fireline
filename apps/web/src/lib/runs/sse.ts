@@ -54,6 +54,8 @@ export function coerceHandProgress(
   const rollout = asNumber(data.rollout);
   const totalRollouts =
     asNumber(data.totalRollouts) ?? asNumber(data.total_rollouts);
+  const deckNumber =
+    asNumber(data.deckNumber) ?? asNumber(data.deck_number);
   if (
     sampleIndex == null ||
     phase == null ||
@@ -67,7 +69,12 @@ export function coerceHandProgress(
     phase,
     rolloutsDone: rollout,
     totalRollouts,
+    ...(deckNumber != null && deckNumber > 0 ? { deckNumber } : {}),
   };
+}
+
+function handKey(hand: Pick<HandProgress, "sampleIndex" | "deckNumber">): string {
+  return `${hand.deckNumber ?? 0}:${hand.sampleIndex}`;
 }
 
 export function applyHandProgress(
@@ -75,17 +82,20 @@ export function applyHandProgress(
   update: HandProgress,
 ): HandProgress[] {
   const hands = current ?? [];
+  const updateKey = handKey(update);
   if (update.phase === "done" || update.phase === "timedOut") {
-    return hands.filter((hand) => hand.sampleIndex !== update.sampleIndex);
+    return hands.filter((hand) => handKey(hand) !== updateKey);
   }
-  const index = hands.findIndex(
-    (hand) => hand.sampleIndex === update.sampleIndex,
-  );
+  const index = hands.findIndex((hand) => handKey(hand) === updateKey);
   const startedAtMs =
     index >= 0 ? (hands[index].startedAtMs ?? Date.now()) : Date.now();
   const nextHand: HandProgress = { ...update, startedAtMs };
   if (index < 0) {
-    return [...hands, nextHand].sort((a, b) => a.sampleIndex - b.sampleIndex);
+    return [...hands, nextHand].sort((a, b) => {
+      const deck = (a.deckNumber ?? 0) - (b.deckNumber ?? 0);
+      if (deck !== 0) return deck;
+      return a.sampleIndex - b.sampleIndex;
+    });
   }
   const next = hands.slice();
   next[index] = nextHand;

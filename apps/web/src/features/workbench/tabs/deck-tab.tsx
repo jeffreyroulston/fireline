@@ -21,7 +21,7 @@ type DeckTabProps = Readonly<{
   glimpseEnabled: boolean;
   maxHandDurationSecs: number | null;
   maxCardDraw: number | null;
-  seed: number;
+  seed: number | null;
   evaluateBusy: boolean;
   evaluateRun: UseShellSolverResult["evaluateRun"];
   decksLoading: boolean;
@@ -35,7 +35,7 @@ type DeckTabProps = Readonly<{
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
-  onSeedChange: (value: number) => void;
+  onSeedChange: (value: number | null) => void;
   onEvaluate: () => void;
   onCancel: () => void;
   onSave?: () => void;

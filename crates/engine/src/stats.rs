@@ -149,7 +149,7 @@ impl LineCardStats {
                 self.material_plays[MAT_ZANDER] += 1;
                 self.record_draws_in_events(events);
             }
-            Action::MaterializeTristanMemory | Action::TristanRecollect => {
+            Action::MaterializeTristanMemory { .. } | Action::TristanRecollect => {
                 self.material_plays[MAT_TRISTAN] += 1;
                 self.record_draws_in_events(events);
             }

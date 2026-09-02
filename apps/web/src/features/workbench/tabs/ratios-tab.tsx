@@ -34,7 +34,7 @@ type RatiosTabProps = Readonly<{
   glimpseEnabled: boolean;
   maxHandDurationSecs: number | null;
   maxCardDraw: number | null;
-  seed: number;
+  seed: number | null;
   optimizeRun: UseShellSolverResult["optimizeRun"];
   optimizeBusy: boolean;
   decksLoading: boolean;
@@ -47,7 +47,7 @@ type RatiosTabProps = Readonly<{
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
-  onSeedChange: (value: number) => void;
+  onSeedChange: (value: number | null) => void;
   onOptimize: () => void;
   onCancelOptimize: () => void;
   onSaveOptimize?: () => void;

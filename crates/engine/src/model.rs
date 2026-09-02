@@ -1313,7 +1313,10 @@ pub enum Action {
         glimpse_layout: Option<u8>,
     },
     /// Tristan levels from memory without Glimpse (unlike Zander).
-    MaterializeTristanMemory,
+    /// `agility` is the On Enter choice: skip the prep counter and gain agility 3.
+    MaterializeTristanMemory {
+        agility: bool,
+    },
     TristanRecollect,
     SkipAgility,
     MaterializeSoulknife,
@@ -1335,6 +1338,8 @@ pub enum Action {
         flagrant_level: Option<u16>,
         /// Assassin action/attack returned from the graveyard when leveling to Deft Executor (−1 prep).
         flagrant_gy_return: Option<Card>,
+        /// Flagrant Guide → Tristan On Enter: skip prep and gain agility 3.
+        tristan_agility: bool,
     },
     PlayItem {
         card: Card,

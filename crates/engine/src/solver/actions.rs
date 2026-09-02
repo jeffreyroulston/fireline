@@ -304,6 +304,7 @@ fn push_fast_ally_plays(state: State, result: &mut Vec<Action>) {
                 hot_cake_sacrifice: false,
                 flagrant_level: None,
                 flagrant_gy_return: None,
+                tristan_agility: false,
             });
         }
     }
@@ -362,6 +363,7 @@ fn push_peppered_chef_plays(state: State, card: Card, kindle: u8, result: &mut V
                 hot_cake_sacrifice,
                 flagrant_level: None,
                 flagrant_gy_return: None,
+                tristan_agility: false,
             });
         }
     }
@@ -387,6 +389,7 @@ fn flagrant_guide_actions(
                 hot_cake_sacrifice,
                 flagrant_level: Some(mat),
                 flagrant_gy_return: None,
+                tristan_agility: false,
             });
             for gy_card in zander_gy_return_options(state) {
                 result.push(Action::PlayAlly {
@@ -396,6 +399,7 @@ fn flagrant_guide_actions(
                     hot_cake_sacrifice,
                     flagrant_level: Some(mat),
                     flagrant_gy_return: Some(gy_card),
+                    tristan_agility: false,
                 });
             }
         } else {
@@ -406,7 +410,19 @@ fn flagrant_guide_actions(
                 hot_cake_sacrifice,
                 flagrant_level: Some(mat),
                 flagrant_gy_return: None,
+                tristan_agility: false,
             });
+            if mat == MAT_TRISTAN {
+                result.push(Action::PlayAlly {
+                    card,
+                    kindle,
+                    sacrifice_ally,
+                    hot_cake_sacrifice,
+                    flagrant_level: Some(mat),
+                    flagrant_gy_return: None,
+                    tristan_agility: true,
+                });
+            }
         }
     }
     result
@@ -637,7 +653,7 @@ pub(crate) fn collapse_mate_ending_siblings(state: State, endings: Vec<Action>) 
 fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
     if state.phase == Phase::Agility {
         let mut result = Vec::with_capacity(24);
-        if state.tristan_leveled && state.agility >= 3 && state.memory_len >= 3 {
+        if state.tristan_leveled && state.agility >= 3 && state.memory_len > 0 {
             result.push(Action::TristanRecollect);
         }
         push_fast_plays(state, &mut result);
@@ -690,7 +706,8 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
             && state.has_material(MAT_TRISTAN)
             && (state.memory_len > 0 || state.float_gy > 0)
         {
-            endings.push(Action::MaterializeTristanMemory);
+            endings.push(Action::MaterializeTristanMemory { agility: false });
+            endings.push(Action::MaterializeTristanMemory { agility: true });
         }
         if state.turn >= 1
             && state.is_assassin()
@@ -780,6 +797,7 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
                     hot_cake_sacrifice: true,
                     flagrant_level: None,
                     flagrant_gy_return: None,
+                    tristan_agility: false,
                 });
             }
             if card == Card::FlagrantGuide {
@@ -792,6 +810,7 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
                 hot_cake_sacrifice: false,
                 flagrant_level: None,
                 flagrant_gy_return: None,
+                tristan_agility: false,
             });
         }
     }

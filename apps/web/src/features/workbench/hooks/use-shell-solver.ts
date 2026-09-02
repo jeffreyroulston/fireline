@@ -40,6 +40,7 @@ import {
   makeSeed,
   normalizeSeed,
   OPENING_HAND_SIZE,
+  resolveRunSeed,
   shuffleDeck,
   subtractCards,
 } from "../utils";
@@ -82,6 +83,7 @@ export type ShellSolverState = Readonly<{
   drawn: CardId[];
   orderedDeck: CardId[];
   solveSeed: number;
+  sampleSeed: number | null;
   solverMode: SolverMode;
   selectedCard: CardId;
   goFirst: boolean;
@@ -147,7 +149,8 @@ export type ShellSolverActions = Readonly<{
   drawRandomHandFromDeck: () => void;
   drawCardFromDeck: () => void;
   shuffleDeckFromSeed: () => void;
-  applySolveSeed: (seed: number) => void;
+  applySolveSeed: (seed: number | null) => void;
+  applySampleSeed: (seed: number | null) => void;
   onDrawnChange: (next: CardId[]) => void;
   onSolverModeChange: (mode: SolverMode) => void;
   onSimTypeChange: (value: SimType) => void;
@@ -172,6 +175,7 @@ export function useShellSolver({
   const [drawn, setDrawn] = useState<CardId[]>([]);
   const [orderedDeck, setOrderedDeck] = useState<CardId[]>([]);
   const [solveSeed, setSolveSeed] = useState(42);
+  const [sampleSeed, setSampleSeed] = useState<number | null>(null);
   const [solverMode, setSolverMode] = useState<SolverMode>("hand");
   const [selectedCard, setSelectedCard] = useState<CardId>("arthur");
   const [goFirst, setGoFirst] = useState(true);
@@ -423,7 +427,7 @@ export function useShellSolver({
           maxTurns: turns,
           simType,
           rollouts,
-          seed: solveSeed as unknown as bigint,
+          seed: resolveRunSeed(sampleSeed) as unknown as bigint,
           budget: DEFAULT_BUDGET,
           ...advancedRunFields(
             simType,
@@ -512,10 +516,10 @@ export function useShellSolver({
             decks: deckCount,
             metric: ratio.metric,
             strategy: ratio.ratioStrategy,
-            evalMode: ratio.ratioEvalMode,
+            evalMode: "full",
             baseDeck: ratio.ratioBaseCounts,
             swap: { from: ratio.swapFrom, count, candidates },
-            seed: solveSeed as unknown as bigint,
+            seed: resolveRunSeed(sampleSeed) as unknown as bigint,
             materials: activeMaterialCounts,
             budget: DEFAULT_BUDGET,
             goFirst,
@@ -603,7 +607,7 @@ export function useShellSolver({
           evalMode: ratio.ratioEvalMode,
           baseDeck: {},
           swap: null,
-          seed: solveSeed as unknown as bigint,
+          seed: resolveRunSeed(sampleSeed) as unknown as bigint,
           materials: activeMaterialCounts,
           budget: DEFAULT_BUDGET,
           goFirst,
@@ -684,11 +688,11 @@ export function useShellSolver({
           decks: deckCount,
           metric: ratio.metric,
           strategy: "multiDeck",
-          evalMode: ratio.ratioEvalMode,
+          evalMode: "full",
           baseDeck: {},
           swap: null,
           multiDeck: { decks: [...deckLists] },
-          seed: solveSeed as unknown as bigint,
+          seed: resolveRunSeed(sampleSeed) as unknown as bigint,
           materials: activeMaterialCounts,
           budget: DEFAULT_BUDGET,
           goFirst,
@@ -880,7 +884,10 @@ export function useShellSolver({
     setError("");
   }
 
-  function applySolveSeed(raw: number) {
+  function applySolveSeed(raw: number | null) {
+    if (raw == null) {
+      return;
+    }
     const seed = normalizeSeed(raw);
     setSolveSeed(seed);
     if (orderedDeck.length > 0) {
@@ -892,6 +899,10 @@ export function useShellSolver({
     }
     clearLineResults();
     setError("");
+  }
+
+  function applySampleSeed(raw: number | null) {
+    setSampleSeed(raw == null ? null : normalizeSeed(raw));
   }
 
   function onSolverModeChange(mode: SolverMode) {
@@ -914,6 +925,7 @@ export function useShellSolver({
     drawn,
     orderedDeck,
     solveSeed,
+    sampleSeed,
     solverMode,
     selectedCard,
     goFirst,
@@ -976,6 +988,7 @@ export function useShellSolver({
     drawCardFromDeck,
     shuffleDeckFromSeed,
     applySolveSeed,
+    applySampleSeed,
     onDrawnChange,
     onSolverModeChange,
     onSimTypeChange,

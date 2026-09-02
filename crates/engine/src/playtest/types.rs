@@ -236,7 +236,10 @@ pub enum PlaytestAction {
         )]
         glimpse_layout: Option<u8>,
     },
-    MaterializeTristanMemory,
+    MaterializeTristanMemory {
+        #[serde(default)]
+        agility: bool,
+    },
     TristanRecollect,
     SkipAgility,
     MaterializeSoulknife,
@@ -294,6 +297,8 @@ pub enum PlaytestAction {
         flagrant_level: Option<u16>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         flagrant_gy_return: Option<String>,
+        #[serde(default)]
+        tristan_agility: bool,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         reserved: Vec<String>,
         #[serde(

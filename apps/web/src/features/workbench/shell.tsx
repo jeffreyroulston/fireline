@@ -401,7 +401,7 @@ export default function FizaWorkbench({
             glimpseEnabled={solver.glimpseEnabled}
             maxHandDurationSecs={solver.maxHandDurationSecs}
             maxCardDraw={solver.maxCardDraw}
-            seed={solver.solveSeed}
+            seed={solver.sampleSeed}
             evaluateBusy={solver.evaluateBusy}
             evaluateRun={solver.evaluateRun}
             decksLoading={decksLoading}
@@ -415,7 +415,7 @@ export default function FizaWorkbench({
             onGlimpseEnabledChange={solver.setGlimpseEnabled}
             onMaxHandDurationSecsChange={solver.setMaxHandDurationSecs}
             onMaxCardDrawChange={solver.setMaxCardDraw}
-            onSeedChange={solver.applySolveSeed}
+            onSeedChange={solver.applySampleSeed}
             onEvaluate={solver.evaluateCurrentDeck}
             onCancel={solver.cancelEvaluateJob}
             onSave={
@@ -441,7 +441,7 @@ export default function FizaWorkbench({
             glimpseEnabled={solver.glimpseEnabled}
             maxHandDurationSecs={solver.maxHandDurationSecs}
             maxCardDraw={solver.maxCardDraw}
-            seed={solver.solveSeed}
+            seed={solver.sampleSeed}
             optimizeRun={solver.optimizeRun}
             optimizeBusy={solver.optimizeBusy}
             decksLoading={decksLoading}
@@ -454,7 +454,7 @@ export default function FizaWorkbench({
             onGlimpseEnabledChange={solver.setGlimpseEnabled}
             onMaxHandDurationSecsChange={solver.setMaxHandDurationSecs}
             onMaxCardDrawChange={solver.setMaxCardDraw}
-            onSeedChange={solver.applySolveSeed}
+            onSeedChange={solver.applySampleSeed}
             onOptimize={solver.optimizeCurrentBounds}
             onCancelOptimize={solver.cancelOptimizeJob}
             onSaveOptimize={

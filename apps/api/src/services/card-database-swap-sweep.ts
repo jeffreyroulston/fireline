@@ -6,6 +6,10 @@ import {
   MIN_HAND_BUCKET_SAMPLES,
 } from "../lib/hand-impact.js";
 import type { VersionTriple } from "../lib/version.js";
+import {
+  applyRunSettingsFilter,
+  type RunSettingsFilter,
+} from "../lib/run-settings-filter.js";
 import type {
   CardDatabaseContributor,
   CardDatabaseDeckRow,
@@ -66,6 +70,7 @@ export type SwapSweepQuery = {
   currentVersion?: VersionTriple;
   currentAttributionVersion?: number;
   deckIds?: string[];
+  runSettings?: RunSettingsFilter;
 };
 
 function statForCard(
@@ -236,6 +241,8 @@ async function loadSwapSweepEvalRows(
   if (sourceDeckIds && sourceDeckIds.length > 0) {
     query = query.where("r.deck_id", "in", sourceDeckIds);
   }
+
+  query = applyRunSettingsFilter(query, options.runSettings, "r");
 
   const rows = await query.execute();
   return rows.map((row) => ({

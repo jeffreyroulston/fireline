@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchPooledDamage } from "@/lib/api/client";
+import { fetchPooledDamage, type RunSettingsFilter } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/query-keys";
 
 export type PooledDamageQueryParams = {
@@ -7,10 +7,18 @@ export type PooledDamageQueryParams = {
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
+  runSettings?: RunSettingsFilter;
 };
 
+function runSettingsKey(filter?: RunSettingsFilter): string {
+  if (!filter) return "all";
+  const goFirst = (filter.goFirst ?? []).map((v) => (v ? "1" : "0")).join(",");
+  const maxTurns = (filter.maxTurns ?? []).join(",");
+  return `gf:${goFirst}|mt:${maxTurns}`;
+}
+
 function pooledDamageFiltersKey(params: PooledDamageQueryParams): string {
-  return `${params.deckHash}:${params.simType}:${params.rulesVersion}:${params.samplerVersion}`;
+  return `${params.deckHash}:${params.simType}:${params.rulesVersion}:${params.samplerVersion}:${runSettingsKey(params.runSettings)}`;
 }
 
 export function usePooledDamageQuery(

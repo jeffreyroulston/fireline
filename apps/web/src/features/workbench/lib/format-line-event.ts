@@ -136,7 +136,7 @@ export function formatLineEvent(
       }
       return "Mem Cost for Tristan Lvl 1 (Float from GY)";
     case "levelTristan":
-      return "Tristan Lvl 1 Prep";
+      return event.kindle === 3 ? "Tristan Lvl 1 Agility 3" : "Tristan Lvl 1 Prep";
     case "tristanRecollect": {
       const parts: string[] = [];
       if (event.card) parts.push(name(event.card));

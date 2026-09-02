@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchCardLeaderboard } from "@/lib/api/client";
+import { fetchCardLeaderboard, type RunSettingsFilter } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/query-keys";
 
 export type CardLeaderboardQueryParams = {
@@ -10,14 +10,22 @@ export type CardLeaderboardQueryParams = {
   attributionVersion: number;
   damageGte?: number;
   damageLte?: number;
+  runSettings?: RunSettingsFilter;
 };
+
+function runSettingsKey(filter?: RunSettingsFilter): string {
+  if (!filter) return "all";
+  const goFirst = (filter.goFirst ?? []).map((v) => (v ? "1" : "0")).join(",");
+  const maxTurns = (filter.maxTurns ?? []).join(",");
+  return `gf:${goFirst}|mt:${maxTurns}`;
+}
 
 function cardLeaderboardFiltersKey(params: CardLeaderboardQueryParams): string {
   const range =
     params.damageGte != null || params.damageLte != null
       ? `:${params.damageGte ?? ""}:${params.damageLte ?? ""}`
       : "";
-  return `${params.deckHash}:${params.simType}:${params.rulesVersion}:${params.samplerVersion}:${params.attributionVersion}${range}`;
+  return `${params.deckHash}:${params.simType}:${params.rulesVersion}:${params.samplerVersion}:${params.attributionVersion}${range}:${runSettingsKey(params.runSettings)}`;
 }
 
 export function useCardLeaderboardQuery(

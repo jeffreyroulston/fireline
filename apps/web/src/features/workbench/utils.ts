@@ -52,6 +52,11 @@ export function normalizeSeed(value: number): number {
   return Math.trunc(value) >>> 0;
 }
 
+/** Empty seed means a fresh random value for this run. */
+export function resolveRunSeed(seed: number | null | undefined): number {
+  return seed == null ? makeSeed() : normalizeSeed(seed);
+}
+
 export const OPENING_HAND_SIZE = 7;
 
 /** Match the engine's splitmix64-style `Rng` so seeded shuffles line up. */

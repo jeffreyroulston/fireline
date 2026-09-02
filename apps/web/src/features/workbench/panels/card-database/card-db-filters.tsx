@@ -7,6 +7,11 @@ import type {
 } from "@/lib/api/client";
 import type { SimType } from "@/lib/engine";
 import { SIM_TYPE_LABELS } from "../../types";
+import { RunSettingsFilterBar } from "../../ui/run-settings-filter-bar";
+import type {
+  AvailableRunSettings,
+  RunSettingsFilterState,
+} from "../../lib/run-settings-filter";
 import { CARD_DB_SOURCES, KIND_FILTERS } from "./constants";
 import { formatPct } from "./formatters";
 import {
@@ -32,11 +37,14 @@ export interface CardDbFiltersProps {
   readonly ownershipSummary: string;
   readonly totalRuns: number;
   readonly totalSamples: number;
+  readonly runSettings: RunSettingsFilterState;
+  readonly availableRunSettings?: AvailableRunSettings;
   readonly onSearchChange: (value: string) => void;
   readonly onDbSourceChange: (source: CardDatabaseSource) => void;
   readonly onSimTypeChange: (simType: SimType) => void;
   readonly onKindFilterChange: (kind: string | null) => void;
   readonly onDeckFilterChange: (deckId: string | null) => void;
+  readonly onRunSettingsChange: (next: RunSettingsFilterState) => void;
 }
 
 function DeckFilterSelect({
@@ -79,11 +87,14 @@ export function CardDbFilters({
   ownershipSummary,
   totalRuns,
   totalSamples,
+  runSettings,
+  availableRunSettings,
   onSearchChange,
   onDbSourceChange,
   onSimTypeChange,
   onKindFilterChange,
   onDeckFilterChange,
+  onRunSettingsChange,
 }: CardDbFiltersProps) {
   return (
     <>
@@ -154,6 +165,12 @@ export function CardDbFilters({
           ))}
         </div>
       </div>
+
+      <RunSettingsFilterBar
+        value={runSettings}
+        available={availableRunSettings}
+        onChange={onRunSettingsChange}
+      />
 
       <details className={cardDbSourcesClass}>
         <summary className={cardDbSourcesSummaryClass}>

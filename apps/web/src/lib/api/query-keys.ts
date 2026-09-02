@@ -10,7 +10,8 @@ export const queryKeys = {
     sim: string,
     kind: "evaluate" | "optimize" | "all",
     epoch = 0,
-  ) => ["versionGroups", scope, sim, kind, epoch] as const,
+    settingsKey = "all",
+  ) => ["versionGroups", scope, sim, kind, epoch, settingsKey] as const,
   pooledDamage: (filtersKey: string, epoch = 0) =>
     ["pooledDamage", filtersKey, epoch] as const,
   cardLeaderboard: (filtersKey: string, epoch = 0) =>

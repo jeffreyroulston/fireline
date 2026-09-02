@@ -110,7 +110,7 @@ export function HandBuilder({
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
-  onSeedChange: (value: number) => void;
+  onSeedChange: (value: number | null) => void;
   onSolve: () => void;
   onCancel: () => void;
   onImportLine: (line: ImportedLine) => void;

@@ -59,7 +59,7 @@ export function DeckEditor({
   glimpseEnabled: boolean;
   maxHandDurationSecs: number | null;
   maxCardDraw: number | null;
-  seed: number;
+  seed: number | null;
   busy: boolean;
   onSwitchDeck: (deckId: string) => void;
   onSamplesChange: (value: number) => void;
@@ -71,7 +71,7 @@ export function DeckEditor({
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
-  onSeedChange: (value: number) => void;
+  onSeedChange: (value: number | null) => void;
   onEvaluate: () => void;
   onCancel: () => void;
   onSave?: () => void;

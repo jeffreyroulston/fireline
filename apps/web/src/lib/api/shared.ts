@@ -37,6 +37,26 @@ export function analysisQuery(params: Record<string, string | number | undefined
   return query ? `?${query}` : "";
 }
 
+export type RunSettingsFilter = {
+  goFirst?: boolean[];
+  maxTurns?: number[];
+};
+
+export function appendRunSettingsFilter(
+  search: URLSearchParams,
+  filter?: RunSettingsFilter,
+): void {
+  if (!filter) {
+    return;
+  }
+  for (const goFirst of filter.goFirst ?? []) {
+    search.append("go_first", goFirst ? "1" : "0");
+  }
+  for (const maxTurns of filter.maxTurns ?? []) {
+    search.append("max_turns", String(maxTurns));
+  }
+}
+
 export type WorkerVersion = {
   rules: number;
   sampler: number;
