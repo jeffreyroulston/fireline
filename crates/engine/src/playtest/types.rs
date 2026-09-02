@@ -225,6 +225,7 @@ pub struct PlaytestEngineState {
 pub enum PlaytestAction {
     Pass,
     SkipMaterialize,
+    SkipPreRecollect,
     MaterializeHammer,
     MaterializeDagger,
     MaterializeZanderMemory {

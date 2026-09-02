@@ -15,7 +15,7 @@ const OPT_DMG_PER_RESERVE_NUM: u16 = 5;
 const OPT_DMG_PER_RESERVE_DEN: u16 = 2;
 
 pub(crate) fn is_fast_phase(phase: Phase) -> bool {
-    matches!(phase, Phase::Materialize | Phase::Agility)
+    matches!(phase, Phase::PreRecollect | Phase::Agility)
 }
 
 const ACTION_CARDS: [Card; 15] = [
@@ -57,7 +57,7 @@ fn is_pure_draw_card(card: Card) -> bool {
 
 /// Mate recollects memory before Main; ignore the Mate draw (unknown / not yet taken).
 fn board_for_damage_threat_check(mut state: State) -> State {
-    if state.phase == Phase::Materialize && state.memory_len > 0 {
+    if matches!(state.phase, Phase::Materialize | Phase::PreRecollect) && state.memory_len > 0 {
         for card in ALL_CARDS {
             let count = state.memory[card.index()];
             if count == 0 {
@@ -705,14 +705,13 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
         endings.push(Action::SkipMaterialize);
         let endings = collapse_mate_ending_siblings(state, endings);
 
-        // Preserve prior order: materializes → fast plays → Skip.
+        // Preserve prior order: materializes → Skip.
         let mut result = Vec::with_capacity(endings.len().saturating_add(8));
         for action in endings.iter().copied() {
             if !matches!(action, Action::SkipMaterialize) {
                 result.push(action);
             }
         }
-        push_fast_plays(state, &mut result);
         if endings
             .iter()
             .any(|action| matches!(action, Action::SkipMaterialize))
@@ -722,10 +721,17 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
         return result;
     }
 
-    // Safe reduction: activating Poisoned Dagger first always weakly dominates.
-    // Amplify sticks for the rest of the turn and buffs every later damage hit.
-    if state.dagger && state.dagger_ready {
-        return vec![Action::ActivateDagger];
+    if state.phase == Phase::PreRecollect {
+        // Safe reduction: activating Poisoned Dagger first always weakly dominates.
+        // Amplify sticks for the rest of the turn and buffs every later damage hit.
+        if state.dagger && state.dagger_ready {
+            return vec![Action::ActivateDagger];
+        }
+
+        let mut result = Vec::with_capacity(24);
+        push_fast_plays(state, &mut result);
+        result.push(Action::SkipPreRecollect);
+        return result;
     }
 
     let mut result = Vec::with_capacity(48);
@@ -906,6 +912,7 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
 pub(crate) fn tape_phase(state: &State) -> TapePhase {
     match state.phase {
         Phase::Materialize => TapePhase::Materialize,
+        Phase::PreRecollect => TapePhase::Recollect,
         Phase::Agility => TapePhase::Agility,
         Phase::Main => TapePhase::Main,
     }

@@ -18,6 +18,7 @@ pub enum ActionOp {
     Start,
     Pass,
     SkipMaterialize,
+    SkipPreRecollect,
     MaterializeHammer,
     MaterializeDagger,
     MaterializeZanderMemory,
@@ -48,6 +49,7 @@ impl ActionOp {
         match action {
             Action::Pass => Self::Pass,
             Action::SkipMaterialize => Self::SkipMaterialize,
+            Action::SkipPreRecollect => Self::SkipPreRecollect,
             Action::MaterializeHammer => Self::MaterializeHammer,
             Action::MaterializeDagger => Self::MaterializeDagger,
             Action::MaterializeZanderMemory { .. } => Self::MaterializeZanderMemory,
@@ -79,6 +81,7 @@ impl ActionOp {
             Self::Start => "start",
             Self::Pass => "pass",
             Self::SkipMaterialize => "skipMaterialize",
+            Self::SkipPreRecollect => "skipPreRecollect",
             Self::MaterializeHammer => "materializeHammer",
             Self::MaterializeDagger => "materializeDagger",
             Self::MaterializeZanderMemory => "materializeZanderMemory",

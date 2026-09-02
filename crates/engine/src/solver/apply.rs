@@ -65,7 +65,8 @@ pub(crate) fn apply_into(
     match action {
         Action::Pass => begin_agility_after_pass(&mut state, tape),
         Action::SkipAgility => finish_agility_phase(&mut state, tape),
-        Action::SkipMaterialize => finish_materialization(&mut state, tape),
+        Action::SkipMaterialize => begin_pre_recollection(&mut state, tape),
+        Action::SkipPreRecollect => finish_pre_recollection(&mut state, tape),
         Action::MaterializeHammer => {
             state.remove_material(MAT_HAMMER);
             state.equip_weapon(Weapon::ImpactHammer);
@@ -75,7 +76,7 @@ pub(crate) fn apply_into(
                 EventKind::MaterializeHammer,
                 EventFields::default(),
             );
-            finish_materialization(&mut state, tape);
+            begin_pre_recollection(&mut state, tape);
         }
         Action::MaterializeDagger => {
             state.remove_material(MAT_DAGGER);
@@ -87,7 +88,7 @@ pub(crate) fn apply_into(
                 EventKind::MaterializeDagger,
                 EventFields::default(),
             );
-            finish_materialization(&mut state, tape);
+            begin_pre_recollection(&mut state, tape);
         }
         Action::MaterializeZanderMemory { glimpse_layout } => {
             state.remove_material(MAT_ZANDER);
@@ -123,7 +124,7 @@ pub(crate) fn apply_into(
                 }
             }
             level_zander(&mut state, tape, TapePhase::Materialize);
-            finish_materialization(&mut state, tape);
+            begin_pre_recollection(&mut state, tape);
         }
         Action::MaterializeTristanMemory => {
             state.remove_material(MAT_TRISTAN);
@@ -140,7 +141,7 @@ pub(crate) fn apply_into(
                 fields,
             );
             level_tristan(&mut state, tape, TapePhase::Materialize);
-            finish_materialization(&mut state, tape);
+            begin_pre_recollection(&mut state, tape);
         }
         Action::TristanRecollect => {
             state.agility = state.agility.saturating_sub(3);
@@ -194,7 +195,7 @@ pub(crate) fn apply_into(
                 EventKind::MaterializeRipper,
                 EventFields::default(),
             );
-            finish_materialization(&mut state, tape);
+            begin_pre_recollection(&mut state, tape);
         }
         Action::MaterializeRing => {
             state.remove_material(MAT_RING);
@@ -213,7 +214,7 @@ pub(crate) fn apply_into(
                 EventKind::BanishCrusaderRing,
                 EventFields::default().with_drawn(drawn),
             );
-            finish_materialization(&mut state, tape);
+            begin_pre_recollection(&mut state, tape);
         }
         Action::ActivateDagger => {
             state.dagger = false;
@@ -222,7 +223,7 @@ pub(crate) fn apply_into(
             state.amplify = state.is_assassin();
             tape.push(
                 state,
-                TapePhase::Main,
+                tape_phase(&state),
                 EventKind::ActivateDagger,
                 EventFields::default(),
             );
@@ -389,7 +390,7 @@ pub(crate) fn apply_into(
                 EventFields::default(),
             );
             if state.phase == Phase::Materialize {
-                finish_materialization(&mut state, tape);
+                begin_pre_recollection(&mut state, tape);
             }
         }
         Action::AttackWithWeapon(weapon) => attack_with_weapon(&mut state, weapon, tape),
@@ -1136,13 +1137,17 @@ fn apply_flagrant_level(
     }
 }
 
-fn finish_materialization(state: &mut State, tape: &mut EventTape) {
+fn begin_pre_recollection(state: &mut State, tape: &mut EventTape) {
     tape.push(
         *state,
         TapePhase::Recollect,
         EventKind::MaterializeResolves,
         EventFields::default(),
     );
+    state.phase = Phase::PreRecollect;
+}
+
+fn finish_pre_recollection(state: &mut State, tape: &mut EventTape) {
     let drawn = state.recollect();
     state.phase = Phase::Main;
     tape.push(

@@ -11,6 +11,7 @@ pub(super) fn playtest_to_action(action: &PlaytestAction) -> Result<Action> {
     Ok(match action {
         PlaytestAction::Pass => Action::Pass,
         PlaytestAction::SkipMaterialize => Action::SkipMaterialize,
+        PlaytestAction::SkipPreRecollect => Action::SkipPreRecollect,
         PlaytestAction::MaterializeHammer => Action::MaterializeHammer,
         PlaytestAction::MaterializeDagger => Action::MaterializeDagger,
         PlaytestAction::MaterializeZanderMemory { glimpse_layout } => {
@@ -93,6 +94,7 @@ pub(super) fn action_to_playtest(action: Action) -> PlaytestAction {
     match action {
         Action::Pass => PlaytestAction::Pass,
         Action::SkipMaterialize => PlaytestAction::SkipMaterialize,
+        Action::SkipPreRecollect => PlaytestAction::SkipPreRecollect,
         Action::MaterializeHammer => PlaytestAction::MaterializeHammer,
         Action::MaterializeDagger => PlaytestAction::MaterializeDagger,
         Action::MaterializeZanderMemory { glimpse_layout } => {
@@ -190,6 +192,7 @@ pub(super) fn format_action(state: State, action: Action) -> String {
     match action {
         Action::Pass => "Pass".to_string(),
         Action::SkipMaterialize => "Skip Materialize".to_string(),
+        Action::SkipPreRecollect => "Recollect".to_string(),
         Action::MaterializeHammer => "Materialize Impact Hammer".to_string(),
         Action::MaterializeDagger => "Materialize Poisoned Dagger".to_string(),
         Action::MaterializeZanderMemory { glimpse_layout } => match glimpse_layout {

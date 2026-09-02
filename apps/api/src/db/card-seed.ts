@@ -294,6 +294,7 @@ export const CARD_SEED: CardSeed[] = [
     kind: "action",
     cost: 3,
     element: "fire",
+    fast: true,
     aliases: [],
   },
   {

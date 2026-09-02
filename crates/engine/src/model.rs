@@ -122,6 +122,7 @@ pub enum Phase {
     Main,
     Materialize,
     Agility,
+    PreRecollect,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -394,7 +395,9 @@ impl State {
             return 0;
         }
         match self.phase {
-            Phase::Materialize => self.max_turns.saturating_sub(self.turn),
+            Phase::Materialize | Phase::PreRecollect => {
+                self.max_turns.saturating_sub(self.turn)
+            }
             Phase::Main | Phase::Agility => {
                 self.max_turns.saturating_sub(self.turn.saturating_add(1))
             }
@@ -1302,6 +1305,7 @@ impl State {
 pub enum Action {
     Pass,
     SkipMaterialize,
+    SkipPreRecollect,
     MaterializeHammer,
     MaterializeDagger,
     MaterializeZanderMemory {

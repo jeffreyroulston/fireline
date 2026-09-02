@@ -154,6 +154,7 @@ pub(super) fn engine_to_state(engine: &PlaytestEngineState) -> State {
         phase: match engine.phase {
             1 => Phase::Materialize,
             2 => Phase::Agility,
+            3 => Phase::PreRecollect,
             _ => Phase::Main,
         },
         fire_gy: engine.fire_gy,
@@ -316,6 +317,7 @@ fn phase_name(phase: u8) -> String {
     match phase {
         1 => "materialize".to_string(),
         2 => "agility".to_string(),
+        3 => "preRecollect".to_string(),
         _ => "main".to_string(),
     }
 }

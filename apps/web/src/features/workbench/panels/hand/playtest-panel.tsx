@@ -22,6 +22,7 @@ import type { LineHorizon, Turn2KillResults } from "../../types";
 const phaseLabel: Record<string, string> = {
   main: "Main",
   materialize: "Materialize",
+  preRecollect: "Pre-Recollect",
   agility: "Agility",
 };
 
