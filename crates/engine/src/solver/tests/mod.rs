@@ -2279,6 +2279,7 @@ fn mercurial_heart_cards_are_recognized() {
     assert_eq!(parse_card("Gildas, Chronicler of Aesa"), Some(Card::Gildas));
     assert!(Card::Gildas.is_unique());
     assert!(Card::Incapacitate.is_fast());
+    assert!(Card::IntensifiedPyre.is_fast());
     assert!(Card::UndeniableTruth.is_fast());
     assert!(Card::IgniteFate.floating_memory());
     assert!(Card::ReduceToAsh.is_fire());
@@ -2676,6 +2677,42 @@ fn fast_actions_are_offered_during_pre_recollect() {
             }
         )),
         "slow Increasing Danger must wait for main phase: {legal:?}"
+    );
+}
+
+#[test]
+fn intensified_pyre_fast_deals_during_pre_recollect() {
+    let hand = [
+        Card::IntensifiedPyre,
+        Card::Brick,
+        Card::Brick,
+        Card::Brick,
+        Card::Brick,
+    ];
+    let mut state = State::with_queue(&hand, true, 1, &[]);
+    state.champion_awake = true;
+    state.phase = Phase::PreRecollect;
+    let legal = solver_actions(state, false);
+    let play = legal
+        .into_iter()
+        .find(|action| {
+            matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::IntensifiedPyre,
+                    ..
+                }
+            )
+        })
+        .expect("fast Intensified Pyre should be offered in pre-recollect");
+    let (after, steps) = apply(state, play);
+    assert_eq!(after.phase, Phase::PreRecollect);
+    assert_eq!(after.damage, 2, "{steps:?}");
+    assert!(
+        steps
+            .iter()
+            .any(|step| format_line_event(step).contains("Fast Activate Intensified Pyre")),
+        "{steps:?}"
     );
 }
 
