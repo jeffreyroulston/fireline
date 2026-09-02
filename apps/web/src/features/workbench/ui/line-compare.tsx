@@ -32,7 +32,9 @@ export function LineCompare({
         leftEvents={left.events}
         rightEvents={right.events}
         leftLabel={left.label}
+        leftDamage={left.damage}
         rightLabel={right.label}
+        rightDamage={right.damage}
       />
       {divergence ? (
         <p className="m-0 text-[13px] leading-[1.45] text-muted">

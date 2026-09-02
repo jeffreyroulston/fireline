@@ -902,7 +902,13 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
             }
         }
     }
-    if state.is_assassin() && state.has_material(MAT_SOULKNIFE) && state.fire_gy >= 3 {
+    // Soulknife can only be swung while awake, or thrown with Blazing Throw.
+    if state.is_assassin()
+        && state.has_material(MAT_SOULKNIFE)
+        && state.fire_gy >= 3
+        && !(state.go_first && state.turn == 0)
+        && (state.champion_awake || (state.has(Card::BlazingThrow) && state.hand_len >= 2))
+    {
         result.push(Action::MaterializeSoulknife);
     }
     result.push(Action::Pass);

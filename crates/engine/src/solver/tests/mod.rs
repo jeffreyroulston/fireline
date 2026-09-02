@@ -12,8 +12,8 @@ use crate::cards::{Card, parse_card};
 use crate::error::EngineError;
 use crate::line_event::{EventKind, EventTape, LineEvent, format_line_event};
 use crate::model::{
-    ALL_MATERIALS, Action, MAT_BLADE, MAT_HAMMER, MAT_RING, MAT_RIPPER, MAT_TRISTAN, MAT_ZANDER,
-    MAT_ZANDER_2, Phase, SimType, SolveRequest, State, Weapon,
+    ALL_MATERIALS, Action, MAT_BLADE, MAT_HAMMER, MAT_RING, MAT_RIPPER, MAT_SOULKNIFE, MAT_TRISTAN,
+    MAT_ZANDER, MAT_ZANDER_2, Phase, SimType, SolveRequest, State, Weapon,
 };
 use crate::version::ENGINE_VERSION;
 
@@ -1900,6 +1900,49 @@ fn ripper_power_bonus_applies_to_weapon_attacks() {
 }
 
 #[test]
+fn soulknife_is_hidden_when_sleeping_without_blazing_throw() {
+    let mut sleeping = State::with_queue(&[], false, 2, &[]);
+    sleeping.phase = Phase::Main;
+    sleeping.turn = 1;
+    sleeping.champion_level = 1;
+    sleeping.champion_awake = false;
+    sleeping.materials = MAT_SOULKNIFE;
+    sleeping.fire_gy = 3;
+    assert!(
+        !solver_actions(sleeping, false)
+            .iter()
+            .any(|action| matches!(action, Action::MaterializeSoulknife)),
+        "sleeping champion with no throw cannot use soulknife: {:?}",
+        solver_actions(sleeping, false)
+    );
+
+    let mut awake = sleeping;
+    awake.champion_awake = true;
+    assert!(
+        solver_actions(awake, false)
+            .iter()
+            .any(|action| matches!(action, Action::MaterializeSoulknife)),
+        "awake champion can swing soulknife: {:?}",
+        solver_actions(awake, false)
+    );
+
+    let mut throwing = State::with_queue(&[Card::BlazingThrow, Card::Brick], false, 2, &[]);
+    throwing.phase = Phase::Main;
+    throwing.turn = 1;
+    throwing.champion_level = 1;
+    throwing.champion_awake = false;
+    throwing.materials = MAT_SOULKNIFE;
+    throwing.fire_gy = 3;
+    assert!(
+        solver_actions(throwing, false)
+            .iter()
+            .any(|action| matches!(action, Action::MaterializeSoulknife)),
+        "Blazing Throw can use soulknife while sleeping: {:?}",
+        solver_actions(throwing, false)
+    );
+}
+
+#[test]
 fn mercenary_blade_requires_champion_in_mate_only() {
     let mut unleveled_mate = State::with_queue(&[], false, 2, &[]);
     unleveled_mate.phase = Phase::Materialize;
@@ -2063,6 +2106,44 @@ fn crusader_ring_materializes_and_banishes_immediately() {
             .iter()
             .any(|action| matches!(action, Action::BanishCrusaderRing)),
         "Main must not offer a delayed ring banish: {legal_main:?}"
+    );
+}
+
+#[test]
+fn last_playable_turn_skips_enemy_cull_and_main() {
+    let mut last = State::with_queue(&[Card::Brick], true, 3, &[]);
+    last.turn = 2;
+    last.add_ally(Card::ManicZealot, true, false);
+    let (after_last, last_events) = apply(last, Action::Pass);
+    assert!(after_last.is_terminal());
+    assert_eq!(after_last.phase, Phase::Main);
+    assert_eq!(
+        after_last.ally_len, 1,
+        "last playable turn has no opponent cull"
+    );
+    assert_eq!(after_last.damage, 0, "Manic Zealot On Death must not fire");
+    let last_labels = labels(&last_events);
+    assert!(
+        !last_labels.iter().any(|label| label == "Enemy Main Phase"),
+        "{last_labels:?}"
+    );
+    assert!(
+        !last_labels
+            .iter()
+            .any(|label| label.contains("Manic Zealot On Death")),
+        "{last_labels:?}"
+    );
+
+    let mut mid = State::with_queue(&[Card::Brick], true, 3, &[]);
+    mid.add_ally(Card::ClumsyApprentice, true, false);
+    let (after_mid, mid_events) = apply(mid, Action::Pass);
+    assert!(!after_mid.is_terminal());
+    assert_eq!(after_mid.phase, Phase::Materialize);
+    assert_eq!(after_mid.ally_len, 0, "mid-line opponent cull still runs");
+    let mid_labels = labels(&mid_events);
+    assert!(
+        mid_labels.iter().any(|label| label == "Enemy Main Phase"),
+        "{mid_labels:?}"
     );
 }
 
@@ -2707,9 +2788,6 @@ fn solver_snapshot_equivalence() {
         "Main: Pass Opportunity",
         "End of Agility Phase",
         "End of End Phase",
-        "Enemy Main Phase",
-        "End of Enemy End Phase",
-        "Wake Up Phase",
     ];
     type SolveCase<'a> = (&'a [Card], bool, u8, u8, &'a [&'a str]);
     let cases: [SolveCase<'_>; 3] = [

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   PlaytestAction,
   PlaytestActionOption,
@@ -116,15 +116,6 @@ export function PlaytestPanel({
     (championCard ? 1 : 0);
   const showBoard = board != null && playing;
   const lineComplete = phase === "done" && board?.terminal === true;
-  const compareSectionRef = useRef<HTMLDivElement>(null);
-
-  const handleCalculate = useCallback(() => {
-    compareSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    window.setTimeout(() => {
-      onFinishCompare();
-    }, 350);
-  }, [onFinishCompare]);
-
   useEffect(() => {
     if (!hasGlimpseChoice) {
       setGlimpseOpen(false);
@@ -398,7 +389,7 @@ export function PlaytestPanel({
                   "min-h-[50px]",
                   comparing && "pointer-events-none",
                 )}
-                onClick={handleCalculate}
+                onClick={onFinishCompare}
                 disabled={busy || comparing}
                 aria-busy={comparing}
               >
@@ -446,7 +437,7 @@ export function PlaytestPanel({
         </>
       )}
 
-      <div ref={compareSectionRef} className="scroll-mt-8">
+      <div>
         {comparing && phase !== "compared" ? (
           <div className="mt-5 flex min-h-[50px] flex-wrap items-center gap-3">
             <div className="flex items-center gap-2.5 font-mono text-[13px] tracking-[0.06em] text-muted uppercase">
