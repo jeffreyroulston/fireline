@@ -1191,6 +1191,11 @@ fn advance_after_agility(state: &mut State, tape: &mut EventTape) {
         EventFields::default(),
     );
     state.turn += 1;
+    // Horizon is playable turns. After the last Main/Agility, stop. No free
+    // opponent cull or main after the line is over.
+    if state.is_terminal() {
+        return;
+    }
     state.enemy_cull(Some(tape));
     tape.push(
         *state,
@@ -1211,7 +1216,5 @@ fn advance_after_agility(state: &mut State, tape: &mut EventTape) {
         EventKind::Wake,
         EventFields::default(),
     );
-    if !state.is_terminal() {
-        state.phase = Phase::Materialize;
-    }
+    state.phase = Phase::Materialize;
 }

@@ -3,6 +3,7 @@
 import type { LineEvent } from "@/lib/engine";
 import { CARD_LIST } from "@/lib/engine";
 import { cn } from "@/lib/utils/cn";
+import { expandEventZones } from "../lib/expand-zones";
 import { formatLineEvent } from "../lib/format-line-event";
 import { alignLineEvents } from "../lib/two-pass-event-diff";
 import type { StepAlignment } from "../types";
@@ -53,22 +54,55 @@ function actionLabel(event: LineEvent | null): string {
   return formatLineEvent(event, CARD_LIST);
 }
 
+function influenceRemaining(events: LineEvent[]): string[] {
+  const last = expandEventZones(events).at(-1);
+  if (!last) {
+    return [];
+  }
+  return [...(last.hand ?? []), ...(last.memory ?? [])];
+}
+
+function cardNames(ids: string[]): string {
+  if (ids.length === 0) {
+    return "—";
+  }
+  return ids
+    .map((id) => CARD_LIST.find((card) => card.id === id)?.name ?? id)
+    .join(", ");
+}
+
+function sameCardMultiset(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((id, index) => id === sortedRight[index]);
+}
+
 export function LineCompareTable({
   leftEvents,
   rightEvents,
   leftLabel,
+  leftDamage,
   rightLabel,
+  rightDamage,
 }: {
   leftEvents: LineEvent[];
   rightEvents: LineEvent[];
   leftLabel: string;
+  leftDamage: number;
   rightLabel: string;
+  rightDamage: number;
 }) {
   const rows = rowsFromAlignment(
     leftEvents,
     rightEvents,
     alignLineEvents(leftEvents, rightEvents),
   );
+  const leftInfluence = influenceRemaining(leftEvents);
+  const rightInfluence = influenceRemaining(rightEvents);
+  const influenceDiffers = !sameCardMultiset(leftInfluence, rightInfluence);
 
   if (rows.length === 0) {
     return null;
@@ -78,15 +112,25 @@ export function LineCompareTable({
     <div className="overflow-x-auto border border-border bg-surface">
       <table className="w-full min-w-[640px] border-collapse text-left text-[13px]">
         <thead>
-          <tr className="border-b border-border bg-surface-muted font-mono text-[10px] tracking-[0.08em] text-muted uppercase">
-            <th scope="col" className="w-10 px-3 py-2.5 font-medium">
+          <tr className="border-b border-border bg-surface-muted">
+            <th scope="col" className="w-10 px-3 pt-3 pb-2.5 align-bottom font-mono text-[10px] font-medium tracking-[0.08em] text-muted uppercase">
               #
             </th>
-            <th scope="col" className="px-3 py-2.5 font-medium">
-              {leftLabel}
+            <th scope="col" className="px-3 pt-3 pb-2.5 text-left align-bottom">
+              <strong className="block font-display text-[36px] leading-[0.9] text-primary tabular-nums">
+                {leftDamage}
+              </strong>
+              <span className="mt-1.5 block font-mono text-[10px] font-medium tracking-[0.08em] text-muted uppercase">
+                {leftLabel}
+              </span>
             </th>
-            <th scope="col" className="px-3 py-2.5 font-medium">
-              {rightLabel}
+            <th scope="col" className="px-3 pt-3 pb-2.5 text-right align-bottom">
+              <strong className="block font-display text-[36px] leading-[0.9] text-secondary tabular-nums">
+                {rightDamage}
+              </strong>
+              <span className="mt-1.5 block font-mono text-[10px] font-medium tracking-[0.08em] text-muted uppercase">
+                {rightLabel}
+              </span>
             </th>
           </tr>
         </thead>
@@ -124,6 +168,40 @@ export function LineCompareTable({
             </tr>
           ))}
         </tbody>
+        <tfoot>
+          <tr
+            className={cn(
+              "border-t border-border bg-surface-muted",
+              influenceDiffers &&
+                "bg-[color-mix(in_srgb,var(--color-primary)_8%,var(--color-surface-muted))]",
+            )}
+          >
+            <th
+              scope="row"
+              className="px-3 py-2.5 align-top font-mono text-[10px] font-medium tracking-[0.08em] text-muted uppercase"
+            >
+              Inf
+            </th>
+            <td
+              className={cn(
+                "px-3 py-2.5 align-top leading-[1.45]",
+                leftInfluence.length === 0 && "text-muted",
+                influenceDiffers && leftInfluence.length > 0 && "text-primary",
+              )}
+            >
+              {cardNames(leftInfluence)}
+            </td>
+            <td
+              className={cn(
+                "px-3 py-2.5 text-right align-top leading-[1.45]",
+                rightInfluence.length === 0 && "text-muted",
+                influenceDiffers && rightInfluence.length > 0 && "text-secondary",
+              )}
+            >
+              {cardNames(rightInfluence)}
+            </td>
+          </tr>
+        </tfoot>
       </table>
     </div>
   );
