@@ -213,7 +213,7 @@ export function InfoPanel() {
               </li>
               <li className={infoListItemClass}>
                 Branch-and-bound: skip a line when damage so far plus an
-                optimistic remainder (2.5 × influence × mains left, plus free
+                optimistic remainder (3 × influence × mains left, plus free
                 board damage from allies, weapons, dagger, and sideboard) cannot
                 beat the best line already found. With 5 or less influence-budget
                 left, the bound is skipped and the line is finished.

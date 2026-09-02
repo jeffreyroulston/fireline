@@ -545,9 +545,9 @@ fn reservation_budget_scales_influence_by_mains_left() {
     state.turn = 0;
     assert_eq!(state.influence(), 7);
     assert_eq!(reservation_budget(state), 21); // 7 × 3
-    assert_eq!(optimistic_remaining_from_reserve(21), 52); // 21 × 2.5
-    assert_eq!(optimistic_remaining_from_reserve(5), 12);
-    assert_eq!(optimistic_remaining_from_reserve(4), 10);
+    assert_eq!(optimistic_remaining_from_reserve(21), 63); // 21 × 3
+    assert_eq!(optimistic_remaining_from_reserve(5), 15);
+    assert_eq!(optimistic_remaining_from_reserve(4), 12);
 }
 
 #[test]

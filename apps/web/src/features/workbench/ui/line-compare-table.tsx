@@ -6,7 +6,8 @@ import { cn } from "@/lib/utils/cn";
 import { expandEventZones } from "../lib/expand-zones";
 import { formatLineEvent } from "../lib/format-line-event";
 import { alignLineEvents } from "../lib/two-pass-event-diff";
-import type { StepAlignment } from "../types";
+import type { MaterialLineDiff, StepAlignment } from "../types";
+import { Turn2KillBanner } from "./turn-2-kill-horizon";
 
 type CompareTableRow = Readonly<{
   step: number;
@@ -19,6 +20,7 @@ function rowsFromAlignment(
   leftEvents: LineEvent[],
   rightEvents: LineEvent[],
   alignment: StepAlignment[],
+  material: MaterialLineDiff,
 ): CompareTableRow[] {
   return alignment.map((entry, index) => {
     switch (entry.kind) {
@@ -34,14 +36,16 @@ function rowsFromAlignment(
           step: index + 1,
           left: leftEvents[entry.brick],
           right: null,
-          differs: true,
+          differs:
+            !material.equivalent && material.marks.left[entry.brick] === true,
         };
       case "oracle-only":
         return {
           step: index + 1,
           left: null,
           right: rightEvents[entry.oracle],
-          differs: true,
+          differs:
+            !material.equivalent && material.marks.right[entry.oracle] === true,
         };
     }
   });
@@ -87,6 +91,8 @@ export function LineCompareTable({
   leftDamage,
   rightLabel,
   rightDamage,
+  material,
+  turn2Kill,
 }: {
   leftEvents: LineEvent[];
   rightEvents: LineEvent[];
@@ -94,15 +100,20 @@ export function LineCompareTable({
   leftDamage: number;
   rightLabel: string;
   rightDamage: number;
+  material: MaterialLineDiff;
+  turn2Kill?: Readonly<{ damage: number; threshold: number }> | null;
 }) {
   const rows = rowsFromAlignment(
     leftEvents,
     rightEvents,
     alignLineEvents(leftEvents, rightEvents),
+    material,
   );
   const leftInfluence = influenceRemaining(leftEvents);
   const rightInfluence = influenceRemaining(rightEvents);
-  const influenceDiffers = !sameCardMultiset(leftInfluence, rightInfluence);
+  const influenceDiffers =
+    !material.equivalent &&
+    !sameCardMultiset(leftInfluence, rightInfluence);
 
   if (rows.length === 0) {
     return null;
@@ -110,6 +121,13 @@ export function LineCompareTable({
 
   return (
     <div className="overflow-x-auto border border-border bg-surface">
+      {turn2Kill ? (
+        <Turn2KillBanner
+          className="mb-0 border-x-0 border-t-0"
+          damage={turn2Kill.damage}
+          threshold={turn2Kill.threshold}
+        />
+      ) : null}
       <table className="w-full min-w-[640px] border-collapse text-left text-[13px]">
         <thead>
           <tr className="border-b border-border bg-surface-muted">
