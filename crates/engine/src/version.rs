@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn card_digest_is_stable() {
-        assert_eq!(compute_card_digest(), 1_839_800_540_544_873_183);
+        assert_eq!(compute_card_digest(), 2_213_601_815_118_129_714);
     }
 
     #[test]

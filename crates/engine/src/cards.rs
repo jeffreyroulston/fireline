@@ -417,6 +417,7 @@ impl Card {
                 | Self::Demolition
                 | Self::Incapacitate
                 | Self::UndeniableTruth
+                | Self::IntensifiedPyre
                 | Self::VermilionDecree
                 | Self::ReduceToAsh
                 | Self::SmokeOut
