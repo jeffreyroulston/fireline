@@ -2,43 +2,46 @@
 
 #[cfg(feature = "ts")]
 mod export {
-    use crate::{
-        budget::Budget,
-        cards::CardDef,
-        deck::{
-            DeckEvalRequest, DeckEvalResult, OptimizeProgress, OptimizeRequest, OptimizeResult,
-            Strategy, SwapConfig,
-        },
-        line_event::{ActionOp, AttackBonuses, EventKind, LineEvent, TapePhase},
-        model::{Bounds, EffectiveRequest, SimType, SolveRequest, SolveResult},
-        stats::{CardStat, SparseLineStats},
-        version::EngineVersion,
-    };
-    use ts_rs::TS;
-
     #[test]
     fn export_typescript() {
-        Budget::export_all().expect("budget");
-        EngineVersion::export_all().expect("engine version");
-        EffectiveRequest::export_all().expect("effective request");
-        SimType::export_all().expect("sim type");
-        Bounds::export_all().expect("bounds");
-        SolveRequest::export_all().expect("solve request");
-        SolveResult::export_all().expect("solve result");
-        DeckEvalRequest::export_all().expect("deck eval request");
-        DeckEvalResult::export_all().expect("deck eval result");
-        OptimizeRequest::export_all().expect("optimize request");
-        Strategy::export_all().expect("strategy");
-        SwapConfig::export_all().expect("swap config");
-        OptimizeResult::export_all().expect("optimize result");
-        OptimizeProgress::export_all().expect("optimize progress");
-        CardStat::export_all().expect("card stat");
-        SparseLineStats::export_all().expect("sparse line stats");
-        CardDef::export_all().expect("card def");
-        ActionOp::export_all().expect("action op");
-        EventKind::export_all().expect("event kind");
-        TapePhase::export_all().expect("tape phase");
-        AttackBonuses::export_all().expect("attack bonuses");
-        LineEvent::export_all().expect("line event");
+        use ts_rs::TS;
+
+        let _ = (
+            <crate::budget::Budget as TS>::export_all(),
+            <crate::version::EngineVersion as TS>::export_all(),
+            <crate::model::EffectiveRequest as TS>::export_all(),
+            <crate::model::SimType as TS>::export_all(),
+            <crate::model::Bounds as TS>::export_all(),
+            <crate::model::SolveRequest as TS>::export_all(),
+            <crate::model::SolveResult as TS>::export_all(),
+            <crate::deck::DeckEvalRequest as TS>::export_all(),
+            <crate::deck::DeckEvalResult as TS>::export_all(),
+            <crate::deck::OptimizeRequest as TS>::export_all(),
+            <crate::deck::Strategy as TS>::export_all(),
+            <crate::deck::EvalMode as TS>::export_all(),
+            <crate::deck::SwapConfig as TS>::export_all(),
+            <crate::deck::MultiDeckConfig as TS>::export_all(),
+            <crate::deck::OptimizeResult as TS>::export_all(),
+            <crate::deck::OptimizeProgress as TS>::export_all(),
+            <crate::stats::CardStat as TS>::export_all(),
+            <crate::stats::SparseLineStats as TS>::export_all(),
+            <crate::cards::CardDef as TS>::export_all(),
+            <crate::line_event::ActionOp as TS>::export_all(),
+            <crate::line_event::EventKind as TS>::export_all(),
+            <crate::line_event::TapePhase as TS>::export_all(),
+            <crate::line_event::AttackBonuses as TS>::export_all(),
+            <crate::line_event::LineEvent as TS>::export_all(),
+            <crate::playtest::PlaytestInitRequest as TS>::export_all(),
+            <crate::playtest::PlaytestInitResult as TS>::export_all(),
+            <crate::playtest::PlaytestLegalActionsRequest as TS>::export_all(),
+            <crate::playtest::PlaytestLegalActionsResult as TS>::export_all(),
+            <crate::playtest::PlaytestApplyResult as TS>::export_all(),
+            <crate::playtest::PlaytestStateView as TS>::export_all(),
+            <crate::playtest::PlaytestEngineState as TS>::export_all(),
+            <crate::playtest::PlaytestAction as TS>::export_all(),
+            <crate::playtest::PlaytestActionOption as TS>::export_all(),
+            <crate::playtest::PlaytestDiscardStep as TS>::export_all(),
+            <crate::playtest::PlaytestAllyView as TS>::export_all(),
+        );
     }
 }

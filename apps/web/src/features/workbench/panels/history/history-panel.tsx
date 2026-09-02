@@ -224,6 +224,7 @@ export function HistoryPanel({
             totalSampleBars={sampleBarTotal}
             simType={simType}
             cardHighlights={barCardHighlights}
+            highlightCardId={selectedLeaderboardCard}
             resetKey={pooledSampleKey}
             onAppliedRangeChange={setAppliedRange}
           >

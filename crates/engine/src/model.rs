@@ -103,6 +103,16 @@ impl Ally {
         self.0 =
             (self.0 & !(0xFF << Self::BUFF_SHIFT)) | ((attack_buff as u32) << Self::BUFF_SHIFT);
     }
+
+    #[inline]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+
+    #[inline]
+    pub const fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -242,6 +252,11 @@ define_state! {
     march_hare_gy: u8,
     /// Per-card graveyard counts (for Zander level-2 returns and precise banish).
     gy: [u8; CARD_COUNT],
+    /// Cards removed from the game (graveyard or memory).
+    banished: [u8; CARD_COUNT],
+    banished_total: u8,
+    /// Grand Crusader's Ring was banished from materials.
+    ring_banished: bool,
     champion_level: u8,
     /// Tristan, Underhanded has leveled (agility recollect + fast activations at end of turn).
     tristan_leveled: bool,
@@ -306,6 +321,9 @@ impl State {
             gy_total: 0,
             march_hare_gy: 0,
             gy: [0; CARD_COUNT],
+            banished: [0; CARD_COUNT],
+            banished_total: 0,
+            ring_banished: false,
             champion_level: 0,
             tristan_leveled: false,
             champion_awake: true,
@@ -439,6 +457,9 @@ impl State {
                 }
             }
             Card::ClumsyApprentice => 1,
+            // Cost 2; need one leftover hand card after paying to discard for the draw.
+            Card::PackageCourier if self.hand_len > 3 => 1,
+            Card::PackageCourier => 0,
             _ => 0,
         }
     }
@@ -520,6 +541,11 @@ impl State {
         self.hand_len = self.hand_len.saturating_add(1);
     }
 
+    pub fn send_to_banish(&mut self, card: Card) {
+        self.banished[card.index()] = self.banished[card.index()].saturating_add(1);
+        self.banished_total = self.banished_total.saturating_add(1);
+    }
+
     pub fn send_to_gy(&mut self, card: Card) {
         self.gy[card.index()] = self.gy[card.index()].saturating_add(1);
         self.gy_total = self.gy_total.saturating_add(1);
@@ -562,6 +588,7 @@ impl State {
         if prefer_march_hare {
             let use_march = remaining.min(self.gy[Card::MarchHare.index()]);
             for _ in 0..use_march {
+                self.send_to_banish(Card::MarchHare);
                 self.remove_one_from_gy(Card::MarchHare);
             }
             marched = use_march;
@@ -575,6 +602,7 @@ impl State {
             else {
                 break;
             };
+            self.send_to_banish(card);
             self.remove_one_from_gy(card);
             remaining -= 1;
         }
@@ -593,6 +621,7 @@ impl State {
         else {
             return;
         };
+        self.send_to_banish(card);
         self.remove_one_from_gy(card);
     }
 
@@ -648,6 +677,121 @@ impl State {
             self.memory_len += count;
         }
         Some(all_fire || cost == 0)
+    }
+
+    /// Pay reserve by moving explicit cards from hand to memory.
+    pub fn pay_reserve_selection(&mut self, cards: &[Card], fire_only: bool) -> Option<bool> {
+        if cards.is_empty() {
+            return Some(true);
+        }
+        if cards.len() > u8::MAX as usize || self.hand_len < cards.len() as u8 {
+            return None;
+        }
+        let mut needed = [0_u8; CARD_COUNT];
+        for &card in cards {
+            needed[card.index()] = needed[card.index()].saturating_add(1);
+        }
+        for card in ALL_CARDS {
+            if self.hand[card.index()] < needed[card.index()] {
+                return None;
+            }
+        }
+        if fire_only {
+            for &card in cards {
+                if !card.is_fire() {
+                    return None;
+                }
+            }
+        }
+        let mut all_fire = true;
+        for card in ALL_CARDS {
+            let count = needed[card.index()];
+            if count == 0 {
+                continue;
+            }
+            if !card.is_fire() {
+                all_fire = false;
+            }
+            self.hand[card.index()] -= count;
+            self.memory[card.index()] += count;
+            self.hand_len -= count;
+            self.memory_len += count;
+        }
+        Some(all_fire)
+    }
+
+    /// Pay reserve + kindle using explicit reserve cards.
+    pub fn pay_with_kindle_selection(
+        &mut self,
+        cost: u8,
+        kindle: u8,
+        reserved: &[Card],
+        fire_only: bool,
+    ) -> bool {
+        let kindle = kindle.min(cost).min(self.fire_gy);
+        let reserve = cost.saturating_sub(kindle);
+        if reserved.len() != reserve as usize {
+            return false;
+        }
+        let mode = if fire_only {
+            PaymentMode::FireOnly
+        } else {
+            PaymentMode::Default
+        };
+        if self
+            .pay_reserve_selection(reserved, mode == PaymentMode::FireOnly)
+            .is_none()
+        {
+            return false;
+        }
+        let marched = self.banish_fire_from_gy(kindle, true);
+        for _ in 0..marched {
+            let already = self.allies[..self.ally_len as usize]
+                .iter()
+                .any(|ally| ally.card() == Card::MarchHare);
+            if !already {
+                self.add_ally(Card::MarchHare, true, false);
+            }
+        }
+        true
+    }
+
+    /// Pay imbue cost using explicit reserve cards.
+    pub fn pay_imbue_cost_selection(
+        &mut self,
+        cost: u8,
+        imbue_n: u8,
+        kindle: u8,
+        force_fire: bool,
+        reserved: &[Card],
+    ) -> bool {
+        let kindle_capped = kindle.min(cost).min(self.fire_gy);
+        let reserve = cost.saturating_sub(kindle_capped);
+        if imbue_n == 0 {
+            return self.pay_with_kindle_selection(cost, kindle, reserved, force_fire);
+        }
+        if force_fire {
+            if !self.pay_with_kindle_selection(cost, kindle, reserved, true) {
+                return false;
+            }
+            return reserve >= imbue_n;
+        }
+        if reserved.len() != reserve as usize {
+            return false;
+        }
+        let Some(all_fire) = self.pay_reserve_selection(reserved, false) else {
+            return false;
+        };
+        let marched = self.banish_fire_from_gy(kindle_capped, true);
+        for _ in 0..marched {
+            let already = self.allies[..self.ally_len as usize]
+                .iter()
+                .any(|ally| ally.card() == Card::MarchHare);
+            if !already {
+                self.add_ally(Card::MarchHare, true, false);
+            }
+        }
+        reserve >= imbue_n && all_fire
     }
 
     pub fn pay_with_kindle(&mut self, cost: u8, kindle: u8) -> bool {
@@ -858,6 +1002,27 @@ impl State {
         Some(card)
     }
 
+    /// Expanded hand in stable card order (matches playtest hand indices).
+    pub fn hand_slots(&self) -> Vec<Card> {
+        let mut out = Vec::new();
+        for card in ALL_CARDS {
+            for _ in 0..self.hand[card.index()] {
+                out.push(card);
+            }
+        }
+        out
+    }
+
+    /// Discard the card at a hand slot index (playtest manual selection).
+    pub fn discard_hand_slot(&mut self, index: u8) -> Option<Card> {
+        let card = *self.hand_slots().get(index as usize)?;
+        if !self.remove_hand(card) {
+            return None;
+        }
+        self.send_to_gy(card);
+        Some(card)
+    }
+
     pub fn recollect(&mut self) -> Card {
         for card in ALL_CARDS {
             let count = self.memory[card.index()];
@@ -908,6 +1073,7 @@ impl State {
             .filter(|card| self.memory[card.index()] > 0)
             .max_by_key(|&card| snapshot.payment_score(card));
         if let Some(card) = card {
+            self.send_to_banish(card);
             self.memory[card.index()] -= 1;
             self.memory_len -= 1;
             return true;
@@ -1014,21 +1180,14 @@ impl State {
     /// With two peeked cards the engine explores at most five layouts: both on
     /// top (two orders), one top / one bottom (two), and both on bottom once
     /// (original relative order — bottom order is not chosen separately).
-    /// Prefer [`glimpse_relevant_layouts`] when expanding search actions — it
-    /// collapses layouts that agree on the next [`draw_potential`] queue cards.
     pub fn glimpse_layout_count(self) -> u8 {
         Self::glimpse_tail_orders(self.queue, self.queue_pos as usize, self.queue_len as usize)
             .len() as u8
     }
 
-    /// Glimpse layout indices worth exploring given [`draw_potential`].
-    ///
-    /// - `draw_potential == 0`: empty — skip Glimpse (`glimpse_layout: None`).
-    /// - `draw_potential == 1`: only the next drawn card matters, so layouts that
-    ///   share the same top card collapse (e.g. `A,B,mid` with `A,mid,B`).
-    /// - Higher potentials keep layouts that differ in the first K queue cards.
-    ///
-    /// Indices refer to [`glimpse_tail_orders`] / [`apply_glimpse_layout`].
+    /// Collapsed Glimpse layout indices keyed on the next [`draw_potential`] queue
+    /// cards. Kept for regression tests; solver and playtest both explore
+    /// [`glimpse_playtest_layouts`].
     pub fn glimpse_relevant_layouts(self) -> Vec<u8> {
         let draws = self.draw_potential();
         if draws == 0 || self.queue_pos >= self.queue_len {
@@ -1048,6 +1207,16 @@ impl State {
             indices.push(index as u8);
         }
         indices
+    }
+
+    /// All Glimpse layout indices for interactive playtest (no draw-potential collapse).
+    pub fn glimpse_playtest_layouts(self) -> Vec<u8> {
+        if self.draw_potential() == 0 || self.queue_pos >= self.queue_len {
+            return Vec::new();
+        }
+        (0..usize::from(self.glimpse_layout_count()))
+            .map(|index| index as u8)
+            .collect()
     }
 
     /// Reorder `queue[queue_pos..queue_len]` per a Glimpse layout index.
@@ -1154,7 +1323,8 @@ pub enum Action {
     PlayAlly {
         card: Card,
         kindle: u8,
-        sacrifice: bool,
+        /// Ally index sacrificed for Peppered Chef on enter.
+        sacrifice_ally: Option<u8>,
         hot_cake_sacrifice: bool,
         /// Material-deck champion leveled via Flagrant Guide on enter
         /// (`MAT_ZANDER`, `MAT_ZANDER_2`, or `MAT_TRISTAN`).
@@ -1248,6 +1418,9 @@ pub struct EffectiveRequest {
     pub max_hand_duration_secs: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_card_draw: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "string | null"))]
+    pub eval_mode: Option<&'static str>,
 }
 
 impl Default for EffectiveRequest {
@@ -1271,6 +1444,7 @@ impl Default for EffectiveRequest {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
             max_card_draw: None,
+            eval_mode: None,
         }
     }
 }
@@ -1321,7 +1495,11 @@ pub struct SolveRequest {
 }
 
 /// Whether Glimpse is active for a solve pass.
-pub fn effective_glimpse(sim_type: SimType, brick_pass: bool, glimpse_enabled: Option<bool>) -> bool {
+pub fn effective_glimpse(
+    sim_type: SimType,
+    brick_pass: bool,
+    glimpse_enabled: Option<bool>,
+) -> bool {
     if sim_type == SimType::FireBrick || brick_pass {
         return false;
     }
@@ -1502,4 +1680,20 @@ const fn default_rollouts() -> u16 {
 
 const fn default_seed() -> u64 {
     42
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EffectiveRequest;
+    use crate::budget::Budget;
+    use crate::version::ENGINE_VERSION;
+
+    #[test]
+    fn effective_request_default_uses_conservative_budget() {
+        let effective = EffectiveRequest::default();
+        assert_eq!(effective.engine_version, ENGINE_VERSION);
+        assert_eq!(effective.budget, Budget::conservative());
+        assert!(effective.deck.is_empty());
+        assert!(effective.max_turns.is_none());
+    }
 }

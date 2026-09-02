@@ -1,5 +1,6 @@
 "use client";
 
+import { type ReactNode, useState } from "react";
 import {
   CARD_LIST,
   isPlayableDeckCard,
@@ -17,8 +18,10 @@ import {
   SectionHeading,
 } from "../../ui";
 import type { SolverMode } from "../../types";
+import type { ImportedLine } from "../../lib/import-line-tape";
 import { OPENING_HAND_SIZE } from "../../utils";
 import { CardStrip } from "./card-strip";
+import { LineImporter } from "./line-importer";
 import { SOLVER_MODES } from "./shared";
 
 const toolbarClass =
@@ -29,17 +32,17 @@ const toolbarActionsClass =
 
 export function HandBuilder({
   hand,
-  drawn,
   solverMode,
   selectedCard,
   decks,
   activeDeck,
   recognizedDeckCount,
-  remainingCount,
   shuffled,
   seed,
   goFirst,
   turns,
+  turn2KillEnabled,
+  turn2KillThreshold,
   simType,
   rollouts,
   cpuCount,
@@ -49,37 +52,40 @@ export function HandBuilder({
   maxCardDraw,
   busy,
   onHandChange,
-  onDrawnChange,
   onSolverModeChange,
   onSelectedCardChange,
   onSwitchDeck,
   onDrawRandomHand,
-  onDrawCard,
   onShuffleDeck,
   onGoFirstChange,
   onTurnsChange,
+  onTurn2KillEnabledChange,
+  onTurn2KillThresholdChange,
   onSimTypeChange,
   onRolloutsChange,
   onMaxThreadsChange,
   onGlimpseEnabledChange,
   onMaxHandDurationSecsChange,
   onMaxCardDrawChange,
+  onSeedChange,
   onSolve,
   onCancel,
+  onImportLine,
   decksLoading = false,
+  playtestPanel,
 }: {
   hand: CardId[];
-  drawn: CardId[];
   solverMode: SolverMode;
   selectedCard: CardId;
   decks: SavedDeck[];
   activeDeck: SavedDeck | null;
   recognizedDeckCount: number;
-  remainingCount: number;
   shuffled: boolean;
   seed: number;
   goFirst: boolean;
   turns: number;
+  turn2KillEnabled: boolean;
+  turn2KillThreshold: number;
   simType: SimType;
   rollouts: number;
   cpuCount?: number;
@@ -89,29 +95,33 @@ export function HandBuilder({
   maxCardDraw: number | null;
   busy: boolean;
   onHandChange: (hand: CardId[]) => void;
-  onDrawnChange: (drawn: CardId[]) => void;
   onSolverModeChange: (mode: SolverMode) => void;
   onSelectedCardChange: (id: CardId) => void;
   onSwitchDeck: (deckId: string) => void;
   onDrawRandomHand: () => void;
-  onDrawCard: () => void;
   onShuffleDeck: () => void;
   onGoFirstChange: (value: boolean) => void;
   onTurnsChange: (value: number) => void;
+  onTurn2KillEnabledChange: (value: boolean) => void;
+  onTurn2KillThresholdChange: (value: number) => void;
   onSimTypeChange: (value: SimType) => void;
   onRolloutsChange: (value: number) => void;
   onMaxThreadsChange: (value: number | null) => void;
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
+  onSeedChange: (value: number) => void;
   onSolve: () => void;
   onCancel: () => void;
+  onImportLine: (line: ImportedLine) => void;
   decksLoading?: boolean;
+  playtestPanel?: ReactNode;
 }) {
-  const isDeckMode = solverMode === "deck";
+  const isPileMode = solverMode === "deck" || solverMode === "playtest";
+  const isPlaytestMode = solverMode === "playtest";
+  const [importOpen, setImportOpen] = useState(false);
   const canDrawHand =
     decks.length > 0 && recognizedDeckCount >= OPENING_HAND_SIZE;
-  const canDrawCard = remainingCount > 0;
   const playableCards = CARD_LIST.filter(isPlayableDeckCard).sort((a, b) =>
     a.name.localeCompare(b.name),
   );
@@ -186,49 +196,33 @@ export function HandBuilder({
               disabled={!canDrawHand}
               title={
                 canDrawHand
-                  ? "Shuffle with a new seed and deal a new opening hand"
+                  ? "Shuffle with a new seed and keep the opening hand"
                   : `Need a saved deck with at least ${OPENING_HAND_SIZE} recognized cards`
               }
             >
               Shuffle deck
             </button>
+            <button
+              className={cn(
+                buttonVariants({ intent: "secondary" }),
+                "whitespace-nowrap max-[620px]:w-full",
+              )}
+              type="button"
+              aria-expanded={importOpen}
+              onClick={() => setImportOpen((current) => !current)}
+            >
+              Import line
+            </button>
           </div>
         </div>
 
-        {isDeckMode && (
-          <div className="mt-7 border-t border-border pt-5">
-            <SectionHeading
-              title="DRAWN"
-              meta={
-                <strong>
-                  {drawn.length} drawn · {remainingCount} left
-                </strong>
-              }
+        {importOpen && (
+          <div className="mt-[18px]">
+            <LineImporter
+              open={importOpen}
+              onOpenChange={setImportOpen}
+              onImport={onImportLine}
             />
-            <CardStrip
-              ids={drawn}
-              ariaLabel="Cards drawn after the opening hand"
-              empty="Draw the next card from the remaining pile."
-              onRemove={(index) => onDrawnChange(drawn.slice(0, index))}
-            />
-            <div className={cn(toolbarClass, "mt-3")}>
-              <button
-                className={cn(
-                  buttonVariants({ intent: "secondary" }),
-                  "whitespace-nowrap max-[620px]:w-full",
-                )}
-                type="button"
-                onClick={onDrawCard}
-                disabled={!canDrawCard}
-                title={
-                  canDrawCard
-                    ? "Draw the next card from the remaining pile"
-                    : "No cards left in the deck"
-                }
-              >
-                Draw card
-              </button>
-            </div>
           </div>
         )}
 
@@ -256,32 +250,17 @@ export function HandBuilder({
           >
             Add to hand
           </button>
-          {isDeckMode && (
-            <button
-              className={cn(
-                buttonVariants({ intent: "secondary" }),
-                "max-[620px]:w-full",
-              )}
-              type="button"
-              onClick={() => onDrawnChange([...drawn, selectedCard])}
-              disabled={!shuffled}
-              title={
-                shuffled
-                  ? "Take the first remaining copy of this card from the pile"
-                  : "Shuffle the deck before adding to drawn"
-              }
-            >
-              Add to drawn
-            </button>
-          )}
         </div>
         <RunSettings
           goFirst={goFirst}
           turns={turns}
+          turn2KillEnabled={turn2KillEnabled}
+          turn2KillThreshold={turn2KillThreshold}
           simType={simType}
           rollouts={rollouts}
-          seed={shuffled ? seed : undefined}
-          orderedPile={isDeckMode && shuffled}
+          seed={seed}
+          orderedPile={isPileMode && shuffled}
+          playtestMode={isPlaytestMode}
           cpuCount={cpuCount}
           maxThreads={maxThreads}
           glimpseEnabled={glimpseEnabled}
@@ -289,19 +268,25 @@ export function HandBuilder({
           maxCardDraw={maxCardDraw}
           onFirstChange={onGoFirstChange}
           onTurnsChange={onTurnsChange}
+          onTurn2KillEnabledChange={onTurn2KillEnabledChange}
+          onTurn2KillThresholdChange={onTurn2KillThresholdChange}
           onSimTypeChange={onSimTypeChange}
           onRolloutsChange={onRolloutsChange}
           onMaxThreadsChange={onMaxThreadsChange}
           onGlimpseEnabledChange={onGlimpseEnabledChange}
           onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
           onMaxCardDrawChange={onMaxCardDrawChange}
+          onSeedChange={onSeedChange}
         />
-        <ActionBar
-          label="Calculate maximum damage"
-          busy={busy}
-          onRun={onSolve}
-          onCancel={onCancel}
-        />
+        {!isPlaytestMode && (
+          <ActionBar
+            label="Calculate maximum damage"
+            busy={busy}
+            onRun={onSolve}
+            onCancel={onCancel}
+          />
+        )}
+        {playtestPanel}
       </div>
     </div>
   );

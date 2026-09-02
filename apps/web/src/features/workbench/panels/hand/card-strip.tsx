@@ -1,6 +1,7 @@
 "use client";
 
 import type { CardId } from "@/lib/engine";
+import { cn } from "@/lib/utils/cn";
 import { HandCard } from "../../ui";
 
 export function CardStrip({
@@ -16,7 +17,10 @@ export function CardStrip({
 }) {
   return (
     <div
-      className="grid min-h-0 grid-cols-7 gap-2"
+      className={cn(
+        "grid min-h-0 gap-2",
+        ids.length >= 8 ? "grid-cols-8" : "grid-cols-7",
+      )}
       aria-label={ariaLabel}
     >
       {ids.map((id, index) => (

@@ -22,6 +22,7 @@ const PLAY_NO_ACTIVATE = new Set([
   "reduce_to_ash",
   "smoke_out",
   "spark_alight",
+  "flurry_of_fire",
 ]);
 
 function weaponName(id: string | null | undefined): string {
@@ -187,7 +188,7 @@ export function formatLineEvent(
       if (event.gyThreshold) s = "Intensified Pyre (GY 8+)";
 
       if (event.imbue === true) {
-        if (event.drawn) {
+        if (event.card === "vermilion_decree" && event.drawn) {
           s = `Vermilion Decree (Imbue, draw ${short(event.drawn)})`;
         } else if (event.card === "surging_bolt") {
           s = "Surging Bolt (Imbue)";
@@ -255,6 +256,9 @@ export function formatLineEvent(
         ? "Rococo On-Enter damage"
         : `${name(event.card)} On-Enter damage`;
     case "onEnterDraw":
+      if (event.discarded && event.drawn) {
+        return `${name(event.card)} On-Enter discard ${short(event.discarded)} / draw ${short(event.drawn)}`;
+      }
       return `Clumsy On-Enter draw (${short(event.drawn)})`;
     case "onEnterLevel":
       return `Flagrant Guide On-Enter level (self ${event.kindle ?? 6})`;

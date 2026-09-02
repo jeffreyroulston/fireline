@@ -49,3 +49,48 @@ impl EngineError {
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
+
+#[cfg(test)]
+mod tests {
+    use super::EngineError;
+
+    #[test]
+    fn display_strings_are_stable() {
+        let cases = [
+            (EngineError::Cancelled, "cancelled"),
+            (EngineError::HandTimeout, "hand exceeded max duration"),
+            (
+                EngineError::UnknownCard("not_a_card".into()),
+                "unknown card: not_a_card",
+            ),
+            (
+                EngineError::UnknownQueueCard("bad_queue".into()),
+                "unknown card in queue: bad_queue",
+            ),
+            (
+                EngineError::UnknownDeckCard("bad_deck".into()),
+                "unknown card in deck: bad_deck",
+            ),
+            (
+                EngineError::invalid("hand must contain 2–16 cards"),
+                "hand must contain 2–16 cards",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected, "{error:?}");
+        }
+    }
+
+    #[test]
+    fn invalid_json_includes_kind() {
+        let err = EngineError::InvalidJson {
+            kind: "solve",
+            source: serde_json::from_str::<serde_json::Value>("not json").unwrap_err(),
+        };
+        assert!(
+            err.to_string().starts_with("invalid solve request:"),
+            "{}",
+            err
+        );
+    }
+}

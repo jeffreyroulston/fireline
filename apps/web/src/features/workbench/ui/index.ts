@@ -17,6 +17,7 @@ export { PanelTopline } from "./panel-topline";
 export { PassLinePanel } from "./pass-line-panel";
 export { RunSettings } from "./run-settings";
 export { SectionHeading } from "./section-heading";
+export { Turn2KillHorizon } from "./turn-2-kill-horizon";
 export {
   AverageDamageStat,
   DistributionStatLabel,
@@ -27,4 +28,5 @@ export {
 export type { DistributionStatKey } from "./distribution-stats";
 export { StatLine } from "./stat-line";
 export type { StatLineItem } from "./stat-line";
+export { LineCompare } from "./line-compare";
 export { TwoPassCompare } from "./two-pass-compare";

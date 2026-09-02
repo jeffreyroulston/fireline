@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "ts")]
 use ts_rs::TS;
 
-pub const CARD_COUNT: usize = 47;
+pub const CARD_COUNT: usize = 49;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -56,6 +56,8 @@ pub enum Card {
     ReduceToAsh = 44,
     SmokeOut = 45,
     SparkAlight = 46,
+    PackageCourier = 47,
+    FlurryOfFire = 48,
 }
 
 impl Card {
@@ -113,6 +115,8 @@ impl Card {
             Self::ReduceToAsh => "reduce_to_ash",
             Self::SmokeOut => "smoke_out",
             Self::SparkAlight => "spark_alight",
+            Self::PackageCourier => "package_courier",
+            Self::FlurryOfFire => "flurry_of_fire",
         }
     }
 
@@ -165,6 +169,8 @@ impl Card {
             Self::ReduceToAsh => "Reduce to Ash",
             Self::SmokeOut => "Smoke Out",
             Self::SparkAlight => "Spark Alight",
+            Self::PackageCourier => "Package Courier",
+            Self::FlurryOfFire => "Aenean Flurry of Fire",
         }
     }
 
@@ -217,6 +223,8 @@ impl Card {
             Self::ReduceToAsh => "RtAsh",
             Self::SmokeOut => "Smoke",
             Self::SparkAlight => "Spark",
+            Self::PackageCourier => "PCour",
+            Self::FlurryOfFire => "Flurr",
         }
     }
 
@@ -258,7 +266,9 @@ impl Card {
             | Self::XiaoQiao
             | Self::ManicZealot
             | Self::IncreasingDanger
-            | Self::SparkAlight => 2,
+            | Self::SparkAlight
+            | Self::PackageCourier
+            | Self::FlurryOfFire => 2,
             Self::IgnitedStab
             | Self::BlazingThrow
             | Self::MarchHare
@@ -299,7 +309,8 @@ impl Card {
             | Self::ManicZealot
             | Self::WoodlandSquirrels
             | Self::FlagrantGuide
-            | Self::Gildas => 1,
+            | Self::Gildas
+            | Self::PackageCourier => 1,
             _ => 0,
         }
     }
@@ -332,6 +343,7 @@ impl Card {
                 | Self::Gildas
                 | Self::LurkingAssailant
                 | Self::CorhaziArsonist
+                | Self::PackageCourier
         )
     }
 
@@ -364,6 +376,7 @@ impl Card {
                 | Self::ReduceToAsh
                 | Self::SmokeOut
                 | Self::SparkAlight
+                | Self::FlurryOfFire
         )
     }
 
@@ -512,6 +525,7 @@ impl Card {
             Self::FlagrantGuide => 3,
             Self::Gildas | Self::LurkingAssailant => 3,
             Self::CorhaziArsonist => 2,
+            Self::PackageCourier => 3,
             _ => return None,
         })
     }
@@ -599,9 +613,11 @@ pub const ALL_CARDS: [Card; CARD_COUNT] = [
     Card::ReduceToAsh,
     Card::SmokeOut,
     Card::SparkAlight,
+    Card::PackageCourier,
+    Card::FlurryOfFire,
 ];
 
-pub const PLAYABLE_CARDS: [Card; 46] = [
+pub const PLAYABLE_CARDS: [Card; 48] = [
     Card::Arthur,
     Card::KingdomInformant,
     Card::ClumsyApprentice,
@@ -648,6 +664,8 @@ pub const PLAYABLE_CARDS: [Card; 46] = [
     Card::ReduceToAsh,
     Card::SmokeOut,
     Card::SparkAlight,
+    Card::PackageCourier,
+    Card::FlurryOfFire,
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -779,6 +797,33 @@ pub fn parse_card(value: &str) -> Option<Card> {
         "reduce_to_ash" => Card::ReduceToAsh,
         "smoke_out" => Card::SmokeOut,
         "spark_alight" | "aenean_spark_alight" => Card::SparkAlight,
+        "package_courier" => Card::PackageCourier,
+        "flurry_of_fire" | "aenean_flurry_of_fire" => Card::FlurryOfFire,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CARD_COUNT, Card, parse_card};
+
+    #[test]
+    fn card_count_matches_enum() {
+        assert_eq!(CARD_COUNT, 49);
+        assert_eq!(Card::FlurryOfFire.index(), CARD_COUNT - 1);
+    }
+
+    #[test]
+    fn parse_card_rejects_unknown_ids() {
+        assert!(parse_card("").is_none());
+        assert!(parse_card("not_a_real_card").is_none());
+        assert!(parse_card("fire_brick_extra").is_none());
+    }
+
+    #[test]
+    fn parse_card_normalizes_aliases() {
+        assert_eq!(parse_card("Fire-Brick"), Some(Card::Brick));
+        assert_eq!(parse_card("Arthur Young Heir"), Some(Card::Arthur));
+        assert_eq!(parse_card("aenean_spark_alight"), Some(Card::SparkAlight));
+    }
 }

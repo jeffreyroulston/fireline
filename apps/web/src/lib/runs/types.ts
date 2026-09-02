@@ -36,6 +36,13 @@ export type RunKind = "evaluate" | "optimize";
 
 export type WorkerState = "idle" | "running" | "finished" | "failed" | "offline";
 
+/** Client-only work that blocks the worker UI but does not use the run queue. */
+export interface DirectWork {
+  id: string;
+  label: string;
+  cancel: () => void;
+}
+
 export interface ActiveRunRow {
   id: string;
   kind: RunKind | string;
@@ -116,9 +123,10 @@ export function queueSummaryLabel(
   runningCount: number,
   queuedCount: number,
   maxConcurrency: number,
+  directWorkLabel?: string | null,
 ): string {
   if (runningCount === 0 && queuedCount === 0) {
-    return "Idle";
+    return directWorkLabel ?? "Idle";
   }
   const parts: string[] = [];
   if (runningCount > 0) {

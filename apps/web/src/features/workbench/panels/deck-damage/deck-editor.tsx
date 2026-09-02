@@ -27,6 +27,7 @@ export function DeckEditor({
   glimpseEnabled,
   maxHandDurationSecs,
   maxCardDraw,
+  seed,
   busy,
   onSwitchDeck,
   onSamplesChange,
@@ -38,6 +39,7 @@ export function DeckEditor({
   onGlimpseEnabledChange,
   onMaxHandDurationSecsChange,
   onMaxCardDrawChange,
+  onSeedChange,
   onEvaluate,
   onCancel,
   onSave,
@@ -57,6 +59,7 @@ export function DeckEditor({
   glimpseEnabled: boolean;
   maxHandDurationSecs: number | null;
   maxCardDraw: number | null;
+  seed: number;
   busy: boolean;
   onSwitchDeck: (deckId: string) => void;
   onSamplesChange: (value: number) => void;
@@ -68,6 +71,7 @@ export function DeckEditor({
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
+  onSeedChange: (value: number) => void;
   onEvaluate: () => void;
   onCancel: () => void;
   onSave?: () => void;
@@ -107,6 +111,7 @@ export function DeckEditor({
           turns={turns}
           simType={simType}
           rollouts={rollouts}
+          seed={seed}
           cpuCount={cpuCount}
           maxThreads={maxThreads}
           glimpseEnabled={glimpseEnabled}
@@ -120,6 +125,7 @@ export function DeckEditor({
           onGlimpseEnabledChange={onGlimpseEnabledChange}
           onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
           onMaxCardDrawChange={onMaxCardDrawChange}
+          onSeedChange={onSeedChange}
         />
         <ActionBar
           label="Sample deck damage"

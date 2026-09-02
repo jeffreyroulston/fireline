@@ -466,6 +466,25 @@ export const CARDS: Record<string, CardDef> = {
     element: "fire",
     fast: true,
   },
+  package_courier: {
+    id: "package_courier",
+    name: "Package Courier",
+    short: "PCour",
+    kind: "ally",
+    cost: 2,
+    element: "fire",
+    power: 1,
+    life: 3,
+  },
+  flurry_of_fire: {
+    id: "flurry_of_fire",
+    name: "Aenean Flurry of Fire",
+    short: "Flurr",
+    kind: "action",
+    cost: 2,
+    element: "fire",
+    aliases: ["aenean_flurry_of_fire"],
+  },
 };
 
 export let CARD_LIST: CardDef[] = Object.values(CARDS);
@@ -476,6 +495,7 @@ export const MATERIAL_NAMES: Record<MaterialId, string> = {
   poisoned_dagger: "Poisoned Dagger",
   zander_1: "Zander, Prepared Scout",
   zander_2: "Zander, Deft Executor",
+  spirit_of_fire: "Spirit of Fire",
   varuckan_soulknife: "Varuckan Soulknife",
   tristan_1: "Tristan, Underhanded",
   assassins_ripper: "Assassin's Ripper",
@@ -580,6 +600,7 @@ const FALLBACK_ALIASES: Record<string, CardId> = {
   xiao_qiao_cinderkeeper: "xiao_qiao",
   virgil_altered_future: "virgil",
   gildas_chronicler_of_aesa: "gildas",
+  aenean_flurry_of_fire: "flurry_of_fire",
 };
 
 /** Minimum recognized maindeck size for a valid saved deck. */

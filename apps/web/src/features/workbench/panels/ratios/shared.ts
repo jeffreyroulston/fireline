@@ -20,24 +20,96 @@ export function ratioReplaceChipClass(selected: boolean) {
   );
 }
 
+export const ratioResultsSectionClass =
+  "mt-[30px] grid gap-7 border-t border-border pt-7";
+
+export const ratioCriteriaPanelClass =
+  "grid gap-3.5 border border-border bg-surface px-[18px] py-[18px]";
+
+export const ratioResultsPanelClass =
+  "grid gap-[22px] border border-border bg-surface px-[18px] py-[18px]";
+
 export const ratioRankingItemClass =
-  "grid min-w-0 gap-3 border border-white/17 bg-white/[0.04] p-3.5";
+  "grid min-w-0 gap-3 border border-border bg-surface p-3.5";
+
+export const ratioRankingItemInteractiveClass =
+  "w-full cursor-pointer text-left transition-colors hover:border-foreground/35 hover:bg-surface-muted";
+
+export const ratioRankingBaselineItemClass =
+  "border-dashed border-muted bg-[color-mix(in_srgb,var(--color-surface-muted)_55%,var(--color-surface))] hover:border-foreground/25 hover:bg-[color-mix(in_srgb,var(--color-surface-muted)_72%,var(--color-surface))]";
 
 export const ratioRankingHeaderClass =
   "flex items-baseline justify-between gap-2.5";
 
+export const ratioRankingPrimaryMetricClass =
+  "font-display text-[32px] leading-none tabular-nums";
+
 export const ratioChangesClass =
-  "grid gap-2 border border-white/12 bg-white/[0.03] p-2.5 px-3";
+  "grid gap-2 border border-border bg-[color-mix(in_srgb,var(--color-surface-muted)_50%,var(--color-surface))] p-2.5 px-3";
 
 export const ratioChangeRowClass =
-  "grid grid-cols-[42px_1fr] gap-2.5 border-b border-white/12 pb-1.5 text-xs last:border-b-0 last:pb-0";
+  "grid grid-cols-[42px_1fr] gap-2.5 border-b border-border pb-1.5 text-xs last:border-b-0 last:pb-0";
 
 export function ratioSaveDeckClass(compact = false) {
   return cn(
-    buttonVariants({ intent: "secondary" }),
-    "h-[34px] border-white/35 bg-transparent px-3 text-[10px] tracking-[0.06em] text-white hover:border-primary hover:text-primary focus-visible:border-primary focus-visible:text-primary",
-    compact ? "" : "justify-self-start",
+    buttonVariants({
+      intent: "primary",
+      size: compact ? "compact" : "default",
+    }),
+    "min-w-0 w-fit justify-center gap-0",
+    compact ? "min-h-0" : "min-h-[42px] justify-self-start",
+    "font-mono text-[10px] tracking-[0.06em] uppercase",
   );
+}
+
+export function ratioDeltaToneClass(delta: number) {
+  if (delta > 0) return "[&_b]:text-primary-dark";
+  if (delta < 0) return "[&_b]:text-secondary-dark";
+  return "";
+}
+
+export function ratioScoreDeltaClass(delta: number) {
+  if (delta > 0) return "text-primary-dark";
+  if (delta < 0) return "text-secondary-dark";
+  return "text-muted";
+}
+
+export function formatSignedScoreDelta(delta: number): string {
+  return `${delta >= 0 ? "+" : ""}${delta.toFixed(2)}`;
+}
+
+export function findBaselineEntry<
+  T extends { counts: DeckCounts; score: number },
+>(top: readonly T[], baseCounts: DeckCounts): T | null {
+  for (const entry of top) {
+    if (deckDiffEntries(baseCounts, entry.counts).length === 0) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+export function findBestChangedEntry<
+  T extends { counts: DeckCounts; score: number },
+>(top: readonly T[], baseCounts: DeckCounts): T | null {
+  let best: T | null = null;
+  for (const entry of top) {
+    if (deckDiffEntries(baseCounts, entry.counts).length === 0) {
+      continue;
+    }
+    if (!best || entry.score > best.score) {
+      best = entry;
+    }
+  }
+  return best;
+}
+
+export function isSameDeckCounts(left: DeckCounts, right: DeckCounts): boolean {
+  return deckDiffEntries(left, right).length === 0;
+}
+
+export function deckCountsTotal(counts: DeckCounts): number {
+  return Object.values(counts).reduce((sum, copies) => sum + copies, 0);
 }
 
 function copyPartialCounts(

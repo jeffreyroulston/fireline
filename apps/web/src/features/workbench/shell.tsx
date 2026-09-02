@@ -9,7 +9,6 @@ import {
   materialDeckCounts,
   parseMaterialDecklist,
   PLAYABLE_CARD_IDS,
-  type CardId,
   type DeckCounts,
 } from "@/lib/engine";
 import {
@@ -300,16 +299,20 @@ export default function FizaWorkbench({
           <LineTab
             hand={solver.hand}
             drawn={solver.drawn}
+            orderedDeck={solver.orderedDeck}
+            deckText={deckText}
+            activeMaterialCounts={activeMaterialCounts}
             solverMode={solver.solverMode}
             selectedCard={solver.selectedCard}
             decks={decks}
             activeDeck={activeDeck}
             recognizedDeckCount={solver.recognizedDeckCount}
-            remainingCount={solver.remainingCount}
             shuffled={solver.orderedDeck.length > 0}
             seed={solver.solveSeed}
             goFirst={solver.goFirst}
             turns={solver.turns}
+            turn2KillEnabled={solver.turn2KillEnabled}
+            turn2KillThreshold={solver.turn2KillThreshold}
             simType={solver.simType}
             rollouts={solver.rollouts}
             cpuCount={solver.cpuCount}
@@ -318,27 +321,34 @@ export default function FizaWorkbench({
             maxHandDurationSecs={solver.maxHandDurationSecs}
             maxCardDraw={solver.maxCardDraw}
             busy={solver.busy === "solve"}
+            error={solver.error}
             lineResult={solver.lineResult}
             lineHand={solver.lineHand}
+            turn2KillResults={solver.turn2KillResults}
+            lineHorizon={solver.lineHorizon}
             decksLoading={decksLoading}
             onHandChange={solver.setHand}
-            onDrawnChange={solver.onDrawnChange}
             onSolverModeChange={solver.onSolverModeChange}
             onSelectedCardChange={solver.setSelectedCard}
             onSwitchDeck={switchDeck}
             onDrawRandomHand={solver.drawRandomHandFromDeck}
-            onDrawCard={solver.drawCardFromDeck}
             onShuffleDeck={solver.shuffleDeckFromSeed}
             onGoFirstChange={solver.setGoFirst}
             onTurnsChange={solver.setTurns}
+            onTurn2KillEnabledChange={solver.setTurn2KillEnabled}
+            onTurn2KillThresholdChange={solver.setTurn2KillThreshold}
+            onLineHorizonChange={solver.setLineHorizon}
             onSimTypeChange={solver.onSimTypeChange}
             onRolloutsChange={solver.setRollouts}
             onMaxThreadsChange={solver.setMaxThreads}
             onGlimpseEnabledChange={solver.setGlimpseEnabled}
             onMaxHandDurationSecsChange={solver.setMaxHandDurationSecs}
             onMaxCardDrawChange={solver.setMaxCardDraw}
+            onSeedChange={solver.applySolveSeed}
             onSolve={solver.solveHand}
             onCancel={solver.cancelHandSolve}
+            onError={solver.setError}
+            onImportLine={solver.importLine}
           />
         )}
 
@@ -391,6 +401,7 @@ export default function FizaWorkbench({
             glimpseEnabled={solver.glimpseEnabled}
             maxHandDurationSecs={solver.maxHandDurationSecs}
             maxCardDraw={solver.maxCardDraw}
+            seed={solver.solveSeed}
             evaluateBusy={solver.evaluateBusy}
             evaluateRun={solver.evaluateRun}
             decksLoading={decksLoading}
@@ -404,6 +415,7 @@ export default function FizaWorkbench({
             onGlimpseEnabledChange={solver.setGlimpseEnabled}
             onMaxHandDurationSecsChange={solver.setMaxHandDurationSecs}
             onMaxCardDrawChange={solver.setMaxCardDraw}
+            onSeedChange={solver.applySolveSeed}
             onEvaluate={solver.evaluateCurrentDeck}
             onCancel={solver.cancelEvaluateJob}
             onSave={
@@ -429,6 +441,7 @@ export default function FizaWorkbench({
             glimpseEnabled={solver.glimpseEnabled}
             maxHandDurationSecs={solver.maxHandDurationSecs}
             maxCardDraw={solver.maxCardDraw}
+            seed={solver.solveSeed}
             optimizeRun={solver.optimizeRun}
             optimizeBusy={solver.optimizeBusy}
             decksLoading={decksLoading}
@@ -441,6 +454,7 @@ export default function FizaWorkbench({
             onGlimpseEnabledChange={solver.setGlimpseEnabled}
             onMaxHandDurationSecsChange={solver.setMaxHandDurationSecs}
             onMaxCardDrawChange={solver.setMaxCardDraw}
+            onSeedChange={solver.applySolveSeed}
             onOptimize={solver.optimizeCurrentBounds}
             onCancelOptimize={solver.cancelOptimizeJob}
             onSaveOptimize={
@@ -449,6 +463,10 @@ export default function FizaWorkbench({
                 : undefined
             }
             onSaveDecklist={saveRatioDecklist}
+            onRetestSelected={(decks) => {
+              ratio.setMultiDeckLists(decks);
+              ratio.setRatioStrategy("multiDeck");
+            }}
           />
         )}
 

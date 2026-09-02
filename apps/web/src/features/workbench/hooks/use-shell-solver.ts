@@ -19,6 +19,7 @@ import {
   parseDecklist,
   PLAYABLE_CARD_IDS,
   type CardId,
+  type DeckCounts,
   type SimType,
   type SolveResult,
 } from "@/lib/engine";
@@ -29,17 +30,21 @@ import type { OptimizeProgress } from "@/lib/runs/types";
 import { useRunTracker } from "@/lib/runs/run-tracker";
 import { DRILL_3_HAND } from "@/lib/fixtures/drills";
 import type { SavedDeck } from "@/lib/decks";
-import type { JobType, SampleHand, SolverMode } from "../types";
+import type { JobType, LineHorizon, SampleHand, SolverMode, Turn2KillResults } from "../types";
+import type { ImportedLine } from "../lib/import-line-tape";
+import { DEFAULT_TURN2_KILL_THRESHOLD } from "../types";
 import type { UseRatioStateResult } from "./use-ratio-state";
 import {
   cardsFromCounts,
   deckCountsCoveringHand,
   makeSeed,
+  normalizeSeed,
   OPENING_HAND_SIZE,
   shuffleDeck,
   subtractCards,
 } from "../utils";
 import { workbenchHref } from "../routes";
+import { solveTurn2KillPair, buildSolveQueue, oracleSolveRequest } from "../lib/turn-2-kill-solve";
 
 function advancedRunFields(
   simType: SimType,
@@ -81,6 +86,8 @@ export type ShellSolverState = Readonly<{
   selectedCard: CardId;
   goFirst: boolean;
   turns: number;
+  turn2KillEnabled: boolean;
+  turn2KillThreshold: number;
   simType: SimType;
   rollouts: number;
   maxThreads: number | null;
@@ -91,6 +98,8 @@ export type ShellSolverState = Readonly<{
   lineResult: SolveResult | null;
   /** Opening hand that produced `lineResult` (not the live builder hand). */
   lineHand: CardId[];
+  turn2KillResults: Turn2KillResults | null;
+  lineHorizon: LineHorizon;
   samples: number;
   busy: JobType | null;
   error: string;
@@ -112,6 +121,9 @@ export type ShellSolverActions = Readonly<{
   setSelectedCard: Dispatch<SetStateAction<CardId>>;
   setGoFirst: (value: boolean) => void;
   setTurns: (value: number) => void;
+  setTurn2KillEnabled: (value: boolean) => void;
+  setTurn2KillThreshold: (value: number) => void;
+  setLineHorizon: (value: LineHorizon) => void;
   setSimType: (value: SimType) => void;
   setRollouts: (value: number) => void;
   setMaxThreads: (value: number | null) => void;
@@ -124,15 +136,18 @@ export type ShellSolverActions = Readonly<{
   solveHand: () => Promise<void>;
   evaluateCurrentDeck: () => Promise<void>;
   optimizeCurrentBounds: () => Promise<void>;
+  optimizeMultiDeck: (deckLists: readonly DeckCounts[]) => Promise<void>;
   cancelHandSolve: () => void;
   cancelEvaluateJob: () => void;
   saveEvaluateJob: () => void;
   cancelOptimizeJob: () => void;
   saveOptimizeJob: () => void;
   sendSampleToHandSolver: (sample: SampleHand) => void;
+  importLine: (line: ImportedLine) => void;
   drawRandomHandFromDeck: () => void;
   drawCardFromDeck: () => void;
   shuffleDeckFromSeed: () => void;
+  applySolveSeed: (seed: number) => void;
   onDrawnChange: (next: CardId[]) => void;
   onSolverModeChange: (mode: SolverMode) => void;
   onSimTypeChange: (value: SimType) => void;
@@ -161,6 +176,10 @@ export function useShellSolver({
   const [selectedCard, setSelectedCard] = useState<CardId>("arthur");
   const [goFirst, setGoFirst] = useState(true);
   const [turns, setTurns] = useState(3);
+  const [turn2KillEnabled, setTurn2KillEnabled] = useState(false);
+  const [turn2KillThreshold, setTurn2KillThreshold] = useState(
+    DEFAULT_TURN2_KILL_THRESHOLD,
+  );
   const [simType, setSimType] = useState<SimType>("fire_brick");
   const [rollouts, setRollouts] = useState(12);
   const [maxThreads, setMaxThreads] = useState<number | null>(null);
@@ -171,6 +190,9 @@ export function useShellSolver({
   const [maxCardDraw, setMaxCardDraw] = useState<number | null>(null);
   const [lineResult, setLineResultState] = useState<SolveResult | null>(null);
   const [lineHand, setLineHand] = useState<CardId[]>([]);
+  const [turn2KillResults, setTurn2KillResults] =
+    useState<Turn2KillResults | null>(null);
+  const [lineHorizon, setLineHorizonState] = useState<LineHorizon>(3);
   const [samples, setSamples] = useState(8);
   const [busy, setBusy] = useState<JobType | null>(null);
   const [error, setError] = useState("");
@@ -179,6 +201,21 @@ export function useShellSolver({
   function setLineResult(value: SolveResult | null, evaluatedHand?: CardId[]) {
     setLineResultState(value);
     setLineHand(value && evaluatedHand ? [...evaluatedHand] : []);
+  }
+
+  function clearLineResults() {
+    setLineResult(null);
+    setTurn2KillResults(null);
+    setLineHorizonState(3);
+  }
+
+  function setLineHorizon(horizon: LineHorizon) {
+    setLineHorizonState(horizon);
+    if (turn2KillResults) {
+      setLineResultState(
+        horizon === 2 ? turn2KillResults.turn2 : turn2KillResults.turn3,
+      );
+    }
   }
 
   const {
@@ -271,11 +308,12 @@ export function useShellSolver({
     const evaluatedHand = [...hand];
     setBusy("solve");
     setError("");
+    setTurn2KillResults(null);
+    setLineHorizonState(3);
     try {
-      const result = await apiSolve({
+      const requestBase = {
         hand: evaluatedHand,
         goFirst,
-        maxTurns: turns,
         simType,
         rollouts,
         seed: solveSeed as unknown as bigint,
@@ -290,6 +328,42 @@ export function useShellSolver({
           maxHandDurationSecs,
           maxCardDraw,
         ),
+      };
+
+      if (turn2KillEnabled) {
+        const turn2KillRequest = oracleSolveRequest({
+          hand: evaluatedHand,
+          goFirst,
+          materials: activeMaterialCounts,
+          deck,
+          queue: buildSolveQueue(evaluatedHand, drawn, orderedDeck),
+          seed: solveSeed,
+          maxThreads,
+          glimpseEnabled: simType === "fire_brick" ? false : glimpseEnabled,
+          maxHandDurationSecs,
+          maxCardDraw,
+        });
+        const { turn2, turn3 } = await solveTurn2KillPair(turn2KillRequest);
+        const detected = turn2.maxDamage >= turn2KillThreshold;
+        startTransition(() => {
+          if (detected) {
+            setTurn2KillResults({
+              turn2,
+              turn3,
+              threshold: turn2KillThreshold,
+            });
+            setLineHorizonState(2);
+            setLineResult(turn2, evaluatedHand);
+          } else {
+            setLineResult(turn3, evaluatedHand);
+          }
+        });
+        return;
+      }
+
+      const result = await apiSolve({
+        ...requestBase,
+        maxTurns: turns,
       });
       startTransition(() =>
         setLineResult(result as unknown as SolveResult, evaluatedHand),
@@ -349,7 +423,7 @@ export function useShellSolver({
           maxTurns: turns,
           simType,
           rollouts,
-          seed: makeSeed() as unknown as bigint,
+          seed: solveSeed as unknown as bigint,
           budget: DEFAULT_BUDGET,
           ...advancedRunFields(
             simType,
@@ -387,6 +461,11 @@ export function useShellSolver({
     const deckId = activeDeck?.id;
     if (!deckId) {
       setError("Save or select a deck before running the ratio lab.");
+      return;
+    }
+
+    if (ratio.ratioStrategy === "multiDeck") {
+      await optimizeMultiDeck(ratio.multiDeckLists);
       return;
     }
 
@@ -433,9 +512,10 @@ export function useShellSolver({
             decks: deckCount,
             metric: ratio.metric,
             strategy: ratio.ratioStrategy,
+            evalMode: ratio.ratioEvalMode,
             baseDeck: ratio.ratioBaseCounts,
             swap: { from: ratio.swapFrom, count, candidates },
-            seed: makeSeed() as unknown as bigint,
+            seed: solveSeed as unknown as bigint,
             materials: activeMaterialCounts,
             budget: DEFAULT_BUDGET,
             goFirst,
@@ -520,9 +600,10 @@ export function useShellSolver({
           decks: deckCount,
           metric: ratio.metric,
           strategy: ratio.ratioStrategy,
+          evalMode: ratio.ratioEvalMode,
           baseDeck: {},
           swap: null,
-          seed: makeSeed() as unknown as bigint,
+          seed: solveSeed as unknown as bigint,
           materials: activeMaterialCounts,
           budget: DEFAULT_BUDGET,
           goFirst,
@@ -544,6 +625,91 @@ export function useShellSolver({
         optimizeError instanceof Error
           ? optimizeError.message
           : "Deck optimization failed.",
+      );
+    }
+  }
+
+  async function optimizeMultiDeck(deckLists: readonly DeckCounts[]) {
+    if (optimizeBusy) {
+      return;
+    }
+    if (!workerReachable) {
+      setError("The simulation worker is offline. Try again when it is back.");
+      return;
+    }
+    const deckId = activeDeck?.id;
+    if (!deckId || !activeDeck) {
+      setError("Save or select a deck before running the ratio lab.");
+      return;
+    }
+    if (deckLists.length === 0) {
+      setError("Add at least one decklist to the multi-deck test.");
+      return;
+    }
+    if (deckLists.length > MAX_RATIO_DECK_ATTEMPTS) {
+      setError(
+        `Multi-deck test supports at most ${MAX_RATIO_DECK_ATTEMPTS} lists.`,
+      );
+      return;
+    }
+    for (const [index, counts] of deckLists.entries()) {
+      const total = Object.values(counts).reduce((sum, copies) => sum + copies, 0);
+      if (total !== ratio.deckSize) {
+        setError(
+          `List ${index + 1} has ${total} cards; expected ${ratio.deckSize}.`,
+        );
+        return;
+      }
+    }
+
+    const deckCount = deckLists.length;
+    setError("");
+    ratio.setRatioCriteria(null);
+    const initialProgress: OptimizeProgress = {
+      decksScored: 0,
+      totalDecks: deckCount,
+      legalDecks: deckCount,
+      handsSimulated: 0,
+      totalHands: deckCount * ratio.ratioSamples,
+      bestScore: 0,
+    };
+    try {
+      await startOptimize(
+        deckId,
+        activeDeck.name,
+        {
+          bounds: {},
+          deckSize: ratio.deckSize,
+          samples: ratio.ratioSamples,
+          decks: deckCount,
+          metric: ratio.metric,
+          strategy: "multiDeck",
+          evalMode: ratio.ratioEvalMode,
+          baseDeck: {},
+          swap: null,
+          multiDeck: { decks: [...deckLists] },
+          seed: solveSeed as unknown as bigint,
+          materials: activeMaterialCounts,
+          budget: DEFAULT_BUDGET,
+          goFirst,
+          maxTurns: turns,
+          simType,
+          rollouts,
+          ...advancedRunFields(
+            simType,
+            maxThreads,
+            glimpseEnabled,
+            maxHandDurationSecs,
+            maxCardDraw,
+          ),
+        },
+        initialProgress,
+      );
+    } catch (optimizeError) {
+      setError(
+        optimizeError instanceof Error
+          ? optimizeError.message
+          : "Multi-deck test failed.",
       );
     }
   }
@@ -583,6 +749,33 @@ export function useShellSolver({
     void saveWorkerRun(optimizeRun.id);
   }
 
+  function importLine(line: ImportedLine) {
+    const evaluatedHand = [...line.hand];
+    setHand(evaluatedHand);
+    setDrawn([]);
+    setOrderedDeck([]);
+    setSolverMode("hand");
+    setGoFirst(line.goFirst);
+    setTurns(line.turns);
+    setTurn2KillResults(null);
+    setLineHorizonState(3);
+    if (line.events.length > 0) {
+      setLineResult(
+        {
+          simType,
+          maxDamage: line.damage ?? line.events.at(-1)?.damage ?? 0,
+          endInfluence: 0,
+          events: line.events,
+          nodes: 0,
+        },
+        evaluatedHand,
+      );
+    } else {
+      clearLineResults();
+    }
+    setError("");
+  }
+
   function sendSampleToHandSolver(sample: SampleHand) {
     const deckEval = evaluateRun?.deckResult;
     const evaluatedHand = [...sample.hand];
@@ -606,6 +799,8 @@ export function useShellSolver({
       },
       evaluatedHand,
     );
+    setTurn2KillResults(null);
+    setLineHorizonState(3);
     router.push(workbenchHref("line", activeDeckId), { scroll: false });
     setError("");
   }
@@ -623,7 +818,7 @@ export function useShellSolver({
     setOrderedDeck(ordered);
     setHand(ordered.slice(0, OPENING_HAND_SIZE));
     setDrawn([]);
-    setLineResult(null);
+    clearLineResults();
     setError("");
   }
 
@@ -632,7 +827,19 @@ export function useShellSolver({
   }
 
   function shuffleDeckFromSeed() {
-    dealShuffledPile(makeSeed());
+    const pile = cardsFromCounts(listToCounts(parseDecklist(deckText)));
+    if (pile.length < OPENING_HAND_SIZE) {
+      setError(
+        `Need at least ${OPENING_HAND_SIZE} recognized cards in the selected deck to shuffle.`,
+      );
+      return;
+    }
+    const seed = makeSeed();
+    setSolveSeed(seed);
+    setOrderedDeck(shuffleDeck(pile, seed));
+    setDrawn([]);
+    clearLineResults();
+    setError("");
   }
 
   function drawCardFromDeck() {
@@ -655,7 +862,7 @@ export function useShellSolver({
       return;
     }
     setDrawn([...drawn, next]);
-    setLineResult(null);
+    clearLineResults();
     setError("");
   }
 
@@ -669,13 +876,27 @@ export function useShellSolver({
       }
     }
     setDrawn(next);
-    setLineResult(null);
+    clearLineResults();
+    setError("");
+  }
+
+  function applySolveSeed(raw: number) {
+    const seed = normalizeSeed(raw);
+    setSolveSeed(seed);
+    if (orderedDeck.length > 0) {
+      const pile = cardsFromCounts(listToCounts(parseDecklist(deckText)));
+      if (pile.length >= OPENING_HAND_SIZE) {
+        setOrderedDeck(shuffleDeck(pile, seed));
+        setDrawn([]);
+      }
+    }
+    clearLineResults();
     setError("");
   }
 
   function onSolverModeChange(mode: SolverMode) {
     setSolverMode(mode);
-    setLineResult(null);
+    clearLineResults();
   }
 
   function onSimTypeChange(value: SimType) {
@@ -685,7 +906,7 @@ export function useShellSolver({
     } else if (simType === "fire_brick") {
       setGlimpseEnabled(true);
     }
-    setLineResult(null);
+    clearLineResults();
   }
 
   return {
@@ -697,6 +918,8 @@ export function useShellSolver({
     selectedCard,
     goFirst,
     turns,
+    turn2KillEnabled,
+    turn2KillThreshold,
     simType,
     rollouts,
     maxThreads,
@@ -706,6 +929,8 @@ export function useShellSolver({
     cpuCount,
     lineResult,
     lineHand,
+    turn2KillResults,
+    lineHorizon,
     samples,
     busy,
     error,
@@ -724,6 +949,9 @@ export function useShellSolver({
     setSelectedCard,
     setGoFirst,
     setTurns,
+    setTurn2KillEnabled,
+    setTurn2KillThreshold,
+    setLineHorizon,
     setSimType,
     setRollouts,
     setMaxThreads,
@@ -736,15 +964,18 @@ export function useShellSolver({
     solveHand,
     evaluateCurrentDeck,
     optimizeCurrentBounds,
+    optimizeMultiDeck,
     cancelHandSolve,
     cancelEvaluateJob,
     saveEvaluateJob,
     cancelOptimizeJob,
     saveOptimizeJob,
     sendSampleToHandSolver,
+    importLine,
     drawRandomHandFromDeck,
     drawCardFromDeck,
     shuffleDeckFromSeed,
+    applySolveSeed,
     onDrawnChange,
     onSolverModeChange,
     onSimTypeChange,

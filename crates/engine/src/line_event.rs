@@ -780,6 +780,7 @@ pub fn format_line_event(event: &LineEvent) -> String {
                         | "reduce_to_ash"
                         | "smoke_out"
                         | "spark_alight"
+                        | "flurry_of_fire"
                 )
             ) {
                 card_name
@@ -825,7 +826,9 @@ pub fn format_line_event(event: &LineEvent) -> String {
                 s = "Intensified Pyre (GY 8+)".to_string();
             }
             if event.imbue == Some(true) {
-                if let Some(drawn) = event.drawn {
+                if event.card == Some("vermilion_decree")
+                    && let Some(drawn) = event.drawn
+                {
                     s = format!("Vermilion Decree (Imbue, draw {})", short(Some(drawn)));
                 } else if event.card == Some("surging_bolt") {
                     s = "Surging Bolt (Imbue)".to_string();
@@ -903,7 +906,16 @@ pub fn format_line_event(event: &LineEvent) -> String {
             }
         }
         EventKind::OnEnterDraw => {
-            format!("Clumsy On-Enter draw ({})", short(event.drawn))
+            if let (Some(discarded), Some(drawn)) = (event.discarded, event.drawn) {
+                format!(
+                    "{} On-Enter discard {} / draw {}",
+                    name(event.card),
+                    short(Some(discarded)),
+                    short(Some(drawn))
+                )
+            } else {
+                format!("Clumsy On-Enter draw ({})", short(event.drawn))
+            }
         }
         EventKind::OnEnterLevel => {
             let self_dmg = event.kindle.unwrap_or(6);
@@ -1031,4 +1043,50 @@ pub fn format_line_event_row(event: &LineEvent) -> String {
         "{} {:<4} | {:>3} | allies={} | FireGY {} | {:<42} | {:<34} | {}",
         event.turn, phase, event.damage, allies, event.fire_gy, action, memory, hand
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ActionOp, EventKind, LineEvent, TapePhase, format_line_event};
+    use crate::cards::Card;
+    use crate::model::Action;
+
+    #[test]
+    fn action_op_maps_pass() {
+        assert_eq!(ActionOp::from_action(Action::Pass), ActionOp::Pass);
+    }
+
+    #[test]
+    fn format_line_event_start_includes_drawn_card() {
+        let event = LineEvent {
+            op: ActionOp::Start,
+            kind: EventKind::Start,
+            action_index: 0,
+            turn: 0,
+            phase: TapePhase::Main,
+            damage: 0,
+            fire_gy: 0,
+            card: None,
+            kindle: None,
+            drawn: Some(Card::Arthur.id()),
+            memory_draw: None,
+            discarded: None,
+            prepared: None,
+            imbue: None,
+            weapon: None,
+            command_ally: None,
+            bonuses: None,
+            hand: None,
+            memory: None,
+            allies: None,
+            fast: false,
+            doubled: false,
+            from_memory: false,
+            heated: false,
+            human: false,
+            gy_threshold: false,
+        };
+        let label = format_line_event(&event);
+        assert_eq!(label, "Start of Game (draw Arthu)");
+    }
 }

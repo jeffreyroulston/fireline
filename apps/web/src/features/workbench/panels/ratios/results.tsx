@@ -1,23 +1,34 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { SecondaryActionButton } from "@/components/secondary-action-button";
 import { CARDS, PLAYABLE_CARD_IDS, type DeckCounts } from "@/lib/engine";
 import { cn } from "@/lib/utils";
-import { SectionHeading } from "../../ui";
 import type { RatioRefineCriteria, RatioResult } from "../../types";
 import { REFINE_COPY_CEILING } from "../../utils";
 import {
-  deckDiffEntries,
-  ratioRankingHeaderClass,
-  ratioRankingItemClass,
+  findBaselineEntry,
+  findBestChangedEntry,
+  ratioResultsPanelClass,
+  ratioResultsSectionClass,
+  ratioSaveDeckClass,
 } from "./shared";
 import { RatioCandidateDetail } from "./ratio-candidate-detail";
+import { RatioCriteriaCards } from "./ratio-criteria-cards";
+import { RatioRankingRow } from "./ratio-ranking-row";
+import { RatioScoreSummary } from "./ratio-score-summary";
+import {
+  ratioResultRowId,
+  useRatioResultSelection,
+} from "./use-ratio-result-selection";
 
 type RatioResultsProps = Readonly<{
   result: RatioResult | null;
   criteria: RatioRefineCriteria | null;
   samples: number;
   onSaveDecklist: (counts: DeckCounts, score: number, rank: number) => void;
+  onRetestSelected?: (decks: DeckCounts[]) => void;
+  retestBusy?: boolean;
 }>;
 
 export function RatioResults({
@@ -25,17 +36,21 @@ export function RatioResults({
   criteria,
   samples,
   onSaveDecklist,
+  onRetestSelected,
+  retestBusy = false,
 }: RatioResultsProps) {
-  const [selectedRank, setSelectedRank] = useState<number | null>(null);
+  const { selectedRank, selectRank, returnToList } =
+    useRatioResultSelection(result);
+  const [topListCount, setTopListCount] = useState(5);
+  const [selectedRanks, setSelectedRanks] = useState<Set<number>>(
+    () => new Set(),
+  );
 
-  useEffect(() => {
-    setSelectedRank(null);
-  }, [result]);
-
-  if (!result) return null;
-
-  const top =
-    result.top && result.top.length > 0
+  const allTop = useMemo(() => {
+    if (!result) {
+      return [];
+    }
+    return result.top && result.top.length > 0
       ? result.top
       : [
           {
@@ -44,14 +59,48 @@ export function RatioResults({
             counts: result.bestCounts,
           },
         ];
+  }, [result]);
 
+  const top = useMemo(
+    () =>
+      allTop.slice(
+        0,
+        Math.min(Math.max(1, topListCount), Math.max(allTop.length, 1)),
+      ),
+    [allTop, topListCount],
+  );
+
+  useEffect(() => {
+    if (!result || allTop.length === 0) {
+      return;
+    }
+    setTopListCount(allTop.length);
+  }, [result, allTop.length]);
+
+  useEffect(() => {
+    setSelectedRanks(new Set());
+  }, [result]);
+
+  useEffect(() => {
+    setSelectedRanks((current) => {
+      const visible = new Set(top.map((entry) => entry.rank));
+      const next = new Set(
+        [...current].filter((rank) => visible.has(rank)),
+      );
+      return next.size === current.size ? current : next;
+    });
+  }, [top]);
+
+  if (!result) return null;
+
+  const isMultiDeck = result.strategy === "multiDeck";
   const baseCounts = criteria?.baseCounts ?? result.bestCounts;
   const selectedEntry =
     selectedRank != null
-      ? top.find((entry) => entry.rank === selectedRank) ?? null
+      ? allTop.find((entry) => entry.rank === selectedRank) ?? null
       : null;
 
-  const cutRows = criteria
+  const cutRows = criteria && !isMultiDeck
     ? PLAYABLE_CARD_IDS.filter((id) => (criteria.cutBudgets[id] ?? 0) > 0)
         .map((id) => ({
           id,
@@ -60,7 +109,7 @@ export function RatioResults({
         }))
         .sort((a, b) => CARDS[a.id].name.localeCompare(CARDS[b.id].name))
     : [];
-  const addRows = criteria
+  const addRows = criteria && !isMultiDeck
     ? PLAYABLE_CARD_IDS.filter((id) => criteria.replacements[id] != null)
         .map((id) => ({
           id,
@@ -69,130 +118,143 @@ export function RatioResults({
         }))
         .sort((a, b) => CARDS[a.id].name.localeCompare(CARDS[b.id].name))
     : [];
+  const baselineEntry = isMultiDeck
+    ? null
+    : findBaselineEntry(allTop, baseCounts);
+  const baselineScore = baselineEntry?.score ?? null;
+  const bestChangedEntry = isMultiDeck
+    ? allTop[0] ?? null
+    : findBestChangedEntry(allTop, baseCounts);
+  const bestChangedScore = bestChangedEntry?.score ?? null;
+  const lowestScore =
+    isMultiDeck && allTop.length > 0
+      ? allTop[allTop.length - 1]?.score ?? null
+      : null;
+  const canRetest = onRetestSelected != null;
+  const selectedCount = selectedRanks.size;
+  const allVisibleSelected =
+    top.length > 0 && top.every((entry) => selectedRanks.has(entry.rank));
+
+  function toggleRank(rank: number) {
+    setSelectedRanks((current) => {
+      const next = new Set(current);
+      if (next.has(rank)) {
+        next.delete(rank);
+      } else {
+        next.add(rank);
+      }
+      return next;
+    });
+  }
+
+  function selectAllVisible() {
+    setSelectedRanks(new Set(top.map((entry) => entry.rank)));
+  }
+
+  function clearSelection() {
+    setSelectedRanks(new Set());
+  }
+
+  function handleRetestSelected() {
+    if (!onRetestSelected || selectedCount === 0) {
+      return;
+    }
+    const decks = allTop
+      .filter((entry) => selectedRanks.has(entry.rank))
+      .map((entry) => entry.counts);
+    onRetestSelected(decks);
+  }
 
   return (
-    <section
-      className="mt-[30px] grid gap-7 bg-foreground p-7 text-white"
-      aria-live="polite"
-    >
+    <section className={ratioResultsSectionClass} aria-live="polite">
       {criteria && !selectedEntry && (
-        <div className="grid gap-3.5 border-b border-white/14 pb-[22px]">
-          <SectionHeading
-            className="text-white/72 [&_strong]:text-white/55"
-            title="TEST CRITERIA"
-            meta={
-              <strong>
-                {cutRows.length} cut · {addRows.length} add
-              </strong>
-            }
-          />
-          <div className="grid grid-cols-2 gap-[22px] max-[620px]:grid-cols-1">
-            <div>
-              <p className="mb-2.5 font-mono text-[10px] tracking-[0.08em] text-white/55 uppercase">
-                Could be lowered
-              </p>
-              {cutRows.length === 0 ? (
-                <p className="m-0 text-[13px] text-white/40">No cut cards.</p>
-              ) : (
-                <ul className="grid list-none gap-2 p-0">
-                  {cutRows.map((row) => (
-                    <li
-                      key={`cut-${row.id}`}
-                      className="grid grid-cols-[42px_1fr] items-start gap-2.5 text-[13px]"
-                    >
-                      <b className="font-mono text-xs text-primary">
-                        −{row.cutUpTo}×
-                      </b>
-                      <span className="grid min-w-0 gap-0.5">
-                        {CARDS[row.id].name}
-                        <small className="font-mono text-[10px] tracking-wide text-white/45">
-                          {row.inList}× in base
-                        </small>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div>
-              <p className="mb-2.5 font-mono text-[10px] tracking-[0.08em] text-white/55 uppercase">
-                Could be added
-              </p>
-              {addRows.length === 0 ? (
-                <p className="m-0 text-[13px] text-white/40">No replacement cards.</p>
-              ) : (
-                <ul className="grid list-none gap-2 p-0">
-                  {addRows.map((row) => (
-                    <li
-                      key={`add-${row.id}`}
-                      className="grid grid-cols-[42px_1fr] items-start gap-2.5 text-[13px]"
-                    >
-                      <b className="font-mono text-xs text-primary">≤{row.max}×</b>
-                      <span className="grid min-w-0 gap-0.5">
-                        {CARDS[row.id].name}
-                        <small className="font-mono text-[10px] tracking-wide text-white/45">
-                          {row.inList > 0
-                            ? `was ${row.inList}× in base`
-                            : "not in base"}
-                        </small>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </div>
+        <RatioCriteriaCards cutRows={cutRows} addRows={addRows} />
       )}
 
       {selectedEntry ? (
         <RatioCandidateDetail
           entry={selectedEntry}
           baseCounts={baseCounts}
+          baselineScore={baselineScore}
+          bestScore={bestChangedScore}
+          variant={isMultiDeck ? "multiDeck" : "search"}
           samples={samples}
-          onBack={() => setSelectedRank(null)}
+          onBack={returnToList}
           onSaveDecklist={onSaveDecklist}
         />
       ) : (
-        <div className="grid grid-cols-[minmax(160px,190px)_1fr] gap-[35px] max-[620px]:grid-cols-1">
-          <div className="grid content-start gap-1.5">
-            <span className="font-mono text-[10px] tracking-[0.08em] text-white/55 uppercase">
-              BEST SCORE
-            </span>
-            <strong className="font-display text-[78px] leading-none text-primary">
-              {result.bestScore.toFixed(2)}
-            </strong>
-            <small className="font-mono text-[10px] tracking-[0.06em] text-white/55 uppercase">
-              Top {top.length} distinct lists
-            </small>
-          </div>
+        <div className={ratioResultsPanelClass}>
+          <RatioScoreSummary
+            variant={isMultiDeck ? "multiDeck" : "search"}
+            bestScore={bestChangedScore}
+            baselineScore={baselineScore}
+            lowestScore={lowestScore}
+            topListCount={topListCount}
+            maxTopListCount={allTop.length}
+            onTopListCountChange={setTopListCount}
+          />
+
+          {canRetest && (
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                className={ratioSaveDeckClass()}
+                disabled={selectedCount === 0 || retestBusy}
+                onClick={handleRetestSelected}
+              >
+                Re-test {selectedCount > 0 ? selectedCount : ""} selected
+              </button>
+              <SecondaryActionButton
+                className="w-auto shrink-0"
+                disabled={top.length === 0 || retestBusy}
+                onClick={allVisibleSelected ? clearSelection : selectAllVisible}
+              >
+                {allVisibleSelected ? "Clear selection" : "Select visible"}
+              </SecondaryActionButton>
+              <span className="font-mono text-[11px] tracking-[0.06em] text-muted uppercase">
+                Queues lists into multi-deck test
+              </span>
+            </div>
+          )}
+
           <ol className="grid list-none grid-cols-1 gap-3 p-0">
             {top.map((entry) => {
-              const changes = deckDiffEntries(baseCounts, entry.counts);
+              const isSelected = selectedRanks.has(entry.rank);
               return (
-                <li key={`rank-${entry.rank}-${entry.score}`}>
-                  <button
-                    type="button"
+                <li
+                  key={`rank-${entry.rank}-${entry.score}`}
+                  id={ratioResultRowId(entry.rank)}
+                  className={cn(
+                    canRetest && "grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3",
+                  )}
+                >
+                  {canRetest && (
+                    <label className="mt-4 flex cursor-pointer items-center">
+                      <input
+                        type="checkbox"
+                        className="size-4 accent-[var(--color-accent)]"
+                        checked={isSelected}
+                        disabled={retestBusy}
+                        aria-label={`Select #${entry.rank} for re-test`}
+                        onChange={() => toggleRank(entry.rank)}
+                      />
+                    </label>
+                  )}
+                  <RatioRankingRow
+                    entry={entry}
+                    baseCounts={baseCounts}
+                    baseDeckName={criteria?.baseDeckName}
+                    baselineScore={baselineScore}
+                    bestScore={bestChangedScore}
+                    variant={isMultiDeck ? "multiDeck" : "search"}
+                    interactive
+                    onClick={() => selectRank(entry.rank)}
                     className={cn(
-                      ratioRankingItemClass,
-                      "w-full cursor-pointer text-left transition-colors hover:border-white/35 hover:bg-white/[0.07]",
+                      canRetest &&
+                        isSelected &&
+                        "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-accent)_8%,var(--color-surface))]",
                     )}
-                    onClick={() => setSelectedRank(entry.rank)}
-                  >
-                    <header className={ratioRankingHeaderClass}>
-                      <span className="font-mono text-[11px] tracking-[0.08em] text-white/55">
-                        #{entry.rank}
-                      </span>
-                      <strong className="font-display text-[32px] leading-none text-primary">
-                        {entry.score.toFixed(2)}
-                      </strong>
-                    </header>
-                    <p className="m-0 font-mono text-[10px] tracking-[0.06em] text-white/55 uppercase">
-                      {changes.length === 0
-                        ? "No count changes vs base"
-                        : `${changes.length} change${changes.length === 1 ? "" : "s"} vs base`}
-                    </p>
-                  </button>
+                  />
                 </li>
               );
             })}

@@ -41,10 +41,10 @@ export function cardDbKindButtonClass(active: boolean) {
 }
 
 export const cardDbSourcesClass =
-  "border border-border bg-surface px-3.5 py-2.5";
+  "disclosure-chevron border border-border bg-surface px-3.5 py-2.5 [&>summary]:flex [&>summary]:cursor-pointer [&>summary]:list-none [&>summary]:items-center [&>summary]:justify-between [&>summary]:gap-3 [&>summary::-webkit-details-marker]:hidden";
 
 export const cardDbSourcesSummaryClass =
-  "cursor-pointer font-display text-sm font-semibold tracking-[0.02em]";
+  "font-display text-sm font-semibold tracking-[0.02em]";
 
 export const cardDbContributorListClass =
   "m-0 mt-2.5 grid list-none gap-2 p-0";

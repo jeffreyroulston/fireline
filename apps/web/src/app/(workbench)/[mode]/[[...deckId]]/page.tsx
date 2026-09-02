@@ -7,7 +7,7 @@ export default async function WorkbenchPage({
   params: Promise<{ mode: string; deckId?: string[] }>;
 }) {
   const { mode } = await params;
-  if (!tabFromPath(mode)) {
+  if (mode !== "prototype" && !tabFromPath(mode)) {
     notFound();
   }
 

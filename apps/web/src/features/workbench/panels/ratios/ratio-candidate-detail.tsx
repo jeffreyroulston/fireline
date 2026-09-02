@@ -1,20 +1,22 @@
 "use client";
 
-import { useMemo } from "react";
-import { CARDS, type CardId, type CardStat, type DeckCounts } from "@/lib/engine";
-import { cn } from "@/lib/utils";
+import { useEffect, useMemo, useState } from "react";
+import { SecondaryActionButton } from "@/components/secondary-action-button";
+import type { CardStat, DeckCounts, SimType } from "@/lib/engine";
 import {
+  buildBarHighlights,
   CardLeaderboardPanel,
   leaderboardFromCardStats,
 } from "../card-leaderboard";
 import {
-  deckDiffEntries,
-  formatSignedCopies,
-  ratioChangeRowClass,
-  ratioChangesClass,
-  ratioRankingHeaderClass,
-  ratioSaveDeckClass,
-} from "./shared";
+  distributionFromDamages,
+  PooledDamagePanel,
+  sampleBarsFromDamages,
+  syntheticDamagesForMean,
+} from "../pooled-damage";
+import { SIM_TYPE_LABELS } from "../../types";
+import { RatioRankingRow } from "./ratio-ranking-row";
+import { ratioSaveDeckClass } from "./shared";
 
 export type RatioCandidateEntry = Readonly<{
   rank: number;
@@ -23,12 +25,17 @@ export type RatioCandidateEntry = Readonly<{
   scoreDelta?: number | null;
   candidate?: string | null;
   cardStats?: CardStat[];
+  damages?: number[];
 }>;
 
 type RatioCandidateDetailProps = Readonly<{
   entry: RatioCandidateEntry;
   baseCounts: DeckCounts;
+  baselineScore?: number | null;
+  bestScore?: number | null;
+  variant?: "search" | "multiDeck";
   samples: number;
+  simType?: SimType;
   onBack: () => void;
   onSaveDecklist: (counts: DeckCounts, score: number, rank: number) => void;
 }>;
@@ -36,13 +43,38 @@ type RatioCandidateDetailProps = Readonly<{
 export function RatioCandidateDetail({
   entry,
   baseCounts,
+  baselineScore = null,
+  bestScore = null,
+  variant = "search",
   samples,
+  simType = "monte_carlo",
   onBack,
   onSaveDecklist,
 }: RatioCandidateDetailProps) {
-  const changes = useMemo(
-    () => deckDiffEntries(baseCounts, entry.counts),
-    [baseCounts, entry.counts],
+  const [selectedLeaderboardCard, setSelectedLeaderboardCard] = useState<
+    string | null
+  >(null);
+
+  useEffect(() => {
+    setSelectedLeaderboardCard(null);
+  }, [entry.rank, entry.score]);
+
+  const damages = useMemo(
+    () =>
+      entry.damages && entry.damages.length > 0
+        ? entry.damages
+        : syntheticDamagesForMean(entry.score, samples),
+    [entry.damages, entry.score, samples],
+  );
+
+  const distribution = useMemo(
+    () => distributionFromDamages(damages, { mean: entry.score }),
+    [damages, entry.score],
+  );
+
+  const bars = useMemo(
+    () => sampleBarsFromDamages(damages, `ratio-${entry.rank}`),
+    [damages, entry.rank],
   );
 
   const leaderboard = useMemo(
@@ -53,75 +85,28 @@ export function RatioCandidateDetail({
     [entry.cardStats, samples],
   );
 
-  const candidateName =
-    entry.candidate != null
-      ? (CARDS[entry.candidate as CardId]?.name ?? entry.candidate)
-      : null;
+  const barCardHighlights = useMemo(
+    () => buildBarHighlights([], selectedLeaderboardCard),
+    [selectedLeaderboardCard],
+  );
 
   return (
     <div className="grid gap-7">
-      <button
-        type="button"
-        className="justify-self-start font-mono text-[11px] tracking-[0.06em] text-white/55 uppercase hover:text-primary"
+      <SecondaryActionButton
+        className="w-fit shrink-0 justify-self-start"
         onClick={onBack}
       >
         ← Back to summary
-      </button>
+      </SecondaryActionButton>
 
-      <article className="grid gap-4 border border-white/17 bg-white/[0.04] p-4">
-        <header className={ratioRankingHeaderClass}>
-          <div className="grid gap-1">
-            <span className="font-mono text-[11px] tracking-[0.08em] text-white/55">
-              {entry.rank === 0 ? "Baseline" : `#${entry.rank}`}
-              {candidateName ? ` · ${candidateName}` : ""}
-            </span>
-            <strong className="font-display text-[42px] leading-none text-primary">
-              {entry.score.toFixed(2)}
-            </strong>
-          </div>
-          {entry.scoreDelta != null && (
-            <span
-              className={cn(
-                "font-mono text-sm",
-                entry.scoreDelta >= 0 ? "text-[#9ed4a8]" : "text-[#f0a090]",
-              )}
-            >
-              {entry.scoreDelta >= 0 ? "+" : ""}
-              {entry.scoreDelta.toFixed(2)} vs base
-            </span>
-          )}
-        </header>
-
-        <div className={ratioChangesClass}>
-          <p className="m-0 font-mono text-[10px] tracking-[0.06em] text-white/55 uppercase">
-            {changes.length === 0
-              ? "No count changes vs base"
-              : `${changes.length} change${changes.length === 1 ? "" : "s"} vs base`}
-          </p>
-          {changes.length > 0 && (
-            <ul className="grid list-none gap-1.5 p-0">
-              {changes.map((change) => (
-                <li
-                  key={`detail-Δ-${change.id}`}
-                  className={cn(
-                    ratioChangeRowClass,
-                    change.delta > 0
-                      ? "[&_b]:text-[#9ed4a8]"
-                      : "[&_b]:text-[#f0a090]",
-                  )}
-                >
-                  <b className="font-mono">{formatSignedCopies(change.delta)}</b>
-                  <span className="grid min-w-0 gap-0.5">
-                    {CARDS[change.id]?.name ?? change.id}
-                    <small className="font-mono text-[10px] text-white/45">
-                      {change.from}× → {change.to}×
-                    </small>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+      <div className="grid gap-3">
+        <RatioRankingRow
+          entry={entry}
+          baseCounts={baseCounts}
+          baselineScore={baselineScore}
+          bestScore={bestScore}
+          variant={variant}
+        />
 
         <button
           type="button"
@@ -132,11 +117,29 @@ export function RatioCandidateDetail({
         >
           Save decklist
         </button>
-      </article>
+      </div>
 
-      <div className="-mx-7 border-t border-white/14 bg-surface px-7 py-7 text-foreground">
+      <div className="grid gap-[22px]">
+        <PooledDamagePanel
+          meta={
+            <strong>
+              {SIM_TYPE_LABELS[simType]} · {samples} opening hands
+            </strong>
+          }
+          distribution={distribution}
+          bars={bars}
+          simType={simType}
+          cardHighlights={barCardHighlights}
+          highlightCardId={selectedLeaderboardCard}
+          resetKey={`ratio-${entry.rank}-${entry.score}-${samples}`}
+        />
+
         {leaderboard ? (
-          <CardLeaderboardPanel leaderboard={leaderboard} />
+          <CardLeaderboardPanel
+            leaderboard={leaderboard}
+            selectedCardId={selectedLeaderboardCard}
+            onSelectedCardIdChange={setSelectedLeaderboardCard}
+          />
         ) : (
           <p className="m-0 font-mono text-[11px] tracking-[0.06em] text-muted uppercase">
             No card stats for this candidate.

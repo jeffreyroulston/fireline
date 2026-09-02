@@ -48,13 +48,20 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
     queuedCount,
     liveRuns,
     finishedRuns,
+    directWork,
     cancelRun,
+    cancelDirectWork,
     saveRun,
     dismissFinished,
     clearQueue,
   } = useRunTracker();
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (!open) {
@@ -69,13 +76,14 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, [open]);
 
-  const statusText = workerStateReady
-    ? workerState === "running"
-      ? queueSummary
-      : workerState === "finished"
-        ? `${finishedRuns.length} finished`
-        : statusLabel(workerState)
-    : null;
+  const statusText =
+    mounted && workerStateReady
+      ? workerState === "running"
+        ? queueSummary
+        : workerState === "finished"
+          ? `${finishedRuns.length} finished`
+          : statusLabel(workerState)
+      : null;
 
   function navigateToRun(run: TrackedRun) {
     if (!run.deckId) {
@@ -96,7 +104,6 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
     }
     return a.status === "running" ? -1 : 1;
   });
-  const hasQueueItems = queueItems.length > 0 || finishedRuns.length > 0;
 
   return (
     <div className="relative" ref={rootRef}>
@@ -161,7 +168,7 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
                     ? queueSummary
                     : statusLabel(workerState)}
                 </p>
-                {hasQueueItems ? (
+                {finishedRuns.length > 0 ? (
                   <button
                     type="button"
                     className={cn(
@@ -178,13 +185,38 @@ export function WorkerStatusNav({ activeDeckId }: { activeDeckId?: string }) {
               </div>
               {workerState === "running" ? (
                 <p className="mb-2 font-mono text-[11px] text-muted">
-                  {maxConcurrency} worker slot{maxConcurrency === 1 ? "" : "s"}{" "}
-                  · {runningCount} active · {queuedCount} waiting
+                  {runningCount === 0 &&
+                  queuedCount === 0 &&
+                  directWork.length > 0
+                    ? "Direct solve in progress"
+                    : `${maxConcurrency} worker slot${maxConcurrency === 1 ? "" : "s"} · ${runningCount} active · ${queuedCount} waiting`}
                 </p>
               ) : null}
 
-              {queueItems.length > 0 ? (
+              {queueItems.length > 0 || directWork.length > 0 ? (
                 <ul className="m-0 list-none p-0">
+                  {directWork.map((work) => (
+                    <li
+                      className="[&:not(:first-child)]:mt-2.5 [&:not(:first-child)]:border-t [&:not(:first-child)]:border-border [&:not(:first-child)]:pt-2.5"
+                      key={work.id}
+                    >
+                      <div className="mb-1 flex items-baseline justify-between gap-2.5 font-display text-[15px] tracking-[0.03em] uppercase">
+                        <strong>{work.label}</strong>
+                        <StatusBadge status="running" />
+                      </div>
+                      <div className="flex flex-wrap gap-x-3.5 gap-y-2.5">
+                        <button
+                          type="button"
+                          className={buttonVariants({ intent: "text" })}
+                          onClick={() => {
+                            cancelDirectWork(work.id);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </li>
+                  ))}
                   {queueItems.map((run) => {
                     const percent =
                       run.status === "running" && run.progress
