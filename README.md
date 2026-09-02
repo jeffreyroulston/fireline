@@ -16,7 +16,7 @@ The model follows the Mathematically Correct FiZa drill assumptions:
   is available.
 - The opponent kills non-stealth, non-immortal allies during its main phase.
   Assassin class stealth (e.g. Tweedledum) only counts after Zander has leveled.
-- FiZa-specific safe reductions include: Poisoned Dagger activates immediately when ready, Arthur attacks before other allies, and bulk ally attacks.
+- FiZa-specific safe reductions include: Poisoned Dagger activates in pre-recollect when ready, Arthur attacks before other allies, and bulk ally attacks.
 
 ## Architecture
 

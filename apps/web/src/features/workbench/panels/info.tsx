@@ -160,8 +160,9 @@ export function InfoPanel() {
                 leveled.
               </li>
               <li className={infoListItemClass}>
-                Fast cards (Virgil, Demolition, Undeniable Truth, and similar)
-                can activate in Materialize before recollect.
+                Fast cards (Virgil, Demolition, Vermilion Decree, Undeniable
+                Truth, and similar) can activate in pre-recollect before the
+                Mate draw.
               </li>
               <li className={infoListItemClass}>
                 Unique on enter: a second copy kills the one already on board
@@ -189,8 +190,8 @@ export function InfoPanel() {
             </p>
             <ul className={infoListClass}>
               <li className={infoListItemClass}>
-                Poisoned Dagger activates as soon as it is ready (amplify for
-                the rest of the turn).
+                Poisoned Dagger activates in pre-recollect as soon as it is
+                ready (amplify for the rest of the turn).
               </li>
               <li className={infoListItemClass}>
                 Arthur attacks before other allies; other ready allies attack in

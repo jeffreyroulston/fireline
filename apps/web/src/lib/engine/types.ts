@@ -101,7 +101,7 @@ export interface CardDef {
   assassinStealth?: boolean;
   /** Automaton subtype — required for Command Automaton attacks. */
   automaton?: boolean;
-  /** Fast activation — playable during materialize before recollect. */
+  /** Fast activation — playable during pre-recollect (and Agility). */
   fast?: boolean;
   floatingMemory?: boolean;
   kindle?: number;

@@ -61,7 +61,8 @@ fn floating_memory_returns_at_recollect_and_banishes_for_zander() {
     assert_eq!(after_play.memory[Card::KingdomInformant.index()], 1);
 
     let (after_pass, _) = apply(after_play, Action::Pass);
-    let (after_recollect, _) = apply(after_pass, Action::SkipMaterialize);
+    let (after_mate, _) = apply(after_pass, Action::SkipMaterialize);
+    let (after_recollect, _) = apply(after_mate, Action::SkipPreRecollect);
 
     assert_eq!(after_recollect.float_gy, 0);
     assert!(
@@ -517,7 +518,8 @@ fn mate_collapse_does_not_drop_fast_plays() {
     state.phase = Phase::Materialize;
     state.turn = 1;
 
-    let legal = solver_actions(state, false);
+    let (after_mate, _) = apply(state, Action::SkipMaterialize);
+    let legal = solver_actions(after_mate, false);
     assert!(
         legal.iter().any(|action| matches!(
             action,
@@ -526,12 +528,12 @@ fn mate_collapse_does_not_drop_fast_plays() {
                 ..
             }
         )),
-        "fast Demolition must stay outside Mate-ending collapse: {legal:?}"
+        "fast Demolition must be offered in pre-recollect: {legal:?}"
     );
     assert!(
         legal
             .iter()
-            .any(|action| matches!(action, Action::SkipMaterialize)),
+            .any(|action| matches!(action, Action::SkipPreRecollect)),
         "{legal:?}"
     );
 }
@@ -635,7 +637,7 @@ fn materialize_zander_with_glimpse_reorders_queue() {
     state.memory[Card::Brick.index()] = 1;
     state.memory_len = 1;
 
-    let (after, steps) = apply(
+    let (after_mate, steps) = apply(
         state,
         Action::MaterializeZanderMemory {
             glimpse_layout: Some(1),
@@ -645,11 +647,14 @@ fn materialize_zander_with_glimpse_reorders_queue() {
         steps.iter().any(|step| step.kind.as_str() == "glimpse"),
         "{steps:?}"
     );
+    assert_eq!(after_mate.phase, Phase::PreRecollect);
+
+    let (after, recollect_steps) = apply(after_mate, Action::SkipPreRecollect);
     assert!(
-        steps
+        recollect_steps
             .iter()
             .any(|step| step.kind.as_str() == "recollect" && step.drawn == Some("ignited_stab")),
-        "{steps:?}"
+        "{recollect_steps:?}"
     );
     assert_eq!(after.champion_level, 1);
 }
@@ -966,8 +971,9 @@ fn arthur_buff_attributed_to_arthur() {
 }
 
 #[test]
-fn poisoned_dagger_must_activate_before_other_main_actions() {
+fn poisoned_dagger_must_activate_before_other_pre_recollect_actions() {
     let mut state = State::with_queue(&[Card::IgnitedStab], false, 2, &[]);
+    state.phase = Phase::PreRecollect;
     state.dagger = true;
     state.dagger_ready = true;
     state.champion_level = 1;
@@ -988,7 +994,7 @@ fn poisoned_dagger_must_activate_before_other_main_actions() {
     assert!(
         legal_after
             .iter()
-            .any(|action| matches!(action, Action::PlayAttack { .. } | Action::Pass)),
+            .any(|action| matches!(action, Action::SkipPreRecollect)),
         "{legal_after:?}"
     );
 }
@@ -1157,7 +1163,7 @@ fn ally_attacks_do_not_rest_champion_for_later_weapon_swing() {
 }
 
 #[test]
-fn demolition_fast_deals_three_during_materialize() {
+fn demolition_fast_deals_three_during_pre_recollect() {
     let mut state = State::with_queue(
         &[
             Card::Demolition,
@@ -1170,7 +1176,7 @@ fn demolition_fast_deals_three_during_materialize() {
         1,
         &[],
     );
-    state.phase = Phase::Materialize;
+    state.phase = Phase::PreRecollect;
     state.turn = 1;
 
     let legal = solver_actions(state, false);
@@ -1182,7 +1188,7 @@ fn demolition_fast_deals_three_during_materialize() {
                 ..
             }
         )),
-        "Demolition should be Fast-playable during materialize: {legal:?}"
+        "Demolition should be Fast-playable during pre-recollect: {legal:?}"
     );
 
     let play = legal
@@ -1199,7 +1205,7 @@ fn demolition_fast_deals_three_during_materialize() {
         })
         .expect("demolition play");
     let (after, steps) = apply(state, play);
-    assert_eq!(after.phase, Phase::Materialize);
+    assert_eq!(after.phase, Phase::PreRecollect);
     assert_eq!(after.damage, 3);
     assert!(!after.has(Card::Demolition));
     assert!(
@@ -1228,7 +1234,10 @@ fn virgil_fast_activates_before_recollect_and_commands_uncanny() {
     state.phase = Phase::Materialize;
     state.turn = 1;
 
-    let legal = solver_actions(state, false);
+    let (after_mate, _) = apply(state, Action::SkipMaterialize);
+    assert_eq!(after_mate.phase, Phase::PreRecollect);
+
+    let legal = solver_actions(after_mate, false);
     assert!(
         legal.iter().any(|action| matches!(
             action,
@@ -1237,7 +1246,7 @@ fn virgil_fast_activates_before_recollect_and_commands_uncanny() {
                 ..
             }
         )),
-        "Virgil should be Fast-playable during materialize: {legal:?}"
+        "Virgil should be Fast-playable during pre-recollect: {legal:?}"
     );
 
     let play = legal
@@ -1253,8 +1262,8 @@ fn virgil_fast_activates_before_recollect_and_commands_uncanny() {
             )
         })
         .expect("virgil play");
-    let (after_play, steps) = apply(state, play);
-    assert_eq!(after_play.phase, Phase::Materialize);
+    let (after_play, steps) = apply(after_mate, play);
+    assert_eq!(after_play.phase, Phase::PreRecollect);
     assert_eq!(after_play.ally_len, 1);
     assert_eq!(after_play.allies[0].card(), Card::Virgil);
     assert!(
@@ -1264,7 +1273,7 @@ fn virgil_fast_activates_before_recollect_and_commands_uncanny() {
         "{steps:?}"
     );
 
-    let (after_skip, _) = apply(after_play, Action::SkipMaterialize);
+    let (after_skip, _) = apply(after_play, Action::SkipPreRecollect);
     assert_eq!(after_skip.phase, Phase::Main);
     let legal_main = solver_actions(after_skip, false);
     assert!(
@@ -1443,14 +1452,14 @@ fn tristan_agility_allows_fast_cards_only() {
 }
 
 #[test]
-fn materialize_still_limits_fast_activations_to_fast_cards() {
+fn pre_recollect_limits_fast_activations_to_fast_cards() {
     let mut state = State::with_queue(
         &[Card::FieryInterference, Card::Brick, Card::Brick],
         false,
         1,
         &[],
     );
-    state.phase = Phase::Materialize;
+    state.phase = Phase::PreRecollect;
     state.turn = 1;
 
     let legal = solver_actions(state, false);
@@ -1462,7 +1471,7 @@ fn materialize_still_limits_fast_activations_to_fast_cards() {
                 ..
             }
         )),
-        "slow actions should not fast-activate during materialize: {legal:?}"
+        "slow actions should not fast-activate during pre-recollect: {legal:?}"
     );
 }
 
@@ -1843,7 +1852,7 @@ fn materialize_ripper_pays_memory_and_equips() {
     let (after, steps) = apply(state, Action::MaterializeRipper);
     assert_eq!(after.weapon_durability(Weapon::AssassinsRipper), 2);
     assert_eq!(after.memory_len, 0);
-    assert_eq!(after.phase, Phase::Main);
+    assert_eq!(after.phase, Phase::PreRecollect);
     assert!(
         steps
             .iter()
@@ -1982,7 +1991,7 @@ fn hammer_and_blade_materialize_on_turn_two() {
     );
 
     let (after_blade, steps) = apply(blade_state, Action::MercenaryBlade);
-    assert_eq!(after_blade.phase, Phase::Main);
+    assert_eq!(after_blade.phase, Phase::PreRecollect);
     assert!(after_blade.has_weapon(Weapon::MercenaryBlade));
     assert!(
         steps
@@ -2017,12 +2026,18 @@ fn crusader_ring_materializes_and_banishes_immediately() {
     let (after_mate, mate_steps) = apply(state, Action::MaterializeRing);
     assert!(!after_mate.ring, "ring must not linger on the field");
     assert!(!after_mate.has_material(MAT_RING));
-    assert_eq!(after_mate.phase, Phase::Main);
-    // Banish draw + recollect draw.
+    assert_eq!(after_mate.phase, Phase::PreRecollect);
+    // Banish draw happens during materialize; recollect draw waits for pre-recollect finish.
     assert!(
-        after_mate.hand_len >= hand_before.saturating_add(2),
-        "expected banish+recollect draws: before={hand_before} after={}",
+        after_mate.hand_len >= hand_before.saturating_add(1),
+        "expected banish draw before recollect: before={hand_before} after={}",
         after_mate.hand_len
+    );
+    let (after_recollect, recollect_steps) = apply(after_mate, Action::SkipPreRecollect);
+    assert!(
+        after_recollect.hand_len >= hand_before.saturating_add(2),
+        "expected banish+recollect draws: before={hand_before} after={}",
+        after_recollect.hand_len
     );
     assert!(
         mate_steps
@@ -2036,7 +2051,13 @@ fn crusader_ring_materializes_and_banishes_immediately() {
             .any(|step| { step.kind.as_str() == "banishCrusaderRing" && step.drawn.is_some() }),
         "banish+draw must happen in the same Mate resolution: {mate_steps:?}"
     );
-    let legal_main = solver_actions(after_mate, false);
+    assert!(
+        recollect_steps
+            .iter()
+            .any(|step| step.kind.as_str() == "recollect"),
+        "{recollect_steps:?}"
+    );
+    let legal_main = solver_actions(after_recollect, false);
     assert!(
         !legal_main
             .iter()
@@ -2549,11 +2570,11 @@ fn incapacitate_class_bonus_discount_and_inert_actions() {
 }
 
 #[test]
-fn fast_actions_are_offered_during_materialize() {
+fn fast_actions_are_offered_during_pre_recollect() {
     let hand = [Card::SmokeOut, Card::IncreasingDanger, Card::Brick];
     let mut state = State::with_queue(&hand, true, 1, &[]);
     state.champion_awake = true;
-    state.phase = Phase::Materialize;
+    state.phase = Phase::PreRecollect;
     let legal = solver_actions(state, false);
     assert!(
         legal.iter().any(|action| matches!(
@@ -2563,7 +2584,7 @@ fn fast_actions_are_offered_during_materialize() {
                 ..
             }
         )),
-        "fast Smoke Out should be offered in materialize: {legal:?}"
+        "fast Smoke Out should be offered in pre-recollect: {legal:?}"
     );
     assert!(
         !legal.iter().any(|action| matches!(
