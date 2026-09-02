@@ -198,10 +198,8 @@ export function SearchableSelect({
           />
           <span
             aria-hidden
-            className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[10px] text-muted"
-          >
-            ▾
-          </span>
+            className="control-chevron pointer-events-none absolute top-1/2 right-3 -translate-y-1/2"
+          />
         </span>
       </label>
 

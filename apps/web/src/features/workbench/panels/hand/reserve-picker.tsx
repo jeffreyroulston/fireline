@@ -95,6 +95,14 @@ export function inferReserveRequirement(
   }
 }
 
+function reservedHandIndicesFor(action: PlaytestAction): number[] {
+  const raw = action as PlaytestAction & {
+    reservedHandIndices?: number[];
+    reserved_hand_indices?: number[];
+  };
+  return raw.reservedHandIndices ?? raw.reserved_hand_indices ?? [];
+}
+
 export function hasReserveSelection(action: PlaytestAction): boolean {
   switch (action.op) {
     case "playAlly":
@@ -103,7 +111,7 @@ export function hasReserveSelection(action: PlaytestAction): boolean {
     case "playAction":
     case "blazingThrow":
       return (
-        (action.reserved_hand_indices?.length ?? 0) > 0 ||
+        reservedHandIndicesFor(action).length > 0 ||
         (action.reserved?.length ?? 0) > 0
       );
     default:

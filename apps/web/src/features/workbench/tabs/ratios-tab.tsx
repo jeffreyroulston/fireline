@@ -34,6 +34,7 @@ type RatiosTabProps = Readonly<{
   glimpseEnabled: boolean;
   maxHandDurationSecs: number | null;
   maxCardDraw: number | null;
+  seed: number;
   optimizeRun: UseShellSolverResult["optimizeRun"];
   optimizeBusy: boolean;
   decksLoading: boolean;
@@ -46,6 +47,7 @@ type RatiosTabProps = Readonly<{
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
+  onSeedChange: (value: number) => void;
   onOptimize: () => void;
   onCancelOptimize: () => void;
   onSaveOptimize?: () => void;
@@ -71,6 +73,7 @@ export function RatiosTab({
   glimpseEnabled,
   maxHandDurationSecs,
   maxCardDraw,
+  seed,
   optimizeRun,
   optimizeBusy,
   decksLoading,
@@ -83,6 +86,7 @@ export function RatiosTab({
   onGlimpseEnabledChange,
   onMaxHandDurationSecsChange,
   onMaxCardDrawChange,
+  onSeedChange,
   onOptimize,
   onCancelOptimize,
   onSaveOptimize,
@@ -176,6 +180,7 @@ export function RatiosTab({
         turns={turns}
         simType={simType}
         rollouts={rollouts}
+        seed={seed}
         cpuCount={cpuCount}
         maxThreads={maxThreads}
         glimpseEnabled={glimpseEnabled}
@@ -189,6 +194,7 @@ export function RatiosTab({
         onGlimpseEnabledChange={onGlimpseEnabledChange}
         onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
         onMaxCardDrawChange={onMaxCardDrawChange}
+        onSeedChange={onSeedChange}
       />
       <ActionBar
         label={

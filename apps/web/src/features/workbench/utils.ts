@@ -44,6 +44,14 @@ export function makeSeed() {
   return (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
 }
 
+/** Coerce user input to the engine's unsigned 32-bit seed range. */
+export function normalizeSeed(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.trunc(value) >>> 0;
+}
+
 export const OPENING_HAND_SIZE = 7;
 
 /** Match the engine's splitmix64-style `Rng` so seeded shuffles line up. */

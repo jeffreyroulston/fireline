@@ -10,6 +10,8 @@ use super::actions::action_cost;
 pub struct ActionPayment {
     pub reserved: Vec<Card>,
     pub discard: DiscardPayment,
+    /// One payment per on-attack discard step (e.g. multiple allies in Attack Others).
+    pub discards: Vec<DiscardPayment>,
 }
 
 /// How to resolve an optional discard effect during playtest apply.
@@ -48,7 +50,7 @@ pub(crate) fn resolve_discard(state: &mut State, payment: DiscardPayment) -> Opt
     }
 }
 
-pub(crate) fn ally_attack_discard_requirement(
+pub fn ally_attack_discard_requirement(
     state: State,
     card: Card,
 ) -> Option<DiscardRequirement> {
@@ -101,6 +103,54 @@ pub fn action_discard_required(state: State, action: Action) -> Option<DiscardRe
         }
         _ => None,
     }
+}
+
+/// One on-attack discard prompt while previewing an attack action.
+#[derive(Clone, Debug)]
+pub struct AttackDiscardStep {
+    pub label: String,
+    pub optional: bool,
+    pub hand: Vec<Card>,
+    pub drawn_index: Option<u8>,
+}
+
+pub fn preview_hand_for_attack_discard(
+    mut state: State,
+    index: usize,
+    req: DiscardRequirement,
+) -> (Vec<Card>, Option<u8>) {
+    if req.draw_before_discard {
+        let card = state.allies[index].card();
+        if card == Card::CorhaziCourier && state.is_assassin() {
+            let before_count = state.hand;
+            let drawn = state.draw_unknown();
+            let slots = state.hand_slots();
+            let drawn_index = drawn_slot_index(&slots, drawn, before_count[drawn.index()]);
+            return (slots, drawn_index);
+        }
+    }
+    (state.hand_slots(), None)
+}
+
+pub(crate) fn next_discard_payment(
+    discards: &mut Vec<DiscardPayment>,
+    fallback: &mut DiscardPayment,
+    state: State,
+    card: Card,
+) -> DiscardPayment {
+    if ally_attack_discard_requirement(state, card).is_none() {
+        return DiscardPayment::Auto;
+    }
+    if let Some(payment) = discards.first().copied() {
+        discards.remove(0);
+        return payment;
+    }
+    if *fallback != DiscardPayment::Auto {
+        let pay = *fallback;
+        *fallback = DiscardPayment::Auto;
+        return pay;
+    }
+    DiscardPayment::Auto
 }
 
 /// Hand slots (and optional newly drawn index) shown when picking a discard in playtest.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   PlaytestAction,
   PlaytestActionOption,
@@ -10,13 +10,14 @@ import type {
 } from "@ga-fire/contracts";
 import type { CardId, LineEvent, MaterialId, SolveResult } from "@/lib/engine";
 import { cn, buttonVariants } from "@/lib/utils";
-import { SectionHeading, DamageReadout, HandCard } from "../../ui";
+import { SectionHeading, DamageReadout, HandCard, Turn2KillHorizon } from "../../ui";
 import { OptimalLine } from "../../ui/optimal-line";
 import { LineCompare } from "../../ui/line-compare";
 import { BoardZones } from "./zone-hover";
 import { GlimpsePicker, GLIMPSE_ZANDER_LABEL, partitionLegalActions } from "./glimpse-picker";
 import { DiscardPicker, needsDiscardPicker, type DiscardPrompt } from "./discard-picker";
 import { ReservePicker, resolveReserveRequirement, type ReservePrompt } from "./reserve-picker";
+import type { LineHorizon, Turn2KillResults } from "../../types";
 
 const phaseLabel: Record<string, string> = {
   main: "Main",
@@ -37,6 +38,7 @@ function championBoardCard(
 }
 
 export function PlaytestPanel({
+  hand,
   board,
   events,
   legalActions,
@@ -45,6 +47,9 @@ export function PlaytestPanel({
   comparing,
   canUndo,
   optimalResult,
+  turn2KillResults,
+  lineHorizon,
+  onLineHorizonChange,
   reservePrompt,
   selectedReserveIndices,
   discardPrompt,
@@ -59,8 +64,10 @@ export function PlaytestPanel({
   onApply,
   onUndo,
   onFinishCompare,
+  onCancelCompare,
   onReset,
 }: {
+  hand: CardId[];
   board: PlaytestStateView | null;
   events: LineEvent[];
   legalActions: PlaytestActionOption[];
@@ -69,6 +76,9 @@ export function PlaytestPanel({
   comparing: boolean;
   canUndo: boolean;
   optimalResult: SolveResult | null;
+  turn2KillResults: Turn2KillResults | null;
+  lineHorizon: LineHorizon;
+  onLineHorizonChange: (horizon: LineHorizon) => void;
   reservePrompt: ReservePrompt | null;
   selectedReserveIndices: number[];
   discardPrompt: DiscardPrompt | null;
@@ -83,6 +93,7 @@ export function PlaytestPanel({
   onApply: (action: PlaytestAction) => void;
   onUndo: () => void;
   onFinishCompare: () => void;
+  onCancelCompare: () => void;
   onReset: () => void;
 }) {
   const playing = phase === "playing" || phase === "done";
@@ -94,13 +105,24 @@ export function PlaytestPanel({
   const showGlimpse = glimpseOpen && hasGlimpseChoice;
   const weapons = board?.weapons ?? [];
   const hotCakeCount = board?.engine.hotCake ?? 0;
+  const hasDagger = board?.dagger === true;
   const championCard = board ? championBoardCard(board) : null;
   const boardPieceCount =
     (board?.allies.length ?? 0) +
     weapons.length +
     hotCakeCount +
+    (hasDagger ? 1 : 0) +
     (championCard ? 1 : 0);
   const showBoard = board != null && playing;
+  const lineComplete = phase === "done" && board?.terminal === true;
+  const compareSectionRef = useRef<HTMLDivElement>(null);
+
+  const handleCalculate = useCallback(() => {
+    compareSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    window.setTimeout(() => {
+      onFinishCompare();
+    }, 350);
+  }, [onFinishCompare]);
 
   useEffect(() => {
     if (!hasGlimpseChoice) {
@@ -111,18 +133,16 @@ export function PlaytestPanel({
   return (
     <div className="mt-7 border-t border-border pt-5">
       <SectionHeading title="PLAYTEST" />
-      {phase === "setup" && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            className={buttonVariants({ intent: "primary" })}
-            onClick={onStart}
-            disabled={busy}
-          >
-            Start playtest
-          </button>
-        </div>
-      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          className={buttonVariants({ intent: "primary" })}
+          onClick={phase === "setup" ? onStart : onReset}
+          disabled={busy}
+        >
+          {phase === "setup" ? "Start playtest" : "Start new playtest"}
+        </button>
+      </div>
 
       {board && playing && (
         <div className="mt-5 grid gap-4">
@@ -210,6 +230,18 @@ export function PlaytestPanel({
                       <HandCard id={weapon.card as CardId} />
                     </div>
                   ))}
+                  {hasDagger ? (
+                    <div
+                      key="poisoned-dagger"
+                      title={board.daggerReady ? "Ready to activate" : "Rested"}
+                      className="min-w-0"
+                    >
+                      <HandCard
+                        id={"poisoned_dagger" as CardId}
+                        faded={!board.daggerReady}
+                      />
+                    </div>
+                  ) : null}
                   {Array.from({ length: hotCakeCount }, (_, index) => (
                     <div
                       key={`hot-cake-${index}`}
@@ -232,11 +264,6 @@ export function PlaytestPanel({
           />
           {!board.terminal && (
             <div>
-              <SectionHeading
-                className="mb-2"
-                title="LEGAL ACTIONS"
-                meta={<strong>{legalActions.length}</strong>}
-              />
               <div className="mb-2 flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -249,18 +276,12 @@ export function PlaytestPanel({
                 >
                   Undo
                 </button>
-                <button
-                  type="button"
-                  className={cn(
-                    buttonVariants({ intent: "secondary" }),
-                    "min-h-[50px]",
-                  )}
-                  onClick={onReset}
-                  disabled={busy}
-                >
-                  Reset
-                </button>
               </div>
+              <SectionHeading
+                className="mb-2"
+                title="LEGAL ACTIONS"
+                meta={<strong>{legalActions.length}</strong>}
+              />
               {showGlimpse && board ? (
                 <GlimpsePicker
                   peek={board.glimpsePeek}
@@ -367,12 +388,41 @@ export function PlaytestPanel({
               </>
             }
           />
+          {events.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={cn(
+                  buttonVariants({ intent: "primary" }),
+                  "min-h-[50px]",
+                  comparing && "pointer-events-none",
+                )}
+                onClick={handleCalculate}
+                disabled={busy || comparing}
+                aria-busy={comparing}
+              >
+                <span className="flex items-center gap-2.5">
+                  {comparing ? (
+                    <span
+                      className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/30 border-t-white"
+                      aria-hidden
+                    />
+                  ) : null}
+                  {comparing
+                    ? "Calculating…"
+                    : lineComplete
+                      ? "Calculate"
+                      : "End and calculate early"}
+                </span>
+              </button>
+            </div>
+          ) : null}
         </div>
       )}
 
       {events.length > 0 && phase !== "compared" && (
         <>
-          {board?.terminal && playing && (
+          {board?.terminal && playing ? (
             <div className="mt-5 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -385,19 +435,8 @@ export function PlaytestPanel({
               >
                 Undo
               </button>
-              <button
-                type="button"
-                className={cn(
-                  buttonVariants({ intent: "secondary" }),
-                  "min-h-[50px]",
-                )}
-                onClick={onReset}
-                disabled={busy}
-              >
-                Reset
-              </button>
             </div>
-          )}
+          ) : null}
           <OptimalLine
             label="YOUR LINE"
             events={events}
@@ -406,63 +445,55 @@ export function PlaytestPanel({
         </>
       )}
 
-      {playing && (
-        <div className="mt-5 flex flex-wrap gap-2">
-          <button
-            type="button"
-            className={cn(
-              buttonVariants({ intent: "primary" }),
-              comparing && "pointer-events-none",
-            )}
-            onClick={onFinishCompare}
-            disabled={busy || events.length === 0}
-            aria-busy={comparing}
-          >
-            <span className="flex items-center gap-2.5">
-              {comparing ? (
-                <span
-                  className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/30 border-t-white"
-                  aria-hidden
-                />
-              ) : null}
-              {comparing ? "Calculating…" : "Finish & compare"}
-            </span>
-          </button>
-        </div>
-      )}
+      <div ref={compareSectionRef} className="scroll-mt-8">
+        {comparing && phase !== "compared" ? (
+          <div className="mt-5 flex min-h-[50px] flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2.5 font-mono text-[13px] tracking-[0.06em] text-muted uppercase">
+              <span
+                className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-muted/30 border-t-muted"
+                aria-hidden
+              />
+              Calculating optimal line…
+            </div>
+            <button
+              type="button"
+              className={buttonVariants({ intent: "secondary" })}
+              onClick={onCancelCompare}
+              disabled={!comparing}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : null}
 
-      {phase === "compared" && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            className={cn(
-              buttonVariants({ intent: "secondary" }),
-              "min-h-[50px]",
-            )}
-            onClick={onReset}
-            disabled={busy}
-          >
-            New playtest
-          </button>
-        </div>
-      )}
-
-      {phase === "compared" && optimalResult && (
-        <LineCompare
-          resetKey={`playtest-compare-${yourDamage}-${optimalResult.maxDamage}`}
-          left={{
-            label: "Your line",
-            damage: yourDamage,
-            events,
-          }}
-          right={{
-            label: "Optimal",
-            damage: optimalResult.maxDamage,
-            events: optimalResult.events,
-            note: "Oracle solve on the same hand and draw queue.",
-          }}
-        />
-      )}
+        {phase === "compared" && optimalResult && (
+          <div className="mt-5 grid gap-4">
+            {turn2KillResults ? (
+              <Turn2KillHorizon
+                results={turn2KillResults}
+                lineHorizon={lineHorizon}
+                onLineHorizonChange={onLineHorizonChange}
+              />
+            ) : null}
+            <LineCompare
+              resetKey={`playtest-compare-${yourDamage}-${optimalResult.maxDamage}-${lineHorizon}`}
+              openingHand={hand}
+              left={{
+                label: "Your line",
+                damage: yourDamage,
+                events,
+              }}
+              right={{
+                label:
+                  lineHorizon === 2 ? "Optimal (2 turns)" : "Optimal (3 turns)",
+                damage: optimalResult.maxDamage,
+                events: optimalResult.events,
+                note: "Oracle solve on the same hand and draw queue.",
+              }}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

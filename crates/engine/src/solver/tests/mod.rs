@@ -383,6 +383,33 @@ fn glimpse_collapses_to_unique_tops_when_one_draw_remains() {
 }
 
 #[test]
+fn solver_glimpse_offers_all_five_layouts() {
+    let mut state = State::with_queue(
+        &[Card::Brick, Card::Brick, Card::Brick, Card::Brick],
+        true,
+        3,
+        &[Card::RendingFlames, Card::SurgingBolt, Card::Arthur],
+    );
+    state.phase = Phase::Materialize;
+    state.turn = 2;
+    state.materials = MAT_ZANDER;
+    state.memory_len = 1;
+    assert_eq!(state.draw_potential(), 1);
+
+    let legal = solver_actions(state, true);
+    let glimpse_layouts: Vec<u8> = legal
+        .iter()
+        .filter_map(|action| match action {
+            Action::MaterializeZanderMemory {
+                glimpse_layout: Some(layout),
+            } => Some(*layout),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(glimpse_layouts, vec![0, 1, 2, 3, 4], "{glimpse_layouts:?}");
+}
+
+#[test]
 fn glimpse_skipped_when_draw_potential_is_zero() {
     let mut state = State::with_queue(
         &[Card::Brick; 4],
@@ -3481,4 +3508,50 @@ fn cancel_flag_aborts_long_oracle_pass() {
     let err = solve_pass(&hand, true, 3, &queue, true, ALL_MATERIALS).expect_err("cancelled");
     assert!(matches!(err, EngineError::Cancelled));
     handle.join().expect("cancel thread");
+}
+
+#[test]
+fn attack_others_two_hasty_messengers_both_draw_on_auto() {
+    let mut state = State::with_queue(
+        &[Card::Brick, Card::Brick, Card::KingdomInformant, Card::IgnitedStab],
+        true,
+        1,
+        &[Card::SableRemnant, Card::ClumsyApprentice],
+    );
+    state.turn = 1;
+    state.add_ally(Card::HastyMessenger, true, false);
+    state.add_ally(Card::HastyMessenger, true, false);
+
+    let (_, events) = apply(state, Action::AttackOthers);
+    let draws = events
+        .iter()
+        .filter(|e| e.kind == EventKind::OnAttackDraw)
+        .count();
+    assert_eq!(draws, 2, "{events:?}");
+}
+
+#[test]
+fn attack_others_two_hasty_messengers_manual_then_auto() {
+    use crate::solver::{apply_action_with_payment, ActionPayment, DiscardPayment};
+    let mut state = State::with_queue(
+        &[Card::Brick, Card::Brick, Card::KingdomInformant, Card::IgnitedStab],
+        true,
+        1,
+        &[Card::SableRemnant, Card::ClumsyApprentice],
+    );
+    state.turn = 1;
+    state.add_ally(Card::HastyMessenger, true, false);
+    state.add_ally(Card::HastyMessenger, true, false);
+
+    let payment = Some(ActionPayment {
+        reserved: vec![],
+        discard: DiscardPayment::Card(Card::KingdomInformant),
+        discards: vec![],
+    });
+    let (_, events) = apply_action_with_payment(state, Action::AttackOthers, payment);
+    let draws = events
+        .iter()
+        .filter(|e| e.kind == EventKind::OnAttackDraw)
+        .count();
+    assert_eq!(draws, 2, "{events:?}");
 }

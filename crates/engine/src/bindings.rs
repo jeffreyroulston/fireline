@@ -40,6 +40,7 @@ mod export {
             <crate::playtest::PlaytestEngineState as TS>::export_all(),
             <crate::playtest::PlaytestAction as TS>::export_all(),
             <crate::playtest::PlaytestActionOption as TS>::export_all(),
+            <crate::playtest::PlaytestDiscardStep as TS>::export_all(),
             <crate::playtest::PlaytestAllyView as TS>::export_all(),
         );
     }

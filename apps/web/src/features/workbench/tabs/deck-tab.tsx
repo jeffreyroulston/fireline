@@ -21,6 +21,7 @@ type DeckTabProps = Readonly<{
   glimpseEnabled: boolean;
   maxHandDurationSecs: number | null;
   maxCardDraw: number | null;
+  seed: number;
   evaluateBusy: boolean;
   evaluateRun: UseShellSolverResult["evaluateRun"];
   decksLoading: boolean;
@@ -34,6 +35,7 @@ type DeckTabProps = Readonly<{
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
+  onSeedChange: (value: number) => void;
   onEvaluate: () => void;
   onCancel: () => void;
   onSave?: () => void;
@@ -54,6 +56,7 @@ export function DeckTab({
   glimpseEnabled,
   maxHandDurationSecs,
   maxCardDraw,
+  seed,
   evaluateBusy,
   evaluateRun,
   decksLoading,
@@ -67,6 +70,7 @@ export function DeckTab({
   onGlimpseEnabledChange,
   onMaxHandDurationSecsChange,
   onMaxCardDrawChange,
+  onSeedChange,
   onEvaluate,
   onCancel,
   onSave,
@@ -92,6 +96,7 @@ export function DeckTab({
         glimpseEnabled={glimpseEnabled}
         maxHandDurationSecs={maxHandDurationSecs}
         maxCardDraw={maxCardDraw}
+        seed={seed}
         busy={evaluateBusy}
         onSwitchDeck={onSwitchDeck}
         onSamplesChange={onSamplesChange}
@@ -103,6 +108,7 @@ export function DeckTab({
         onGlimpseEnabledChange={onGlimpseEnabledChange}
         onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
         onMaxCardDrawChange={onMaxCardDrawChange}
+        onSeedChange={onSeedChange}
         onEvaluate={onEvaluate}
         onCancel={onCancel}
         onSave={onSave}

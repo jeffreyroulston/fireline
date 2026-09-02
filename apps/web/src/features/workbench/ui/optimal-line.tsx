@@ -1,9 +1,11 @@
 "use client";
 
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import type { LineEvent } from "@/lib/engine";
 import { CARD_LIST } from "@/lib/engine";
+import { buttonVariants } from "@/lib/utils/variants";
 import { eventMatchesQuery } from "../lib/event-matches-query";
+import { downloadLineTape } from "../lib/export-line-tape";
 import { expandEventZones } from "../lib/expand-zones";
 import type { StepDiffInfo } from "../types";
 import { CombatTape } from "./combat-tape";
@@ -42,16 +44,30 @@ export function OptimalLine({
           eventMatchesQuery(event, trimmed, CARD_LIST),
         ).length;
 
+  const handleExport = useCallback(() => {
+    downloadLineTape(events, CARD_LIST, { label });
+  }, [events, label]);
+
   return (
     <div className="mt-6 border border-border bg-surface px-[18px] pt-[18px] pb-3 shadow-[0_1px_0_color-mix(in_srgb,var(--color-foreground)_4%,transparent)]">
-      <div className="mb-3 flex justify-between font-mono text-[11px] tracking-[0.08em] text-muted">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 font-mono text-[11px] tracking-[0.08em] text-muted">
         <span>
           {label}
           {sampleId ? ` · ${sampleId}` : ""}
         </span>
-        <span>
-          {events.length} events
-          {meta}
+        <span className="flex items-center gap-2.5">
+          <span>
+            {events.length} events
+            {meta}
+          </span>
+          <button
+            type="button"
+            className={buttonVariants({ intent: "secondary", size: "compact" })}
+            onClick={handleExport}
+            disabled={events.length === 0}
+          >
+            Export
+          </button>
         </span>
       </div>
       <label className="mb-3 flex items-center gap-2.5">

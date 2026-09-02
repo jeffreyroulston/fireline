@@ -25,17 +25,15 @@ function eventsEqual(a: LineEvent, b: LineEvent): boolean {
   return eventKey(a) === eventKey(b);
 }
 
-export function twoPassEventDiff(
+export function alignLineEvents(
   brick: LineEvent[],
   oracle: LineEvent[],
-): { brick: StepDiffInfo[]; oracle: StepDiffInfo[] } {
-  const brickInfo: StepDiffInfo[] = brick.map(() => ({ mark: "same" }));
-  const oracleInfo: StepDiffInfo[] = oracle.map(() => ({ mark: "same" }));
+): StepAlignment[] {
   const m = brick.length;
   const n = oracle.length;
 
   if (m === 0 && n === 0) {
-    return { brick: brickInfo, oracle: oracleInfo };
+    return [];
   }
 
   const dp = Array.from({ length: m + 1 }, () => Array<number>(n + 1).fill(0));
@@ -69,6 +67,20 @@ export function twoPassEventDiff(
   }
 
   alignment.reverse();
+  return alignment;
+}
+
+export function twoPassEventDiff(
+  brick: LineEvent[],
+  oracle: LineEvent[],
+): { brick: StepDiffInfo[]; oracle: StepDiffInfo[] } {
+  const brickInfo: StepDiffInfo[] = brick.map(() => ({ mark: "same" }));
+  const oracleInfo: StepDiffInfo[] = oracle.map(() => ({ mark: "same" }));
+  const alignment = alignLineEvents(brick, oracle);
+
+  if (alignment.length === 0) {
+    return { brick: brickInfo, oracle: oracleInfo };
+  }
 
   for (let index = 0; index < alignment.length; index += 1) {
     const entry = alignment[index];

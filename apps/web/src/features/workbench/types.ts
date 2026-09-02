@@ -6,6 +6,7 @@ import type {
   DeckCounts,
   LineEvent,
   SimType,
+  SolveResult,
   TwoPassResult,
 } from "@/lib/engine";
 
@@ -19,6 +20,16 @@ export type Tab =
   | "info";
 export type JobType = "solve" | "evaluate" | "optimize";
 export type SolverMode = "hand" | "deck" | "playtest";
+
+export const DEFAULT_TURN2_KILL_THRESHOLD = 19;
+
+export type LineHorizon = 2 | 3;
+
+export type Turn2KillResults = Readonly<{
+  turn2: SolveResult;
+  turn3: SolveResult;
+  threshold: number;
+}>;
 
 export interface SampleHand {
   hand: CardId[];

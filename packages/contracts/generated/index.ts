@@ -25,6 +25,7 @@ export type { PlaytestActionOption } from "./PlaytestActionOption.js";
 export type { PlaytestAllyView } from "./PlaytestAllyView.js";
 export type { PlaytestApplyRequest } from "./PlaytestApplyRequest.js";
 export type { PlaytestApplyResult } from "./PlaytestApplyResult.js";
+export type { PlaytestDiscardStep } from "./PlaytestDiscardStep.js";
 export type { PlaytestEngineState } from "./PlaytestEngineState.js";
 export type { PlaytestGlimpseLayout } from "./PlaytestGlimpseLayout.js";
 export type { PlaytestInitRequest } from "./PlaytestInitRequest.js";

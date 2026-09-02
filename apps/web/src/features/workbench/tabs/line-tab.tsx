@@ -14,7 +14,8 @@ import { HandBuilder, ResultRail } from "../panels/hand";
 import { PlaytestPanel } from "../panels/hand/playtest-panel";
 import { usePlaytest } from "../hooks/use-playtest";
 import { deckCountsCoveringHand } from "../utils";
-import type { SolverMode } from "../types";
+import type { SolverMode, LineHorizon, Turn2KillResults } from "../types";
+import type { ImportedLine } from "../lib/import-line-tape";
 
 type LineTabProps = Readonly<{
   hand: CardId[];
@@ -31,6 +32,8 @@ type LineTabProps = Readonly<{
   seed: number;
   goFirst: boolean;
   turns: number;
+  turn2KillEnabled: boolean;
+  turn2KillThreshold: number;
   simType: SimType;
   rollouts: number;
   cpuCount: number;
@@ -42,6 +45,8 @@ type LineTabProps = Readonly<{
   error: string;
   lineResult: SolveResult | null;
   lineHand: CardId[];
+  turn2KillResults: Turn2KillResults | null;
+  lineHorizon: LineHorizon;
   decksLoading: boolean;
   onHandChange: (hand: CardId[]) => void;
   onSolverModeChange: (mode: SolverMode) => void;
@@ -51,15 +56,20 @@ type LineTabProps = Readonly<{
   onShuffleDeck: () => void;
   onGoFirstChange: (goFirst: boolean) => void;
   onTurnsChange: (turns: number) => void;
+  onTurn2KillEnabledChange: (enabled: boolean) => void;
+  onTurn2KillThresholdChange: (threshold: number) => void;
+  onLineHorizonChange: (horizon: LineHorizon) => void;
   onSimTypeChange: (simType: SimType) => void;
   onRolloutsChange: (rollouts: number) => void;
   onMaxThreadsChange: (value: number | null) => void;
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
+  onSeedChange: (value: number) => void;
   onSolve: () => void;
   onCancel: () => void;
   onError: (message: string) => void;
+  onImportLine: (line: ImportedLine) => void;
 }>;
 
 export function LineTab({
@@ -77,6 +87,8 @@ export function LineTab({
   seed,
   goFirst,
   turns,
+  turn2KillEnabled,
+  turn2KillThreshold,
   simType,
   rollouts,
   cpuCount,
@@ -88,6 +100,8 @@ export function LineTab({
   error,
   lineResult,
   lineHand,
+  turn2KillResults,
+  lineHorizon,
   decksLoading,
   onHandChange,
   onSolverModeChange,
@@ -97,15 +111,20 @@ export function LineTab({
   onShuffleDeck,
   onGoFirstChange,
   onTurnsChange,
+  onTurn2KillEnabledChange,
+  onTurn2KillThresholdChange,
+  onLineHorizonChange,
   onSimTypeChange,
   onRolloutsChange,
   onMaxThreadsChange,
   onGlimpseEnabledChange,
   onMaxHandDurationSecsChange,
   onMaxCardDrawChange,
+  onSeedChange,
   onSolve,
   onCancel,
   onError,
+  onImportLine,
 }: LineTabProps) {
   const deckCounts = useMemo(() => {
     const cards = parseDecklist(deckText);
@@ -121,6 +140,13 @@ export function LineTab({
     orderedDeck,
     goFirst,
     turns,
+    turn2KillEnabled,
+    turn2KillThreshold,
+    seed,
+    maxThreads,
+    glimpseEnabled,
+    maxHandDurationSecs,
+    maxCardDraw,
     materials: activeMaterialCounts,
     deck: deckCounts,
   });
@@ -159,6 +185,8 @@ export function LineTab({
         seed={seed}
         goFirst={goFirst}
         turns={turns}
+        turn2KillEnabled={turn2KillEnabled}
+        turn2KillThreshold={turn2KillThreshold}
         simType={simType}
         rollouts={rollouts}
         cpuCount={cpuCount}
@@ -181,18 +209,23 @@ export function LineTab({
         }}
         onGoFirstChange={onGoFirstChange}
         onTurnsChange={onTurnsChange}
+        onTurn2KillEnabledChange={onTurn2KillEnabledChange}
+        onTurn2KillThresholdChange={onTurn2KillThresholdChange}
         onSimTypeChange={onSimTypeChange}
         onRolloutsChange={onRolloutsChange}
         onMaxThreadsChange={onMaxThreadsChange}
         onGlimpseEnabledChange={onGlimpseEnabledChange}
         onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
         onMaxCardDrawChange={onMaxCardDrawChange}
+        onSeedChange={onSeedChange}
         onSolve={onSolve}
         onCancel={onCancel}
+        onImportLine={onImportLine}
         decksLoading={decksLoading}
         playtestPanel={
           isPlaytest ? (
             <PlaytestPanel
+              hand={hand}
               board={playtest.board}
               events={playtest.events}
               legalActions={playtest.legalActions}
@@ -201,6 +234,9 @@ export function LineTab({
               comparing={playtest.comparing}
               canUndo={playtest.canUndo}
               optimalResult={playtest.optimalResult}
+              turn2KillResults={playtest.turn2KillResults}
+              lineHorizon={playtest.lineHorizon}
+              onLineHorizonChange={playtest.setLineHorizon}
               reservePrompt={playtest.reservePrompt}
               selectedReserveIndices={playtest.selectedReserveIndices}
               discardPrompt={playtest.discardPrompt}
@@ -215,13 +251,21 @@ export function LineTab({
               onApply={playtest.applyAction}
               onUndo={playtest.undo}
               onFinishCompare={playtest.finishAndCompare}
+              onCancelCompare={playtest.cancelCompare}
               onReset={playtest.reset}
             />
           ) : undefined
         }
       />
       {!isPlaytest && (
-        <ResultRail result={lineResult} busy={busy} hand={lineHand} />
+        <ResultRail
+          result={lineResult}
+          busy={busy}
+          hand={lineHand}
+          turn2KillResults={turn2KillResults}
+          lineHorizon={lineHorizon}
+          onLineHorizonChange={onLineHorizonChange}
+        />
       )}
     </>
   );

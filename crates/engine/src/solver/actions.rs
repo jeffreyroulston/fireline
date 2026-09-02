@@ -634,7 +634,7 @@ pub(crate) fn collapse_mate_ending_siblings(state: State, endings: Vec<Action>) 
     order.into_iter().map(|key| best[&key].0).collect()
 }
 
-fn actions(state: State, glimpse_enabled: bool, full_glimpse_layouts: bool) -> Vec<Action> {
+fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
     if state.phase == Phase::Agility {
         let mut result = Vec::with_capacity(24);
         if state.tristan_leveled && state.agility >= 3 && state.memory_len >= 3 {
@@ -666,11 +666,7 @@ fn actions(state: State, glimpse_enabled: bool, full_glimpse_layouts: bool) -> V
             && (state.memory_len > 0 || state.float_gy > 0)
         {
             if glimpse_enabled && state.queue_pos < state.queue_len {
-                let layouts = if full_glimpse_layouts {
-                    state.glimpse_playtest_layouts()
-                } else {
-                    state.glimpse_relevant_layouts()
-                };
+                let layouts = state.glimpse_playtest_layouts();
                 if layouts.is_empty() {
                     // No remaining deck draws — Glimpse cannot change outcomes.
                     endings.push(Action::MaterializeZanderMemory {
@@ -915,11 +911,11 @@ pub(crate) fn tape_phase(state: &State) -> TapePhase {
     }
 }
 
-/// Legal player actions for interactive playtest (Glimpse enabled for Zander layouts).
+/// Legal player actions for interactive playtest.
 pub fn legal_actions(state: State) -> Vec<Action> {
-    actions(state, true, true)
+    actions(state, true)
 }
 
 pub(crate) fn solver_actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
-    actions(state, glimpse_enabled, false)
+    actions(state, glimpse_enabled)
 }

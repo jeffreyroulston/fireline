@@ -14,7 +14,7 @@ use crate::error::Result;
 use crate::line_event::EventTape;
 use crate::solver::{
     action_discard_hand, action_discard_required, action_payment_required,
-    apply_action_with_payment, legal_actions,
+    apply_action_with_payment, attack_discard_steps, legal_actions,
 };
 
 use actions::{action_to_playtest, format_action, playtest_to_action};
@@ -66,6 +66,21 @@ pub fn playtest_legal_actions(
             let payment = action_payment_required(state, action);
             let discard = action_discard_required(state, action);
             let discard_hand_view = action_discard_hand(state, action);
+            let attack_steps = attack_discard_steps(state, action);
+            let discard_steps: Vec<PlaytestDiscardStep> = attack_steps
+                .into_iter()
+                .map(|step| PlaytestDiscardStep {
+                    label: step.label,
+                    discard_optional: step.optional,
+                    discard_hand: step
+                        .hand
+                        .iter()
+                        .map(|card| card.id().to_string())
+                        .collect(),
+                    drawn_discard_index: step.drawn_index,
+                })
+                .collect();
+            let first_discard_step = discard_steps.first();
             PlaytestActionOption {
                 action: action_to_playtest(action),
                 label: format_action(state, action),
@@ -74,12 +89,22 @@ pub fn playtest_legal_actions(
                 played_card: payment
                     .and_then(|req| req.played_card)
                     .map(|card| card.id().to_string()),
-                discard_optional: discard.map(|req| req.optional).unwrap_or(false),
-                discard_hand: discard_hand_view
-                    .as_ref()
-                    .map(|(slots, _)| slots.iter().map(|card| card.id().to_string()).collect())
+                discard_optional: first_discard_step
+                    .map(|step| step.discard_optional)
+                    .or_else(|| discard.map(|req| req.optional))
+                    .unwrap_or(false),
+                discard_hand: first_discard_step
+                    .map(|step| step.discard_hand.clone())
+                    .or_else(|| {
+                        discard_hand_view
+                            .as_ref()
+                            .map(|(slots, _)| slots.iter().map(|card| card.id().to_string()).collect())
+                    })
                     .unwrap_or_default(),
-                drawn_discard_index: discard_hand_view.and_then(|(_, index)| index),
+                drawn_discard_index: first_discard_step
+                    .and_then(|step| step.drawn_discard_index)
+                    .or_else(|| discard_hand_view.and_then(|(_, index)| index)),
+                discard_steps,
             }
         })
         .collect();

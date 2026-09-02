@@ -253,9 +253,17 @@ pub enum PlaytestAction {
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
-            rename = "discardHandIndex"
+            rename = "discardHandIndex",
+            alias = "discard_hand_index"
         )]
         discard_hand_index: Option<u8>,
+        #[serde(
+            default,
+            skip_serializing_if = "Vec::is_empty",
+            rename = "discardHandIndices",
+            alias = "discard_hand_indices"
+        )]
+        discard_hand_indices: Vec<Option<u8>>,
     },
     AttackOthers {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -263,9 +271,17 @@ pub enum PlaytestAction {
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
-            rename = "discardHandIndex"
+            rename = "discardHandIndex",
+            alias = "discard_hand_index"
         )]
         discard_hand_index: Option<u8>,
+        #[serde(
+            default,
+            skip_serializing_if = "Vec::is_empty",
+            rename = "discardHandIndices",
+            alias = "discard_hand_indices"
+        )]
+        discard_hand_indices: Vec<Option<u8>>,
     },
     PlayAlly {
         card: String,
@@ -282,7 +298,8 @@ pub enum PlaytestAction {
         #[serde(
             default,
             skip_serializing_if = "Vec::is_empty",
-            rename = "reservedHandIndices"
+            rename = "reservedHandIndices",
+            alias = "reserved_hand_indices"
         )]
         reserved_hand_indices: Vec<u8>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -290,7 +307,8 @@ pub enum PlaytestAction {
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
-            rename = "discardHandIndex"
+            rename = "discardHandIndex",
+            alias = "discard_hand_index"
         )]
         discard_hand_index: Option<u8>,
     },
@@ -301,7 +319,8 @@ pub enum PlaytestAction {
         #[serde(
             default,
             skip_serializing_if = "Vec::is_empty",
-            rename = "reservedHandIndices"
+            rename = "reservedHandIndices",
+            alias = "reserved_hand_indices"
         )]
         reserved_hand_indices: Vec<u8>,
     },
@@ -318,7 +337,8 @@ pub enum PlaytestAction {
         #[serde(
             default,
             skip_serializing_if = "Vec::is_empty",
-            rename = "reservedHandIndices"
+            rename = "reservedHandIndices",
+            alias = "reserved_hand_indices"
         )]
         reserved_hand_indices: Vec<u8>,
     },
@@ -334,7 +354,8 @@ pub enum PlaytestAction {
         #[serde(
             default,
             skip_serializing_if = "Vec::is_empty",
-            rename = "reservedHandIndices"
+            rename = "reservedHandIndices",
+            alias = "reserved_hand_indices"
         )]
         reserved_hand_indices: Vec<u8>,
     },
@@ -348,7 +369,8 @@ pub enum PlaytestAction {
         #[serde(
             default,
             skip_serializing_if = "Vec::is_empty",
-            rename = "reservedHandIndices"
+            rename = "reservedHandIndices",
+            alias = "reserved_hand_indices"
         )]
         reserved_hand_indices: Vec<u8>,
     },
@@ -357,6 +379,22 @@ pub enum PlaytestAction {
     AttackWithWeapon {
         weapon: String,
     },
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
+pub struct PlaytestDiscardStep {
+    pub label: String,
+    pub discard_optional: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub discard_hand: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawn_discard_index: Option<u8>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -378,4 +416,6 @@ pub struct PlaytestActionOption {
     pub discard_hand: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drawn_discard_index: Option<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub discard_steps: Vec<PlaytestDiscardStep>,
 }

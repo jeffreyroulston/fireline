@@ -17,6 +17,7 @@ export { PanelTopline } from "./panel-topline";
 export { PassLinePanel } from "./pass-line-panel";
 export { RunSettings } from "./run-settings";
 export { SectionHeading } from "./section-heading";
+export { Turn2KillHorizon } from "./turn-2-kill-horizon";
 export {
   AverageDamageStat,
   DistributionStatLabel,

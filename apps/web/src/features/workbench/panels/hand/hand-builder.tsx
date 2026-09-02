@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import {
   CARD_LIST,
   isPlayableDeckCard,
@@ -18,8 +18,10 @@ import {
   SectionHeading,
 } from "../../ui";
 import type { SolverMode } from "../../types";
+import type { ImportedLine } from "../../lib/import-line-tape";
 import { OPENING_HAND_SIZE } from "../../utils";
 import { CardStrip } from "./card-strip";
+import { LineImporter } from "./line-importer";
 import { SOLVER_MODES } from "./shared";
 
 const toolbarClass =
@@ -39,6 +41,8 @@ export function HandBuilder({
   seed,
   goFirst,
   turns,
+  turn2KillEnabled,
+  turn2KillThreshold,
   simType,
   rollouts,
   cpuCount,
@@ -55,14 +59,18 @@ export function HandBuilder({
   onShuffleDeck,
   onGoFirstChange,
   onTurnsChange,
+  onTurn2KillEnabledChange,
+  onTurn2KillThresholdChange,
   onSimTypeChange,
   onRolloutsChange,
   onMaxThreadsChange,
   onGlimpseEnabledChange,
   onMaxHandDurationSecsChange,
   onMaxCardDrawChange,
+  onSeedChange,
   onSolve,
   onCancel,
+  onImportLine,
   decksLoading = false,
   playtestPanel,
 }: {
@@ -76,6 +84,8 @@ export function HandBuilder({
   seed: number;
   goFirst: boolean;
   turns: number;
+  turn2KillEnabled: boolean;
+  turn2KillThreshold: number;
   simType: SimType;
   rollouts: number;
   cpuCount?: number;
@@ -92,19 +102,24 @@ export function HandBuilder({
   onShuffleDeck: () => void;
   onGoFirstChange: (value: boolean) => void;
   onTurnsChange: (value: number) => void;
+  onTurn2KillEnabledChange: (value: boolean) => void;
+  onTurn2KillThresholdChange: (value: number) => void;
   onSimTypeChange: (value: SimType) => void;
   onRolloutsChange: (value: number) => void;
   onMaxThreadsChange: (value: number | null) => void;
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
+  onSeedChange: (value: number) => void;
   onSolve: () => void;
   onCancel: () => void;
+  onImportLine: (line: ImportedLine) => void;
   decksLoading?: boolean;
   playtestPanel?: ReactNode;
 }) {
   const isPileMode = solverMode === "deck" || solverMode === "playtest";
   const isPlaytestMode = solverMode === "playtest";
+  const [importOpen, setImportOpen] = useState(false);
   const canDrawHand =
     decks.length > 0 && recognizedDeckCount >= OPENING_HAND_SIZE;
   const playableCards = CARD_LIST.filter(isPlayableDeckCard).sort((a, b) =>
@@ -187,8 +202,29 @@ export function HandBuilder({
             >
               Shuffle deck
             </button>
+            <button
+              className={cn(
+                buttonVariants({ intent: "secondary" }),
+                "whitespace-nowrap max-[620px]:w-full",
+              )}
+              type="button"
+              aria-expanded={importOpen}
+              onClick={() => setImportOpen((current) => !current)}
+            >
+              Import line
+            </button>
           </div>
         </div>
+
+        {importOpen && (
+          <div className="mt-[18px]">
+            <LineImporter
+              open={importOpen}
+              onOpenChange={setImportOpen}
+              onImport={onImportLine}
+            />
+          </div>
+        )}
 
         <div className="mt-[18px] flex items-end gap-3 max-[620px]:flex-col max-[620px]:items-stretch">
           <SearchableSelect
@@ -218,9 +254,11 @@ export function HandBuilder({
         <RunSettings
           goFirst={goFirst}
           turns={turns}
+          turn2KillEnabled={turn2KillEnabled}
+          turn2KillThreshold={turn2KillThreshold}
           simType={simType}
           rollouts={rollouts}
-          seed={shuffled ? seed : undefined}
+          seed={seed}
           orderedPile={isPileMode && shuffled}
           playtestMode={isPlaytestMode}
           cpuCount={cpuCount}
@@ -230,12 +268,15 @@ export function HandBuilder({
           maxCardDraw={maxCardDraw}
           onFirstChange={onGoFirstChange}
           onTurnsChange={onTurnsChange}
+          onTurn2KillEnabledChange={onTurn2KillEnabledChange}
+          onTurn2KillThresholdChange={onTurn2KillThresholdChange}
           onSimTypeChange={onSimTypeChange}
           onRolloutsChange={onRolloutsChange}
           onMaxThreadsChange={onMaxThreadsChange}
           onGlimpseEnabledChange={onGlimpseEnabledChange}
           onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
           onMaxCardDrawChange={onMaxCardDrawChange}
+          onSeedChange={onSeedChange}
         />
         {!isPlaytestMode && (
           <ActionBar

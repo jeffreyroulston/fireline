@@ -251,11 +251,7 @@ export function useCardDatabasePanel({
         attributionVersion: detailVersion!.attributionVersion,
         deckIds: includedDeckIds,
       }),
-    Boolean(
-      selectedCard &&
-        detailVersion &&
-        selectedCard.kind !== "material",
-    ),
+    Boolean(selectedCard && detailVersion),
   );
 
   const pairingsQuery = useCardDatabasePairingsQuery(

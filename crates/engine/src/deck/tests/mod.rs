@@ -727,7 +727,7 @@ fn deck_eval_all_hands_timeout_errors() {
         deck,
         samples: 2,
         go_first: true,
-        max_turns: 3,
+        max_turns: 4,
         seed: 17,
         sim_type: SimType::OracleOnly,
         rollouts: 1,

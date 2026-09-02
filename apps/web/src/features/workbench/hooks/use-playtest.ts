@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type {
   LineEvent,
   PlaytestAction,
@@ -14,16 +14,20 @@ import {
   playtestLegalActions,
   solve as apiSolve,
 } from "@/lib/api/client";
-import { DEFAULT_BUDGET } from "@/lib/budget";
-import { subtractCards } from "../utils";
+import { useRunTracker } from "@/lib/runs/run-tracker";
 import {
   type DiscardPrompt,
   discardOptionalFor,
   discardHandFor,
+  discardStepDrawnIndex,
+  discardStepHand,
+  discardStepOptional,
+  discardStepsFor,
   drawnDiscardIndexFor,
   excludedIndicesForDiscard,
   needsDiscardPicker,
   withDiscardChoice,
+  withDiscardChoices,
 } from "../panels/hand/discard-picker";
 import {
   type ReservePrompt,
@@ -32,6 +36,14 @@ import {
   inferReserveRequirement,
   withReservedHandIndices,
 } from "../panels/hand/reserve-picker";
+import type { LineHorizon, Turn2KillResults } from "../types";
+import {
+  buildSolveQueue,
+  oracleSolveRequest,
+  solveTurn2KillPair,
+} from "../lib/turn-2-kill-solve";
+
+const PLAYTEST_COMPARE_WORK_ID = "playtest-compare";
 
 type PlaytestPhase = "setup" | "playing" | "done" | "compared";
 
@@ -52,6 +64,13 @@ type UsePlaytestOptions = Readonly<{
   orderedDeck: CardId[];
   goFirst: boolean;
   turns: number;
+  turn2KillEnabled: boolean;
+  turn2KillThreshold: number;
+  seed: number;
+  maxThreads: number | null;
+  glimpseEnabled: boolean;
+  maxHandDurationSecs: number | null;
+  maxCardDraw: number | null;
   materials: DeckCounts;
   deck: DeckCounts | undefined;
 }>;
@@ -62,9 +81,18 @@ export function usePlaytest({
   orderedDeck,
   goFirst,
   turns,
+  turn2KillEnabled,
+  turn2KillThreshold,
+  seed,
+  maxThreads,
+  glimpseEnabled,
+  maxHandDurationSecs,
+  maxCardDraw,
   materials,
   deck,
 }: UsePlaytestOptions) {
+  const { beginDirectWork, endDirectWork } = useRunTracker();
+  const compareAbortRef = useRef<AbortController | null>(null);
   const [phase, setPhase] = useState<PlaytestPhase>("setup");
   const [busy, setBusy] = useState(false);
   const [comparing, setComparing] = useState(false);
@@ -76,6 +104,9 @@ export function usePlaytest({
   >([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [optimalResult, setOptimalResult] = useState<SolveResult | null>(null);
+  const [turn2KillResults, setTurn2KillResults] =
+    useState<Turn2KillResults | null>(null);
+  const [lineHorizon, setLineHorizonState] = useState<LineHorizon>(3);
   const [reservePrompt, setReservePrompt] = useState<ReservePrompt | null>(
     null,
   );
@@ -85,16 +116,35 @@ export function usePlaytest({
   const [discardPrompt, setDiscardPrompt] = useState<DiscardPrompt | null>(
     null,
   );
+  const [pendingDiscardChoices, setPendingDiscardChoices] = useState<
+    Array<number | null>
+  >([]);
   const [pendingStep, setPendingStep] = useState<PendingPlaytestStep | null>(
     null,
   );
 
-  const buildQueue = useCallback(() => {
-    if (orderedDeck.length === 0) {
-      return drawn;
-    }
-    return [...drawn, ...subtractCards(orderedDeck, [...hand, ...drawn])];
-  }, [drawn, hand, orderedDeck]);
+  const playtestMaxTurns = turn2KillEnabled ? 3 : turns;
+
+  const setLineHorizon = useCallback((horizon: LineHorizon) => {
+    setLineHorizonState(horizon);
+    setTurn2KillResults((current) => {
+      if (current) {
+        setOptimalResult(horizon === 2 ? current.turn2 : current.turn3);
+      }
+      return current;
+    });
+  }, []);
+
+  const clearCompareResults = useCallback(() => {
+    setOptimalResult(null);
+    setTurn2KillResults(null);
+    setLineHorizonState(3);
+  }, []);
+
+  const buildQueue = useCallback(
+    () => buildSolveQueue(hand, drawn, orderedDeck),
+    [drawn, hand, orderedDeck],
+  );
 
   const refreshLegalActions = useCallback(async (engine: PlaytestStateView["engine"]) => {
     const result = await playtestLegalActions({ state: engine });
@@ -102,19 +152,23 @@ export function usePlaytest({
   }, []);
 
   const reset = useCallback(() => {
+    compareAbortRef.current?.abort();
+    compareAbortRef.current = null;
+    endDirectWork(PLAYTEST_COMPARE_WORK_ID);
     setPhase("setup");
     setBoard(null);
     setEvents([]);
     setLegalActions([]);
     setHistory([]);
-    setOptimalResult(null);
+    clearCompareResults();
     setReservePrompt(null);
     setSelectedReserveIndices([]);
     setDiscardPrompt(null);
+    setPendingDiscardChoices([]);
     setPendingStep(null);
     setComparing(false);
     setError("");
-  }, []);
+  }, [clearCompareResults, endDirectWork]);
 
   const start = useCallback(async () => {
     if (hand.length < 2) {
@@ -131,14 +185,14 @@ export function usePlaytest({
       const result = await playtestInit({
         hand,
         goFirst,
-        maxTurns: turns,
+        maxTurns: playtestMaxTurns,
         materials,
         queue: buildQueue(),
       });
       setBoard(result.state);
       setEvents(result.events);
       setHistory([]);
-      setOptimalResult(null);
+      clearCompareResults();
       setPhase("playing");
       await refreshLegalActions(result.state.engine);
     } catch (startError) {
@@ -150,12 +204,13 @@ export function usePlaytest({
     }
   }, [
     buildQueue,
+    clearCompareResults,
     goFirst,
     hand,
     materials,
     orderedDeck.length,
+    playtestMaxTurns,
     refreshLegalActions,
-    turns,
   ]);
 
   const applyAction = useCallback(
@@ -187,7 +242,7 @@ export function usePlaytest({
         setHistory((current) => [...current, snapshot]);
         setBoard(result.state);
         setEvents((current) => [...current, ...result.events]);
-        setOptimalResult(null);
+        clearCompareResults();
         if (result.state.terminal) {
           setPhase("done");
           setLegalActions([]);
@@ -203,12 +258,38 @@ export function usePlaytest({
         setBusy(false);
       }
     },
-    [board, busy, events, refreshLegalActions],
+    [board, busy, clearCompareResults, events, refreshLegalActions],
   );
 
   const openDiscardOrApply = useCallback(
-    (step: PendingPlaytestStep) => {
+    (step: PendingPlaytestStep, stepIndex = 0, priorChoices: Array<number | null> = []) => {
       if (!board) {
+        return;
+      }
+      const steps = discardStepsFor(step.option);
+      if (steps.length > 0) {
+        const current = steps[stepIndex];
+        if (!current) {
+          void applyAction(withDiscardChoices(step.action, priorChoices));
+          return;
+        }
+        const hand = discardStepHand(current);
+        setPendingStep(step);
+        setPendingDiscardChoices(priorChoices);
+        setDiscardPrompt({
+          label: current.label,
+          action: step.action,
+          hand,
+          excludedIndices: excludedIndicesForDiscard(
+            hand,
+            step.option.playedCard,
+            step.reservedIndices,
+          ),
+          optional: discardStepOptional(current),
+          drawnIndex: discardStepDrawnIndex(current),
+          stepIndex,
+          stepCount: steps.length,
+        });
         return;
       }
       const discardHand = discardHandFor(step.option);
@@ -216,6 +297,8 @@ export function usePlaytest({
         void applyAction(step.action);
         return;
       }
+      setPendingDiscardChoices([]);
+      setPendingStep(step);
       setDiscardPrompt({
         label: step.option.label,
         action: step.action,
@@ -227,9 +310,34 @@ export function usePlaytest({
         ),
         optional: discardOptionalFor(step.option),
         drawnIndex: drawnDiscardIndexFor(step.option),
+        stepIndex: 0,
+        stepCount: 1,
       });
     },
     [applyAction, board],
+  );
+
+  const advanceDiscardOrApply = useCallback(
+    (step: PendingPlaytestStep, choices: Array<number | null>) => {
+      const steps = discardStepsFor(step.option);
+      if (steps.length > 0 && choices.length < steps.length) {
+        openDiscardOrApply(step, choices.length, choices);
+        return;
+      }
+      setPendingDiscardChoices([]);
+      setDiscardPrompt(null);
+      void applyAction(
+        steps.length > 0
+          ? withDiscardChoices(step.action, choices)
+          : withDiscardChoice(
+              step.action,
+              choices[0] === null
+                ? { skip: true }
+                : { handIndex: choices[0] ?? 0 },
+            ),
+      );
+    },
+    [applyAction, openDiscardOrApply],
   );
 
   const requestAction = useCallback(
@@ -261,6 +369,7 @@ export function usePlaytest({
         setDiscardPrompt(null);
         return;
       }
+      setPendingStep(step);
       openDiscardOrApply(step);
     },
     [board, busy, openDiscardOrApply],
@@ -299,25 +408,24 @@ export function usePlaytest({
 
   const confirmDiscard = useCallback(
     (handIndex: number) => {
-      if (!discardPrompt) {
+      if (!discardPrompt || !pendingStep) {
         return;
       }
-      void applyAction(
-        withDiscardChoice(discardPrompt.action, { handIndex }),
-      );
+      advanceDiscardOrApply(pendingStep, [...pendingDiscardChoices, handIndex]);
     },
-    [applyAction, discardPrompt],
+    [advanceDiscardOrApply, discardPrompt, pendingDiscardChoices, pendingStep],
   );
 
   const skipDiscard = useCallback(() => {
-    if (!discardPrompt) {
+    if (!discardPrompt || !pendingStep) {
       return;
     }
-    void applyAction(withDiscardChoice(discardPrompt.action, { skip: true }));
-  }, [applyAction, discardPrompt]);
+    advanceDiscardOrApply(pendingStep, [...pendingDiscardChoices, null]);
+  }, [advanceDiscardOrApply, discardPrompt, pendingDiscardChoices, pendingStep]);
 
   const cancelDiscard = useCallback(() => {
     setDiscardPrompt(null);
+    setPendingDiscardChoices([]);
     setPendingStep(null);
   }, []);
 
@@ -329,12 +437,13 @@ export function usePlaytest({
     setHistory((current) => current.slice(0, -1));
     setBoard(previous.board);
     setEvents(previous.events);
-    setOptimalResult(null);
+    clearCompareResults();
     setPhase(previous.board.terminal ? "done" : "playing");
     setError("");
     setReservePrompt(null);
     setSelectedReserveIndices([]);
     setDiscardPrompt(null);
+    setPendingDiscardChoices([]);
     setPendingStep(null);
     setBusy(true);
     try {
@@ -348,46 +457,102 @@ export function usePlaytest({
     } finally {
       setBusy(false);
     }
-  }, [busy, history, refreshLegalActions]);
+  }, [busy, clearCompareResults, history, refreshLegalActions]);
+
+  const cancelCompare = useCallback(() => {
+    compareAbortRef.current?.abort();
+  }, []);
 
   const finishAndCompare = useCallback(async () => {
     if (events.length === 0) {
       setError("Play at least one step before comparing.");
       return;
     }
+    const abort = new AbortController();
+    compareAbortRef.current = abort;
+    beginDirectWork({
+      id: PLAYTEST_COMPARE_WORK_ID,
+      label: "Playtest compare",
+      cancel: () => abort.abort(),
+    });
     setBusy(true);
     setComparing(true);
     setError("");
     try {
-      const result = await apiSolve({
-        hand: [...hand],
+      const queue = buildQueue();
+      const requestBase = oracleSolveRequest({
+        hand,
         goFirst,
-        maxTurns: turns,
-        simType: "oracle_only",
-        rollouts: 1,
-        seed: 42 as unknown as bigint,
         materials,
-        deck: deck ?? {},
-        queue: buildQueue(),
-        budget: DEFAULT_BUDGET,
-        maxThreads: null,
-        glimpseEnabled: true,
-        maxHandDurationSecs: null,
-        maxCardDraw: null,
+        deck,
+        queue,
+        seed,
+        maxThreads,
+        glimpseEnabled,
+        maxHandDurationSecs,
+        maxCardDraw,
       });
-      setOptimalResult(result as unknown as SolveResult);
+
+      if (turn2KillEnabled) {
+        const { turn2, turn3 } = await solveTurn2KillPair(requestBase, {
+          signal: abort.signal,
+        });
+        if (turn2.maxDamage >= turn2KillThreshold) {
+          setTurn2KillResults({
+            turn2,
+            turn3,
+            threshold: turn2KillThreshold,
+          });
+          setLineHorizonState(2);
+          setOptimalResult(turn2);
+        } else {
+          setTurn2KillResults(null);
+          setLineHorizonState(3);
+          setOptimalResult(turn3);
+        }
+      } else {
+        const result = await apiSolve(
+          { ...requestBase, maxTurns: turns },
+          { signal: abort.signal },
+        );
+        setTurn2KillResults(null);
+        setLineHorizonState(3);
+        setOptimalResult(result as unknown as SolveResult);
+      }
       setPhase("compared");
     } catch (compareError) {
+      if (abort.signal.aborted) {
+        return;
+      }
       setError(
         compareError instanceof Error
           ? compareError.message
           : "Could not run optimal comparison.",
       );
     } finally {
+      compareAbortRef.current = null;
+      endDirectWork(PLAYTEST_COMPARE_WORK_ID);
       setBusy(false);
       setComparing(false);
     }
-  }, [buildQueue, deck, events.length, goFirst, hand, materials, turns]);
+  }, [
+    beginDirectWork,
+    buildQueue,
+    deck,
+    endDirectWork,
+    events.length,
+    glimpseEnabled,
+    goFirst,
+    hand,
+    materials,
+    maxCardDraw,
+    maxHandDurationSecs,
+    maxThreads,
+    seed,
+    turn2KillEnabled,
+    turn2KillThreshold,
+    turns,
+  ]);
 
   return {
     phase,
@@ -399,6 +564,9 @@ export function usePlaytest({
     legalActions,
     canUndo: history.length > 0,
     optimalResult,
+    turn2KillResults,
+    lineHorizon,
+    setLineHorizon,
     reservePrompt,
     selectedReserveIndices,
     discardPrompt,
@@ -413,6 +581,7 @@ export function usePlaytest({
     cancelDiscard,
     undo,
     finishAndCompare,
+    cancelCompare,
     reset,
     setError,
   };

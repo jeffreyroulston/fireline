@@ -9,7 +9,8 @@ import {
   persistOptimizeResult,
 } from "./persist.js";
 import { runHub } from "./run-hub.js";
-import { fetchWorkerJson, postWorkerNdjson, WorkerError } from "./worker.js";
+import { fetchWorkerJson } from "./worker.js";
+import { consumeWorkerStream } from "./worker-stream.js";
 
 type EvaluateEvent =
   | {
@@ -165,76 +166,60 @@ export class RunDispatcher {
     body: DeckEvalRequest,
     signal: AbortSignal,
   ): Promise<void> {
-    while (true) {
-      try {
-        const { lines } = await postWorkerNdjson<EvaluateEvent>(
-          this.workerBase,
-          "/evaluate",
-          body,
-          signal,
-          { "X-Run-Id": runId },
-        );
-        for await (const event of lines) {
-          if (event.kind === "progress") {
-            const totalRollouts =
-              event.totalRollouts ??
-              (event as { total_rollouts?: number }).total_rollouts;
-            const payload = {
-              type: "progress" as const,
-              sample: event.sample,
-              total: event.total,
-              ...(event.rollout != null ? { rollout: event.rollout } : {}),
-              ...(totalRollouts != null ? { totalRollouts } : {}),
-            };
-            runHub.publish(runId, payload);
-          } else if (event.kind === "handProgress") {
-            const sampleIndex =
-              event.sampleIndex ??
-              (event as { sample_index?: number }).sample_index;
-            const totalRollouts =
-              event.totalRollouts ??
-              (event as { total_rollouts?: number }).total_rollouts;
-            if (sampleIndex == null || totalRollouts == null) {
-              continue;
-            }
-            runHub.publish(runId, {
-              type: "handProgress" as const,
-              sampleIndex,
-              phase: event.phase,
-              rollout: event.rollout,
-              totalRollouts,
-            });
-          } else if (event.kind === "memoryPressure") {
-            runHub.publish(runId, {
-              type: "memoryPressure" as const,
-              level: event.level,
-            });
-          } else if (event.kind === "heartbeat") {
-            // Worker keep-alive for undici body idle timeout; not forwarded to SSE.
-          } else if (event.kind === "error") {
-            throw new Error(event.message);
-          } else if (event.kind === "result" || event.kind === "partialResult") {
-            const { kind, ...result } = event;
-            const status = kind === "partialResult" ? "partial" : "complete";
-            await persistEvaluateResult(this.db, runId, result as DeckEvalResult, status);
-            runHub.publish(runId, {
-              type: "complete",
-              result,
-              ...(status === "partial" ? { partial: true } : {}),
-            });
+    const { result, partial } = await consumeWorkerStream<EvaluateEvent, DeckEvalResult>({
+      workerBase: this.workerBase,
+      path: "/evaluate",
+      body,
+      signal,
+      headers: { "X-Run-Id": runId },
+      onEvent: (event) => {
+        if (event.kind === "progress") {
+          const totalRollouts =
+            event.totalRollouts ??
+            (event as { total_rollouts?: number }).total_rollouts;
+          runHub.publish(runId, {
+            type: "progress",
+            sample: event.sample,
+            total: event.total,
+            ...(event.rollout != null ? { rollout: event.rollout } : {}),
+            ...(totalRollouts != null ? { totalRollouts } : {}),
+          });
+          return;
+        }
+        if (event.kind === "handProgress") {
+          const sampleIndex =
+            event.sampleIndex ??
+            (event as { sample_index?: number }).sample_index;
+          const totalRollouts =
+            event.totalRollouts ??
+            (event as { total_rollouts?: number }).total_rollouts;
+          if (sampleIndex == null || totalRollouts == null) {
             return;
           }
+          runHub.publish(runId, {
+            type: "handProgress",
+            sampleIndex,
+            phase: event.phase,
+            rollout: event.rollout,
+            totalRollouts,
+          });
+          return;
         }
-        throw new Error("Worker stream ended without a result");
-      } catch (error) {
-        if (signal.aborted) throw error;
-        if (error instanceof WorkerError && error.status === 503) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          continue;
+        if (event.kind === "memoryPressure") {
+          runHub.publish(runId, {
+            type: "memoryPressure",
+            level: event.level,
+          });
         }
-        throw error;
-      }
-    }
+      },
+    });
+    const status = partial ? "partial" : "complete";
+    await persistEvaluateResult(this.db, runId, result, status);
+    runHub.publish(runId, {
+      type: "complete",
+      result,
+      ...(partial ? { partial: true } : {}),
+    });
   }
 
   private async processOptimize(
@@ -242,65 +227,48 @@ export class RunDispatcher {
     body: OptimizeRequest,
     signal: AbortSignal,
   ): Promise<void> {
-    while (true) {
-      try {
-        const { lines } = await postWorkerNdjson<OptimizeEvent>(
-          this.workerBase,
-          "/optimize",
-          body,
-          signal,
-          { "X-Run-Id": runId },
-        );
-        for await (const event of lines) {
-          if (event.kind === "progress") {
-            const { kind: _kind, ...progress } = event;
-            runHub.publish(runId, { type: "progress", ...progress });
-          } else if (event.kind === "handProgress") {
-            const sampleIndex =
-              event.sampleIndex ?? event.sample_index;
-            const totalRollouts =
-              event.totalRollouts ?? event.total_rollouts;
-            if (sampleIndex == null || totalRollouts == null) {
-              continue;
-            }
-            runHub.publish(runId, {
-              type: "handProgress" as const,
-              sampleIndex,
-              phase: event.phase,
-              rollout: event.rollout,
-              totalRollouts,
-            });
-          } else if (event.kind === "memoryPressure") {
-            runHub.publish(runId, {
-              type: "memoryPressure" as const,
-              level: event.level,
-            });
-          } else if (event.kind === "heartbeat") {
-            // Worker keep-alive for undici body idle timeout; not forwarded to SSE.
-          } else if (event.kind === "error") {
-            throw new Error(event.message);
-          } else if (event.kind === "result" || event.kind === "partialResult") {
-            const { kind, ...result } = event;
-            const status = kind === "partialResult" ? "partial" : "complete";
-            await persistOptimizeResult(this.db, runId, result as OptimizeResult, status);
-            runHub.publish(runId, {
-              type: "complete",
-              result,
-              ...(status === "partial" ? { partial: true } : {}),
-            });
+    const { result, partial } = await consumeWorkerStream<OptimizeEvent, OptimizeResult>({
+      workerBase: this.workerBase,
+      path: "/optimize",
+      body,
+      signal,
+      headers: { "X-Run-Id": runId },
+      onEvent: (event) => {
+        if (event.kind === "progress") {
+          const { kind: _kind, ...progress } = event;
+          runHub.publish(runId, { type: "progress", ...progress });
+          return;
+        }
+        if (event.kind === "handProgress") {
+          const sampleIndex = event.sampleIndex ?? event.sample_index;
+          const totalRollouts = event.totalRollouts ?? event.total_rollouts;
+          if (sampleIndex == null || totalRollouts == null) {
             return;
           }
+          runHub.publish(runId, {
+            type: "handProgress",
+            sampleIndex,
+            phase: event.phase,
+            rollout: event.rollout,
+            totalRollouts,
+          });
+          return;
         }
-        throw new Error("Worker stream ended without a result");
-      } catch (error) {
-        if (signal.aborted) throw error;
-        if (error instanceof WorkerError && error.status === 503) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          continue;
+        if (event.kind === "memoryPressure") {
+          runHub.publish(runId, {
+            type: "memoryPressure",
+            level: event.level,
+          });
         }
-        throw error;
-      }
-    }
+      },
+    });
+    const status = partial ? "partial" : "complete";
+    await persistOptimizeResult(this.db, runId, result, status);
+    runHub.publish(runId, {
+      type: "complete",
+      result,
+      ...(partial ? { partial: true } : {}),
+    });
   }
 }
 

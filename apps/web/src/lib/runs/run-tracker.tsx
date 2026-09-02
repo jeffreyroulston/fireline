@@ -43,6 +43,7 @@ import type {
   RunKind,
   TrackedRun,
   WorkerState,
+  DirectWork,
 } from "./types";
 import {
   aggregateWorkerState,
@@ -84,6 +85,10 @@ interface RunTrackerContextValue {
     initialProgress: OptimizeProgress,
   ) => Promise<string>;
   cancelRun: (runId: string) => Promise<void>;
+  directWork: DirectWork[];
+  beginDirectWork: (work: DirectWork) => void;
+  endDirectWork: (id: string) => void;
+  cancelDirectWork: (id: string) => void;
   saveRun: (runId: string) => Promise<void>;
   dismissFinished: (runId: string) => void;
   clearQueue: () => Promise<void>;
@@ -164,12 +169,17 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
   const [maxConcurrency, setMaxConcurrency] = useState(2);
   const [runningCount, setRunningCount] = useState(0);
   const [queuedCount, setQueuedCount] = useState(0);
+  const [directWork, setDirectWork] = useState<Map<string, DirectWork>>(
+    () => new Map(),
+  );
 
   const streamsRef = useRef<Map<string, AbortController>>(new Map());
   const settledRef = useRef<Set<string>>(new Set());
   const syncingRef = useRef(false);
   const runsRef = useRef(runs);
   runsRef.current = runs;
+  const directWorkRef = useRef(directWork);
+  directWorkRef.current = directWork;
 
   const updateRun = useCallback(
     (runId: string, patch: (current: TrackedRun) => TrackedRun) => {
@@ -598,6 +608,29 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
     [detachStream, syncFromServer],
   );
 
+  const beginDirectWork = useCallback((work: DirectWork) => {
+    setDirectWork((current) => {
+      const next = new Map(current);
+      next.set(work.id, work);
+      return next;
+    });
+  }, []);
+
+  const endDirectWork = useCallback((id: string) => {
+    setDirectWork((current) => {
+      if (!current.has(id)) {
+        return current;
+      }
+      const next = new Map(current);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const cancelDirectWork = useCallback((id: string) => {
+    directWorkRef.current.get(id)?.cancel();
+  }, []);
+
   const saveRun = useCallback(
     async (runId: string) => {
       try {
@@ -630,31 +663,30 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
 
   const clearQueue = useCallback(async () => {
     const snapshot = runsMapToArray(runsRef.current);
-    const live = snapshot.filter((run) => isLiveRunStatus(run.status));
     const finished = snapshot.filter((run) =>
       isFinishedQueueStatus(run.status),
     );
 
-    await Promise.all(live.map((run) => cancelRun(run.id)));
-
-    if (finished.length > 0) {
-      setDismissedRunIds((current) =>
-        dismissAllRunIds(
-          current,
-          finished.map((run) => run.id),
-        ),
-      );
-      setRuns((current) => {
-        const next = new Map(current);
-        for (const run of finished) {
-          next.delete(run.id);
-        }
-        return next;
-      });
+    if (finished.length === 0) {
+      return;
     }
 
+    setDismissedRunIds((current) =>
+      dismissAllRunIds(
+        current,
+        finished.map((run) => run.id),
+      ),
+    );
+    setRuns((current) => {
+      const next = new Map(current);
+      for (const run of finished) {
+        next.delete(run.id);
+      }
+      return next;
+    });
+
     void syncFromServer();
-  }, [cancelRun, syncFromServer]);
+  }, [syncFromServer]);
 
   const runsArray = useMemo(() => runsMapToArray(runs), [runs]);
   const liveRuns = useMemo(
@@ -711,15 +743,24 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
   );
 
   const visibleFinishedCount = finishedRuns.length;
+  const directWorkList = useMemo(
+    () => [...directWork.values()],
+    [directWork],
+  );
   const workerState = aggregateWorkerState(
     workerReachable,
-    liveRuns.length,
+    liveRuns.length + directWorkList.length,
     visibleFinishedCount,
   );
   const queueSummary = queueSummaryLabel(
     runningCount,
     queuedCount,
     maxConcurrency,
+    directWorkList.length === 1
+      ? (directWorkList[0]?.label ?? null)
+      : directWorkList.length > 1
+        ? `${directWorkList.length} tasks`
+        : null,
   );
 
   const value = useMemo(
@@ -740,6 +781,10 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
       startEvaluate,
       startOptimize,
       cancelRun,
+      directWork: directWorkList,
+      beginDirectWork,
+      endDirectWork,
+      cancelDirectWork,
       saveRun,
       dismissFinished,
       clearQueue,
@@ -762,6 +807,10 @@ export function RunTrackerProvider({ children }: { children: ReactNode }) {
       startEvaluate,
       startOptimize,
       cancelRun,
+      directWorkList,
+      beginDirectWork,
+      endDirectWork,
+      cancelDirectWork,
       saveRun,
       dismissFinished,
       clearQueue,

@@ -1180,21 +1180,14 @@ impl State {
     /// With two peeked cards the engine explores at most five layouts: both on
     /// top (two orders), one top / one bottom (two), and both on bottom once
     /// (original relative order — bottom order is not chosen separately).
-    /// Prefer [`glimpse_relevant_layouts`] when expanding search actions — it
-    /// collapses layouts that agree on the next [`draw_potential`] queue cards.
     pub fn glimpse_layout_count(self) -> u8 {
         Self::glimpse_tail_orders(self.queue, self.queue_pos as usize, self.queue_len as usize)
             .len() as u8
     }
 
-    /// Glimpse layout indices worth exploring given [`draw_potential`].
-    ///
-    /// - `draw_potential == 0`: empty — skip Glimpse (`glimpse_layout: None`).
-    /// - `draw_potential == 1`: only the next drawn card matters, so layouts that
-    ///   share the same top card collapse (e.g. `A,B,mid` with `A,mid,B`).
-    /// - Higher potentials keep layouts that differ in the first K queue cards.
-    ///
-    /// Indices refer to [`glimpse_tail_orders`] / [`apply_glimpse_layout`].
+    /// Collapsed Glimpse layout indices keyed on the next [`draw_potential`] queue
+    /// cards. Kept for regression tests; solver and playtest both explore
+    /// [`glimpse_playtest_layouts`].
     pub fn glimpse_relevant_layouts(self) -> Vec<u8> {
         let draws = self.draw_potential();
         if draws == 0 || self.queue_pos >= self.queue_len {

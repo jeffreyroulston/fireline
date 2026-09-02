@@ -15,7 +15,8 @@ use std::cell::RefCell;
 
 use super::actions::{action_cost, is_fast_phase, tape_phase};
 use super::payment::{
-    ActionPayment, DiscardPayment, ally_attack_discard_requirement, resolve_discard,
+    ActionPayment, AttackDiscardStep, DiscardPayment, ally_attack_discard_requirement,
+    next_discard_payment, preview_hand_for_attack_discard, resolve_discard,
 };
 
 pub fn apply_action(state: State, action: Action) -> (State, Vec<LineEvent>) {
@@ -266,19 +267,19 @@ pub(crate) fn apply_into(
         }
         Action::AttackArthur(index) => attack_ally(&mut state, index as usize, tape, discard),
         Action::AttackOthers => {
+            let mut discard_queue = payment
+                .map(|payment| payment.discards.clone())
+                .unwrap_or_default();
             let mut index = 0;
             while index < state.ally_len as usize {
                 if state.allies[index].card() != Card::Arthur && state.can_ally_attack(index) {
                     let card = state.allies[index].card();
-                    let pay = if discard != DiscardPayment::Auto
-                        && ally_attack_discard_requirement(state, card).is_some()
-                    {
-                        let pay = discard;
-                        discard = DiscardPayment::Auto;
-                        pay
-                    } else {
-                        DiscardPayment::Auto
-                    };
+                    let pay = next_discard_payment(
+                        &mut discard_queue,
+                        &mut discard,
+                        state,
+                        card,
+                    );
                     attack_ally(&mut state, index, tape, pay);
                 }
                 index += 1;
@@ -648,6 +649,89 @@ fn attack_ally(state: &mut State, index: usize, tape: &mut EventTape, discard: D
                     .with_drawn(drawn)
                     .with_discarded(discarded),
             );
+        }
+    }
+}
+
+/// Preview every on-attack discard step for an attack action (simulated in attack order).
+pub fn attack_discard_steps(mut state: State, action: Action) -> Vec<AttackDiscardStep> {
+    let mut steps = Vec::new();
+    match action {
+        Action::AttackArthur(index) => {
+            let index = index as usize;
+            if index < state.ally_len as usize && state.can_ally_attack(index) {
+                let card = state.allies[index].card();
+                if let Some(req) = ally_attack_discard_requirement(state, card) {
+                    let (hand, drawn_index) = preview_hand_for_attack_discard(state, index, req);
+                    steps.push(AttackDiscardStep {
+                        label: card.id().to_string(),
+                        optional: req.optional,
+                        hand,
+                        drawn_index,
+                    });
+                }
+            }
+        }
+        Action::AttackOthers => {
+            let mut index = 0;
+            while index < state.ally_len as usize {
+                if state.allies[index].card() != Card::Arthur && state.can_ally_attack(index) {
+                    let card = state.allies[index].card();
+                    if let Some(req) = ally_attack_discard_requirement(state, card) {
+                        let (hand, drawn_index) = preview_hand_for_attack_discard(state, index, req);
+                        let step_no = steps.len() + 1;
+                        steps.push(AttackDiscardStep {
+                            label: format!("{} ({step_no})", card.id()),
+                            optional: req.optional,
+                            hand,
+                            drawn_index,
+                        });
+                    }
+                    advance_attack_ally_silent(&mut state, index, DiscardPayment::Auto);
+                }
+                index += 1;
+            }
+        }
+        _ => {}
+    }
+    steps
+}
+
+/// Apply ally attack state changes without recording tape events (preview simulation).
+pub(crate) fn advance_attack_ally_silent(
+    state: &mut State,
+    index: usize,
+    discard: DiscardPayment,
+) {
+    let ally = state.allies[index];
+    let card = ally.card();
+    let hot_cake_buff = ally.attack_buff();
+    if hot_cake_buff > 0 {
+        state.allies[index].set_attack_buff(0);
+    }
+    let mut power = state.ally_power(ally);
+    if card == Card::PepperedChef && state.agility > 0 {
+        let buff = state.agility.min(2);
+        power = power.saturating_add(buff);
+        state.agility = state.agility.saturating_sub(buff);
+    }
+    power = power.saturating_add(hot_cake_buff);
+    state.add_damage(power);
+    state.allies[index].set_awake(false);
+    if card == Card::CaptivatingCutthroat && state.is_assassin() {
+        state.champion_damaged = true;
+    }
+    if matches!(card, Card::HastyMessenger | Card::RedHare)
+        && let Some(_discarded) = resolve_discard(state, discard)
+    {
+        let _drawn = state.draw_unknown();
+    }
+    if card == Card::CorhaziCourier && state.is_assassin() {
+        let _drawn = state.draw_unknown();
+        if let Some(discarded) = resolve_discard(state, discard) {
+            if discarded.is_fire() {
+                state.add_damage(1);
+            }
         }
     }
 }

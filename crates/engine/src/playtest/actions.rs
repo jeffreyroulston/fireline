@@ -111,10 +111,12 @@ pub(super) fn action_to_playtest(action: Action) -> PlaytestAction {
             index,
             skip_discard: None,
             discard_hand_index: None,
+            discard_hand_indices: Vec::new(),
         },
         Action::AttackOthers => PlaytestAction::AttackOthers {
             skip_discard: None,
             discard_hand_index: None,
+            discard_hand_indices: Vec::new(),
         },
         Action::PlayAlly {
             card,

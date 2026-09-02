@@ -492,3 +492,54 @@ fn playtest_increasing_danger_manual_reserve_labels_correctly() {
         format_line_event(play_event)
     );
 }
+
+#[test]
+fn playtest_attack_others_two_hasty_discard_steps() {
+    use crate::line_event::EventKind;
+
+    let mut state = State::with_queue(
+        &[
+            Card::Brick,
+            Card::Brick,
+            Card::KingdomInformant,
+            Card::IgnitedStab,
+        ],
+        true,
+        1,
+        &[Card::SableRemnant, Card::ClumsyApprentice],
+    );
+    state.turn = 1;
+    state.add_ally(Card::HastyMessenger, true, false);
+    state.add_ally(Card::HastyMessenger, true, false);
+
+    let engine = state_to_engine(state);
+    let legal = playtest_legal_actions(&PlaytestLegalActionsRequest {
+        state: engine.clone(),
+    })
+    .expect("legal");
+    let attack = legal
+        .actions
+        .iter()
+        .find(|opt| matches!(opt.action, PlaytestAction::AttackOthers { .. }))
+        .expect("attack others");
+    assert_eq!(attack.discard_steps.len(), 2);
+
+    let mut action = attack.action.clone();
+    if let PlaytestAction::AttackOthers {
+        discard_hand_indices, ..
+    } = &mut action
+    {
+        *discard_hand_indices = vec![Some(2), Some(3)];
+    } else {
+        panic!("expected attack others");
+    }
+
+    let applied = playtest_apply(&PlaytestApplyRequest { state: engine, action })
+        .expect("apply two attack discards");
+    let draws = applied
+        .events
+        .iter()
+        .filter(|event| event.kind == EventKind::OnAttackDraw)
+        .count();
+    assert_eq!(draws, 2, "{:?}", applied.events);
+}

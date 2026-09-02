@@ -5,6 +5,16 @@ import { CARDS, type CardId } from "@/lib/engine";
 import { cn, buttonVariants } from "@/lib/utils";
 import { SectionHeading, HandCard } from "../../ui";
 
+export type PlaytestDiscardStep = Readonly<{
+  label: string;
+  discardOptional?: boolean;
+  discard_optional?: boolean;
+  discardHand?: string[];
+  discard_hand?: string[];
+  drawnDiscardIndex?: number | null;
+  drawn_discard_index?: number | null;
+}>;
+
 export type DiscardPrompt = Readonly<{
   label: string;
   action: PlaytestAction;
@@ -12,7 +22,16 @@ export type DiscardPrompt = Readonly<{
   excludedIndices: number[];
   optional: boolean;
   drawnIndex: number | null;
+  stepIndex: number;
+  stepCount: number;
 }>;
+
+export function discardStepsFor(option: {
+  discardSteps?: PlaytestDiscardStep[];
+  discard_steps?: PlaytestDiscardStep[];
+}): PlaytestDiscardStep[] {
+  return option.discardSteps ?? option.discard_steps ?? [];
+}
 
 export function discardHandFor(option: {
   discardHand?: string[];
@@ -22,10 +41,14 @@ export function discardHandFor(option: {
 }
 
 export function needsDiscardPicker(option: {
+  discardSteps?: PlaytestDiscardStep[];
+  discard_steps?: PlaytestDiscardStep[];
   discardHand?: string[];
   discard_hand?: string[];
 }): boolean {
-  return discardHandFor(option).length > 0;
+  return (
+    discardStepsFor(option).length > 0 || discardHandFor(option).length > 0
+  );
 }
 
 export function drawnDiscardIndexFor(option: {
@@ -41,6 +64,19 @@ export function discardOptionalFor(option: {
   discard_optional?: boolean;
 }): boolean {
   return option.discardOptional ?? option.discard_optional ?? false;
+}
+
+export function discardStepOptional(step: PlaytestDiscardStep): boolean {
+  return step.discardOptional ?? step.discard_optional ?? false;
+}
+
+export function discardStepHand(step: PlaytestDiscardStep): string[] {
+  return step.discardHand ?? step.discard_hand ?? [];
+}
+
+export function discardStepDrawnIndex(step: PlaytestDiscardStep): number | null {
+  const index = step.drawnDiscardIndex ?? step.drawn_discard_index;
+  return index ?? null;
 }
 
 export function excludedIndicesForDiscard(
@@ -66,7 +102,12 @@ export function hasDiscardSelection(action: PlaytestAction): boolean {
     skip_discard?: boolean;
     discardHandIndex?: number;
     discard_hand_index?: number;
+    discardHandIndices?: Array<number | null>;
+    discard_hand_indices?: Array<number | null>;
   };
+  if ((raw.discardHandIndices ?? raw.discard_hand_indices ?? []).length > 0) {
+    return true;
+  }
   return (
     raw.skipDiscard === true ||
     raw.skip_discard === true ||
@@ -79,14 +120,29 @@ export function withDiscardChoice(
   action: PlaytestAction,
   choice: { skip: true } | { handIndex: number },
 ): PlaytestAction {
+  return withDiscardChoices(action, [
+    "skip" in choice ? null : choice.handIndex,
+  ]);
+}
+
+export function withDiscardChoices(
+  action: PlaytestAction,
+  choices: Array<number | null>,
+): PlaytestAction {
   switch (action.op) {
     case "playAlly":
+      return {
+        ...action,
+        skip_discard: choices[0] === null ? true : null,
+        discard_hand_index: choices[0] ?? null,
+      };
     case "attackArthur":
     case "attackOthers":
       return {
         ...action,
-        skip_discard: "skip" in choice ? true : null,
-        discard_hand_index: "handIndex" in choice ? choice.handIndex : null,
+        skip_discard: null,
+        discard_hand_index: null,
+        discard_hand_indices: choices,
       };
     default:
       return action;
@@ -108,11 +164,16 @@ export function DiscardPicker({
   onCancel: () => void;
   onSkip?: () => void;
 }) {
+  const stepLabel =
+    prompt.stepCount > 1
+      ? `${prompt.label} (${prompt.stepIndex + 1}/${prompt.stepCount})`
+      : prompt.label;
+
   return (
     <div className="mb-2 border border-primary/40 bg-surface-muted px-3 py-3">
       <SectionHeading className="mb-2" title="DISCARD" />
       <p className="mt-0 mb-3 font-mono text-[11px] tracking-[0.06em] text-muted">
-        {prompt.label}
+        {stepLabel}
         {prompt.optional ? " · Optional" : ""}
       </p>
       <div className="mb-3 grid grid-cols-7 gap-2">

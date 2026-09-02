@@ -7,15 +7,13 @@ import { settingsRowClass } from "@/lib/utils/ui-classes";
 import { SectionHeading } from "./section-heading";
 
 const advancedDetailsClass = cn(
-  "w-full overflow-hidden rounded-[2px] border border-border bg-[rgba(251,253,252,0.85)]",
+  "disclosure-chevron w-full overflow-hidden rounded-[2px] border border-border bg-[rgba(251,253,252,0.85)]",
   "[&>summary]:flex [&>summary]:h-[42px] [&>summary]:cursor-pointer [&>summary]:list-none",
   "[&>summary]:items-center [&>summary]:justify-between [&>summary]:gap-3",
   "[&>summary]:px-[11px]",
   "[&[open]>summary]:border-b [&[open]>summary]:border-border",
   "[&>summary::-webkit-details-marker]:hidden",
   "[&>summary_span]:font-mono [&>summary_span]:text-[10px] [&>summary_span]:tracking-[0.05em] [&>summary_span]:text-foreground [&>summary_span]:uppercase",
-  "[&>summary::after]:font-mono [&>summary::after]:text-[16px] [&>summary::after]:leading-none [&>summary::after]:text-foreground [&>summary::after]:content-['▾']",
-  "[&[open]>summary::after]:content-['▴']",
 );
 
 const advancedBodyClass = "grid gap-3.5 p-3.5";
@@ -23,6 +21,8 @@ const advancedBodyClass = "grid gap-3.5 p-3.5";
 export function RunSettings({
   goFirst,
   turns,
+  turn2KillEnabled = false,
+  turn2KillThreshold = 19,
   simType,
   rollouts,
   seed,
@@ -35,15 +35,20 @@ export function RunSettings({
   playtestMode = false,
   onFirstChange,
   onTurnsChange,
+  onTurn2KillEnabledChange,
+  onTurn2KillThresholdChange,
   onSimTypeChange,
   onRolloutsChange,
   onMaxThreadsChange,
   onGlimpseEnabledChange,
   onMaxHandDurationSecsChange,
   onMaxCardDrawChange,
+  onSeedChange,
 }: {
   goFirst: boolean;
   turns: number;
+  turn2KillEnabled?: boolean;
+  turn2KillThreshold?: number;
   simType: SimType;
   rollouts: number;
   seed?: number;
@@ -56,16 +61,20 @@ export function RunSettings({
   playtestMode?: boolean;
   onFirstChange: (value: boolean) => void;
   onTurnsChange: (value: number) => void;
+  onTurn2KillEnabledChange?: (value: boolean) => void;
+  onTurn2KillThresholdChange?: (value: number) => void;
   onSimTypeChange: (value: SimType) => void;
   onRolloutsChange: (value: number) => void;
   onMaxThreadsChange: (value: number | null) => void;
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
+  onSeedChange?: (value: number) => void;
 }) {
+  const showTurn2Kill = Boolean(onTurn2KillEnabledChange);
   const threadMax = Math.max(1, cpuCount ?? 1);
   const threadDisplay = maxThreads ?? threadMax;
-  const glimpseLocked = simType === "fire_brick";
+  const glimpseLocked = !playtestMode && simType === "fire_brick";
 
   return (
     <div className="mt-7 grid gap-0 border-t border-border pt-5">
@@ -85,6 +94,7 @@ export function RunSettings({
           Turn horizon
           <select
             value={turns}
+            disabled={showTurn2Kill && turn2KillEnabled}
             onChange={(event) => onTurnsChange(Number(event.target.value))}
           >
             <option value={2}>2 turns</option>
@@ -124,7 +134,6 @@ export function RunSettings({
         )}
       </div>
       )}
-      {!playtestMode && (
       <div className={cn(settingsRowClass, "mt-3.5")}>
         <div className="grid flex-1 gap-[7px] font-mono text-[10px] tracking-[0.05em] text-muted uppercase">
           <span>Advanced</span>
@@ -133,6 +142,57 @@ export function RunSettings({
               <span>Options</span>
             </summary>
             <div className={advancedBodyClass}>
+              {onSeedChange != null && seed != null ? (
+                <label>
+                  Seed
+                  <input
+                    type="number"
+                    min={0}
+                    max={4_294_967_295}
+                    value={seed}
+                    onChange={(event) => {
+                      const next = Number(event.target.value);
+                      if (Number.isFinite(next) && next >= 0) {
+                        onSeedChange(next);
+                      }
+                    }}
+                  />
+                </label>
+              ) : null}
+              {showTurn2Kill ? (
+                <div className={settingsRowClass}>
+                  <label>
+                    2 turn kill
+                    <span className="flex h-[42px] w-full items-center gap-2.5 rounded-[2px] border border-border bg-[rgba(251,253,252,0.85)] px-[11px]">
+                      <input
+                        type="checkbox"
+                        checked={turn2KillEnabled}
+                        onChange={(event) =>
+                          onTurn2KillEnabledChange?.(event.target.checked)
+                        }
+                      />
+                      <span className="font-mono text-[10px] tracking-[0.05em] text-foreground uppercase">
+                        {turn2KillEnabled ? "Runs 2- and 3-turn sims" : "Off"}
+                      </span>
+                    </span>
+                  </label>
+                  <label className={cn(!turn2KillEnabled && "opacity-55")}>
+                    Kill threshold
+                    <input
+                      type="number"
+                      min={1}
+                      disabled={!turn2KillEnabled}
+                      value={turn2KillThreshold}
+                      onChange={(event) => {
+                        const next = Number(event.target.value);
+                        if (Number.isFinite(next) && next > 0) {
+                          onTurn2KillThresholdChange?.(next);
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+              ) : null}
               <div className={cn(settingsRowClass)}>
                 <label>
                   Processing power (Max {threadMax})
@@ -231,12 +291,11 @@ export function RunSettings({
           </details>
         </div>
       </div>
-      )}
-      {seed != null && (
-        <p className="mt-3 font-mono text-[11px] tracking-[0.06em] text-muted [&_strong]:font-medium [&_strong]:text-foreground">
-          Seed <strong>{seed}</strong>
+      {playtestMode ? (
+        <p className="mt-2 text-xs leading-[1.4] text-muted">
+          Playtest compare uses an oracle solve on the same hand and draw queue.
         </p>
-      )}
+      ) : null}
       {simType !== "fire_brick" && !playtestMode && (
         <p className="mt-2 text-xs leading-[1.4] text-muted">
           {orderedPile

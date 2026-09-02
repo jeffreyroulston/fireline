@@ -16,6 +16,7 @@ import {
   type ApiCardRow,
   type WorkerVersion,
 } from "./shared";
+import { consumeSolveStream } from "./ndjson";
 
 export type { ApiCardRow, WorkerVersion } from "./shared";
 
@@ -48,14 +49,21 @@ export async function fetchCards(): Promise<ApiCardRow[]> {
 
 export async function solve(
   request: SolveRequest,
+  options?: { signal?: AbortSignal },
 ): Promise<SolveResult & { sampleId?: string | null }> {
   const response = await apiFetch("/solve", {
     method: "POST",
     body: JSON.stringify(request, (_key, value) =>
       typeof value === "bigint" ? Number(value) : value,
     ),
+    signal: options?.signal,
   });
-  return response.json();
+  if (!response.body) {
+    throw new Error("Solve response had no body");
+  }
+  return consumeSolveStream<SolveResult & { sampleId?: string | null }>(
+    response.body,
+  );
 }
 
 export async function playtestInit(

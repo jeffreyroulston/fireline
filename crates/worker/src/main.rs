@@ -12,7 +12,7 @@ use ga_fire_engine::{
     PlaytestLegalActionsResult, PressureLevel, SimType, SolveRequest, SolveResult, card_catalog,
     current_pressure, evaluate_with_hand_progress_cancel, hand_threads, is_save_requested_on,
     memory_config, new_cancel_flag, optimize_with_hand_progress, playtest_apply, playtest_init,
-    playtest_legal_actions, request_cancel, request_save,
+    playtest_legal_actions, request_cancel, request_save, solve,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -92,6 +92,20 @@ enum OptimizeStreamEvent {
     Heartbeat,
     Result(Box<OptimizeResult>),
     PartialResult(Box<OptimizeResult>),
+    Error {
+        message: String,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+enum SolveStreamEvent {
+    #[serde(rename_all = "camelCase")]
+    MemoryPressure {
+        level: PressureLevel,
+    },
+    Heartbeat,
+    Result(Box<SolveResult>),
     Error {
         message: String,
     },
@@ -180,19 +194,48 @@ async fn cards() -> Json<Vec<ga_fire_engine::CardDef>> {
 
 async fn solve_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(mut request): Json<SolveRequest>,
-) -> Result<Json<SolveResult>, StatusCode> {
-    let _permit = state
+) -> Result<Response, StatusCode> {
+    let permit = state
         .semaphore
-        .try_acquire()
+        .clone()
+        .try_acquire_owned()
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     request.budget = merge_budget(request.budget, state.budget);
-    // CPU-bound search; keep it off the async runtime threads.
-    tokio::task::spawn_blocking(move || ga_fire_engine::solve(&request))
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .map(Json)
-        .map_err(|_| StatusCode::BAD_REQUEST)
+    let run_id = run_id_from_headers(&headers);
+    let jobs = state.jobs.clone();
+    stream_ndjson(move |tx| {
+        let _permit = permit;
+        let cancel = new_cancel_flag();
+        let _job_guard = register_job(jobs, run_id, cancel.clone());
+        let pressure_stop = Arc::new(AtomicBool::new(false));
+        spawn_disconnect_watch(tx.clone(), cancel.clone(), pressure_stop.clone());
+        spawn_memory_pressure_watch(
+            "ga-fire-solve-pressure",
+            tx.clone(),
+            pressure_stop.clone(),
+            cancel.clone(),
+            |level| SolveStreamEvent::MemoryPressure { level },
+        );
+        spawn_heartbeat_watch(
+            tx.clone(),
+            pressure_stop.clone(),
+            cancel.clone(),
+            SolveStreamEvent::Heartbeat,
+        );
+        let _cancel_guard = ga_fire_engine::install_cancel(cancel.clone());
+        let result = solve(&request);
+        pressure_stop.store(true, Ordering::Relaxed);
+        let event = match result {
+            Ok(value) => SolveStreamEvent::Result(Box::new(value)),
+            Err(error) => SolveStreamEvent::Error {
+                message: error.to_string(),
+            },
+        };
+        let _ = send_event(&tx, &event);
+    })
+    .await
 }
 
 async fn playtest_init_handler(
@@ -259,7 +302,13 @@ async fn evaluate_handler(
         let _job_guard = register_job(jobs, run_id, cancel.clone());
         let pressure_stop = Arc::new(AtomicBool::new(false));
         spawn_disconnect_watch(tx.clone(), cancel.clone(), pressure_stop.clone());
-        spawn_pressure_watch(tx.clone(), pressure_stop.clone(), cancel.clone());
+        spawn_memory_pressure_watch(
+            "ga-fire-pressure",
+            tx.clone(),
+            pressure_stop.clone(),
+            cancel.clone(),
+            |level| EvaluateStreamEvent::MemoryPressure { level },
+        );
         spawn_heartbeat_watch(
             tx.clone(),
             pressure_stop.clone(),
@@ -329,7 +378,13 @@ async fn optimize_handler(
         let _job_guard = register_job(jobs, run_id, cancel.clone());
         let pressure_stop = Arc::new(AtomicBool::new(false));
         spawn_disconnect_watch(tx.clone(), cancel.clone(), pressure_stop.clone());
-        spawn_optimize_pressure_watch(tx.clone(), pressure_stop.clone(), cancel.clone());
+        spawn_memory_pressure_watch(
+            "ga-fire-opt-pressure",
+            tx.clone(),
+            pressure_stop.clone(),
+            cancel.clone(),
+            |level| OptimizeStreamEvent::MemoryPressure { level },
+        );
         spawn_heartbeat_watch(
             tx.clone(),
             pressure_stop.clone(),
@@ -669,17 +724,21 @@ fn spawn_heartbeat_watch(
 }
 
 /// Always-on watch: emit `memoryPressure` when the engine pressure level changes.
-fn spawn_pressure_watch(
+fn spawn_memory_pressure_watch<E>(
+    thread_name: &'static str,
     tx: mpsc::Sender<String>,
     stop: Arc<AtomicBool>,
     cancel: ga_fire_engine::CancelFlag,
-) {
+    make_event: impl Fn(PressureLevel) -> E + Send + 'static,
+) where
+    E: Serialize + Send + 'static,
+{
     std::thread::Builder::new()
-        .name("ga-fire-pressure-watch".into())
+        .name(thread_name.into())
         .spawn(move || {
             let mut last = current_pressure();
             if last != PressureLevel::Clear {
-                let event = EvaluateStreamEvent::MemoryPressure { level: last };
+                let event = make_event(last);
                 if send_event_or_cancel(&tx, &event, &cancel).is_break() {
                     return;
                 }
@@ -696,44 +755,7 @@ fn spawn_pressure_watch(
                 let level = current_pressure();
                 if level != last {
                     last = level;
-                    let event = EvaluateStreamEvent::MemoryPressure { level };
-                    if send_event_or_cancel(&tx, &event, &cancel).is_break() {
-                        return;
-                    }
-                }
-            }
-        })
-        .ok();
-}
-
-fn spawn_optimize_pressure_watch(
-    tx: mpsc::Sender<String>,
-    stop: Arc<AtomicBool>,
-    cancel: ga_fire_engine::CancelFlag,
-) {
-    std::thread::Builder::new()
-        .name("ga-fire-opt-pressure-watch".into())
-        .spawn(move || {
-            let mut last = current_pressure();
-            if last != PressureLevel::Clear {
-                let event = OptimizeStreamEvent::MemoryPressure { level: last };
-                if send_event_or_cancel(&tx, &event, &cancel).is_break() {
-                    return;
-                }
-            }
-            while !stop.load(Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                if stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                if tx.is_closed() {
-                    request_cancel(&cancel);
-                    return;
-                }
-                let level = current_pressure();
-                if level != last {
-                    last = level;
-                    let event = OptimizeStreamEvent::MemoryPressure { level };
+                    let event = make_event(level);
                     if send_event_or_cancel(&tx, &event, &cancel).is_break() {
                         return;
                     }
@@ -854,5 +876,18 @@ mod tests {
         .unwrap();
         assert_eq!(pressure["kind"], "memoryPressure");
         assert_eq!(pressure["level"], "squeeze");
+    }
+
+    #[test]
+    fn solve_stream_events_use_camel_case_fields() {
+        let heartbeat = serde_json::to_value(SolveStreamEvent::Heartbeat).unwrap();
+        assert_eq!(heartbeat, serde_json::json!({ "kind": "heartbeat" }));
+
+        let pressure = serde_json::to_value(SolveStreamEvent::MemoryPressure {
+            level: PressureLevel::Parked,
+        })
+        .unwrap();
+        assert_eq!(pressure["kind"], "memoryPressure");
+        assert_eq!(pressure["level"], "parked");
     }
 }
