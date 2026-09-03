@@ -50,10 +50,7 @@ pub(crate) fn resolve_discard(state: &mut State, payment: DiscardPayment) -> Opt
     }
 }
 
-pub fn ally_attack_discard_requirement(
-    state: State,
-    card: Card,
-) -> Option<DiscardRequirement> {
+pub fn ally_attack_discard_requirement(state: State, card: Card) -> Option<DiscardRequirement> {
     match card {
         Card::HastyMessenger | Card::RedHare if state.hand_len > 0 => Some(DiscardRequirement {
             optional: true,

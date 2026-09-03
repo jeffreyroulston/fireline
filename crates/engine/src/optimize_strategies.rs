@@ -46,8 +46,15 @@ fn eval_mode_label(mode: EvalMode) -> &'static str {
 }
 
 fn uses_sprt_screening(request: &OptimizeRequest) -> bool {
-    request.eval_mode == EvalMode::Sprt
-        && !matches!(request.strategy, Strategy::SwapSweep | Strategy::MultiDeck)
+    effective_eval_mode(request) == EvalMode::Sprt
+}
+
+fn effective_eval_mode(request: &OptimizeRequest) -> EvalMode {
+    if matches!(request.strategy, Strategy::SwapSweep | Strategy::MultiDeck) {
+        EvalMode::Full
+    } else {
+        request.eval_mode
+    }
 }
 
 fn strategy_label(strategy: Strategy) -> &'static str {
@@ -94,7 +101,7 @@ fn build_effective(request: &OptimizeRequest, target: u32) -> EffectiveRequest {
         glimpse_enabled: request.glimpse_enabled,
         max_hand_duration_secs: request.max_hand_duration_secs,
         max_card_draw: request.max_card_draw,
-        eval_mode: Some(eval_mode_label(request.eval_mode)),
+        eval_mode: Some(eval_mode_label(effective_eval_mode(request))),
     }
 }
 
@@ -224,7 +231,8 @@ fn screen_counts_against_reference(
         }
         let batch_end = completed.saturating_add(SPRT_BATCH_SIZE).min(total);
         let batch_hands = batch_end.saturating_sub(completed);
-        let on_eval_hand = |hand| {
+        let on_eval_hand = |mut hand: HandProgress| {
+            hand.deck_number = deck_number;
             ctx.on_hand_progress
                 .lock()
                 .unwrap_or_else(|err| err.into_inner())(hand)
@@ -236,9 +244,7 @@ fn screen_counts_against_reference(
             |_| ControlFlow::Continue(()),
             on_eval_hand,
         )?;
-        state.hands_simulated = state
-            .hands_simulated
-            .saturating_add(u64::from(batch_hands));
+        state.hands_simulated = state.hands_simulated.saturating_add(u64::from(batch_hands));
         report_search_progress(state, ctx, on_progress)?;
         completed = batch_end;
 
@@ -374,7 +380,8 @@ fn score_single_deck(
         }
         flow
     };
-    let on_eval_hand = |hand| {
+    let on_eval_hand = |mut hand: HandProgress| {
+        hand.deck_number = deck_number;
         ctx.on_hand_progress
             .lock()
             .unwrap_or_else(|err| err.into_inner())(hand)
@@ -535,6 +542,14 @@ fn score_decks_parallel(
     }
 
     Ok(scored)
+}
+
+fn take_eval_for_deck(
+    scored: &mut Vec<(BTreeMap<String, u8>, DeckEvalResult)>,
+    counts: &BTreeMap<String, u8>,
+) -> Option<(BTreeMap<String, u8>, DeckEvalResult)> {
+    let index = scored.iter().position(|(got, _)| got == counts)?;
+    Some(scored.swap_remove(index))
 }
 
 fn score_optimize_deck_full(
@@ -1187,31 +1202,34 @@ fn optimize_genetic(
                     let score = metric_score(&eval, request.metric);
                     state.record(score, child.clone(), eval.card_stats);
                     next_generation.push((score, child));
-                    if next_generation.len() >= pop_size as usize || !search_can_continue(state, ctx)
+                    if next_generation.len() >= pop_size as usize
+                        || !search_can_continue(state, ctx)
                     {
                         break;
                     }
                 }
             } else {
-            children.sort_by_key(counts_key);
-            let results = score_decks_parallel(
-                children,
-                ctx,
-                &mut state.decks_scored,
-                state.best_score,
-                on_progress,
-            )?;
-            for (child, eval) in results {
-                let score = metric_score(&eval, request.metric);
-                state.record(score, child.clone(), eval.card_stats);
-                state.hands_simulated = state
-                    .hands_simulated
-                    .saturating_add(u64::from(ctx.request.samples));
-                next_generation.push((score, child));
-                if next_generation.len() >= pop_size as usize || !search_can_continue(state, ctx) {
-                    break;
+                children.sort_by_key(counts_key);
+                let results = score_decks_parallel(
+                    children,
+                    ctx,
+                    &mut state.decks_scored,
+                    state.best_score,
+                    on_progress,
+                )?;
+                for (child, eval) in results {
+                    let score = metric_score(&eval, request.metric);
+                    state.record(score, child.clone(), eval.card_stats);
+                    state.hands_simulated = state
+                        .hands_simulated
+                        .saturating_add(u64::from(ctx.request.samples));
+                    next_generation.push((score, child));
+                    if next_generation.len() >= pop_size as usize
+                        || !search_can_continue(state, ctx)
+                    {
+                        break;
+                    }
                 }
-            }
             }
             if save_keep_partial() {
                 break;
@@ -1378,12 +1396,9 @@ fn optimize_swap_sweep(
         }
         Err(error) => return Err(error),
     };
-    let mut by_counts = rustc_hash::FxHashMap::default();
-    for (counts, eval) in candidate_results {
-        by_counts.insert(counts_key(&counts), (counts, eval));
-    }
+    let mut remaining = candidate_results;
     for (candidate, counts) in candidate_decks {
-        let Some((counts, eval)) = by_counts.remove(&counts_key(&counts)) else {
+        let Some((counts, eval)) = take_eval_for_deck(&mut remaining, &counts) else {
             continue;
         };
         let score = metric_score(&eval, request.metric);
@@ -1509,12 +1524,9 @@ fn optimize_multi_deck(
         }
         Err(error) => return Err(error),
     };
-    let mut by_counts = rustc_hash::FxHashMap::default();
-    for (counts, eval) in scored {
-        by_counts.insert(counts_key(&counts), (counts, eval));
-    }
+    let mut remaining = scored;
     for counts in deck_list {
-        let Some((counts, eval)) = by_counts.remove(&counts_key(&counts)) else {
+        let Some((counts, eval)) = take_eval_for_deck(&mut remaining, &counts) else {
             continue;
         };
         let score = metric_score(&eval, request.metric);
@@ -1748,6 +1760,65 @@ mod tests {
             .find(|row| row.rank == 0)
             .expect("baseline row");
         assert!(baseline.card_stats.len() >= 3);
+    }
+
+    #[test]
+    fn swap_sweep_scores_every_candidate_even_under_sprt_mode() {
+        let base = BTreeMap::from([
+            ("arthur".into(), 3_u8),
+            ("kingdom_informant".into(), 2),
+            ("clumsy_apprentice".into(), 2),
+        ]);
+        let candidates = vec!["sable_remnant".into(), "red_hare".into()];
+        let samples = 3_u16;
+        let result = optimize(&OptimizeRequest {
+            bounds: BTreeMap::new(),
+            deck_size: 7,
+            samples,
+            decks: 1,
+            metric: Metric::Mean,
+            seed: 7,
+            budget: Budget::default(),
+            materials: BTreeMap::new(),
+            strategy: Strategy::SwapSweep,
+            base_deck: base,
+            swap: Some(SwapConfig {
+                from: "arthur".into(),
+                count: 1,
+                candidates: candidates.clone(),
+            }),
+            multi_deck: None,
+            go_first: true,
+            max_turns: 3,
+            sim_type: crate::model::SimType::FireBrick,
+            rollouts: 1,
+            max_threads: None,
+            glimpse_enabled: None,
+            max_hand_duration_secs: None,
+            max_card_draw: None,
+            eval_mode: EvalMode::Sprt,
+        })
+        .unwrap();
+        assert_eq!(result.effective.eval_mode, Some("full"));
+        assert_eq!(result.decks_scored, 1 + candidates.len() as u32);
+        assert_eq!(result.top.len(), 1 + candidates.len());
+        for card in &candidates {
+            let row = result
+                .top
+                .iter()
+                .find(|entry| entry.candidate.as_deref() == Some(card.as_str()))
+                .unwrap_or_else(|| panic!("missing candidate {card}"));
+            let stat = row
+                .card_stats
+                .iter()
+                .find(|item| item.card == *card)
+                .unwrap_or_else(|| panic!("missing stats for {card}"));
+            assert_eq!(
+                stat.with_hand_samples + stat.without_hand_samples,
+                u32::from(samples),
+                "{card} should run every requested hand"
+            );
+        }
     }
 
     #[test]

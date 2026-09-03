@@ -126,7 +126,7 @@ pub(crate) fn apply_into(
             level_zander(&mut state, tape, TapePhase::Materialize);
             begin_pre_recollection(&mut state, tape);
         }
-        Action::MaterializeTristanMemory => {
+        Action::MaterializeTristanMemory { agility } => {
             state.remove_material(MAT_TRISTAN);
             let from_memory = state.pay_champion_memory_cost();
             let fields = if from_memory {
@@ -140,7 +140,7 @@ pub(crate) fn apply_into(
                 EventKind::FloatForTristan,
                 fields,
             );
-            level_tristan(&mut state, tape, TapePhase::Materialize);
+            level_tristan(&mut state, tape, TapePhase::Materialize, agility);
             begin_pre_recollection(&mut state, tape);
         }
         Action::TristanRecollect => {
@@ -275,12 +275,7 @@ pub(crate) fn apply_into(
             while index < state.ally_len as usize {
                 if state.allies[index].card() != Card::Arthur && state.can_ally_attack(index) {
                     let card = state.allies[index].card();
-                    let pay = next_discard_payment(
-                        &mut discard_queue,
-                        &mut discard,
-                        state,
-                        card,
-                    );
+                    let pay = next_discard_payment(&mut discard_queue, &mut discard, state, card);
                     attack_ally(&mut state, index, tape, pay);
                 }
                 index += 1;
@@ -293,6 +288,7 @@ pub(crate) fn apply_into(
             hot_cake_sacrifice,
             flagrant_level,
             flagrant_gy_return,
+            tristan_agility,
         } => play_ally(
             &mut state,
             card,
@@ -301,6 +297,7 @@ pub(crate) fn apply_into(
             hot_cake_sacrifice,
             flagrant_level,
             flagrant_gy_return,
+            tristan_agility,
             reserved,
             discard,
             tape,
@@ -444,6 +441,7 @@ fn play_ally(
     hot_cake_sacrifice: bool,
     flagrant_level: Option<u16>,
     flagrant_gy_return: Option<Card>,
+    tristan_agility: bool,
     reserved: Option<&[Card]>,
     discard: DiscardPayment,
     tape: &mut EventTape,
@@ -542,7 +540,15 @@ fn play_ally(
         }
     } else if card == Card::FlagrantGuide {
         if let Some(mat) = flagrant_level {
-            apply_flagrant_level(state, card, mat, flagrant_gy_return, phase, tape);
+            apply_flagrant_level(
+                state,
+                card,
+                mat,
+                flagrant_gy_return,
+                tristan_agility,
+                phase,
+                tape,
+            );
         }
     } else if card == Card::PepperedChef && sacrificed {
         state.agility = state.agility.saturating_add(2);
@@ -679,7 +685,8 @@ pub fn attack_discard_steps(mut state: State, action: Action) -> Vec<AttackDisca
                 if state.allies[index].card() != Card::Arthur && state.can_ally_attack(index) {
                     let card = state.allies[index].card();
                     if let Some(req) = ally_attack_discard_requirement(state, card) {
-                        let (hand, drawn_index) = preview_hand_for_attack_discard(state, index, req);
+                        let (hand, drawn_index) =
+                            preview_hand_for_attack_discard(state, index, req);
                         let step_no = steps.len() + 1;
                         steps.push(AttackDiscardStep {
                             label: format!("{} ({step_no})", card.id()),
@@ -699,11 +706,7 @@ pub fn attack_discard_steps(mut state: State, action: Action) -> Vec<AttackDisca
 }
 
 /// Apply ally attack state changes without recording tape events (preview simulation).
-pub(crate) fn advance_attack_ally_silent(
-    state: &mut State,
-    index: usize,
-    discard: DiscardPayment,
-) {
+pub(crate) fn advance_attack_ally_silent(state: &mut State, index: usize, discard: DiscardPayment) {
     let ally = state.allies[index];
     let card = ally.card();
     let hot_cake_buff = ally.attack_buff();
@@ -832,10 +835,6 @@ fn play_attack(params: PlayAttackParams<'_>) {
         state.prep -= 1;
         power += 2;
     }
-    let heated_bonus = card == Card::HeatedVengeance && state.champion_damaged;
-    if heated_bonus {
-        power += 3;
-    }
     // Champions are Human; Class Bonus +1 always applies while Assassin.
     let human_bonus = card == Card::ViciousSlice && state.is_assassin();
     if human_bonus {
@@ -852,6 +851,13 @@ fn play_attack(params: PlayAttackParams<'_>) {
             EventFields::default().with_weapon(wielded),
         );
         state.consume_weapon(wielded);
+        // Hammer self-damage is an on-attack trigger. Heated Vengeance's +3 is a
+        // static "champion damaged this turn" bonus, so it must see that trigger.
+        apply_weapon_wield_self_damage(state, wielded, tape);
+    }
+    let heated_bonus = card == Card::HeatedVengeance && state.champion_damaged;
+    if heated_bonus {
+        power += 3;
     }
     state.champion_awake = false;
 
@@ -880,7 +886,6 @@ fn play_attack(params: PlayAttackParams<'_>) {
         state.add_damage(power);
         tape.push(*state, TapePhase::Main, EventKind::Play, fields);
     }
-    apply_weapon_wield_self_damage(state, wielded, tape);
 }
 
 struct PlayActionParams<'a> {
@@ -987,6 +992,7 @@ fn play_action(params: PlayActionParams<'_>) {
 
     let mut drawn = None;
     let mut memory_draw = None;
+    let mut discarded = None;
     let damage = match card {
         Card::FieryInterference => 2,
         Card::MarkTheTarget => {
@@ -1016,6 +1022,12 @@ fn play_action(params: PlayActionParams<'_>) {
         Card::IncreasingDanger => {
             drawn = Some(state.draw_unknown());
             memory_draw = Some(state.draw_to_memory());
+            0
+        }
+        Card::CreativeShock => {
+            drawn = Some(state.draw_unknown());
+            memory_draw = Some(state.draw_unknown());
+            discarded = state.discard_for_effect();
             0
         }
         Card::UndeniableTruth => {
@@ -1050,6 +1062,9 @@ fn play_action(params: PlayActionParams<'_>) {
     if let Some(memory_draw) = memory_draw {
         fields = fields.with_memory_draw(memory_draw);
     }
+    if let Some(discarded) = discarded {
+        fields = fields.with_discarded(discarded);
+    }
     if card.is_fast() && is_fast_phase(state.phase) {
         fields = fields.fast();
     }
@@ -1061,16 +1076,17 @@ fn play_action(params: PlayActionParams<'_>) {
     tape.push(*state, phase, EventKind::Play, fields);
 }
 
-fn level_tristan(state: &mut State, tape: &mut EventTape, phase: TapePhase) {
+fn level_tristan(state: &mut State, tape: &mut EventTape, phase: TapePhase, take_agility: bool) {
     state.tristan_leveled = true;
     state.champion_level = 1;
-    state.prep = state.prep.saturating_add(1);
-    tape.push(
-        *state,
-        phase,
-        EventKind::LevelTristan,
-        EventFields::default(),
-    );
+    let mut fields = EventFields::default();
+    if take_agility {
+        state.agility = state.agility.saturating_add(3);
+        fields = fields.with_kindle(3);
+    } else {
+        state.prep = state.prep.saturating_add(1);
+    }
+    tape.push(*state, phase, EventKind::LevelTristan, fields);
 }
 
 fn level_zander(state: &mut State, tape: &mut EventTape, phase: TapePhase) {
@@ -1116,6 +1132,7 @@ fn apply_flagrant_level(
     card: Card,
     mat: u16,
     gy_return: Option<Card>,
+    tristan_agility: bool,
     phase: TapePhase,
     tape: &mut EventTape,
 ) {
@@ -1133,7 +1150,7 @@ fn apply_flagrant_level(
     } else if mat == MAT_ZANDER_2 {
         level_zander2(state, gy_return, tape, phase);
     } else {
-        level_tristan(state, tape, phase);
+        level_tristan(state, tape, phase, tristan_agility);
     }
 }
 

@@ -21,6 +21,7 @@ import { DataTable, PanelTopline, SectionHeading } from "../../ui";
 import { SIM_TYPE_LABELS } from "../../types";
 import { useCardDatabasePanel } from "../../hooks/use-card-database-panel";
 import { CardDbFilters } from "./card-db-filters";
+import { RunSettingsFilterBar } from "../../ui/run-settings-filter-bar";
 import { CardDbDetailPanel } from "./card-db-detail-panel";
 import { CardDbHeroStats } from "./card-db-hero-stats";
 import { CardDbPartnerPeek } from "./card-db-partner-peek";
@@ -92,11 +93,14 @@ export function CardDatabasePanel({ workerVersion }: CardDatabasePanelProps) {
     materialCards,
     ownershipSummary,
     validatedDeckId,
+    runSettings,
+    availableRunSettings,
     updateDbSource,
     selectCard,
     updateSimType,
     updateKindFilter,
     updateDeckFilter,
+    updateRunSettings,
     handlePartnerModeChange,
   } = panel;
 
@@ -119,11 +123,14 @@ export function CardDatabasePanel({ workerVersion }: CardDatabasePanelProps) {
           ownershipSummary={ownershipSummary}
           totalRuns={totalRuns}
           totalSamples={totalSamples}
+          runSettings={runSettings}
+          availableRunSettings={availableRunSettings}
           onSearchChange={setSearch}
           onDbSourceChange={(source) => updateDbSource(source, true)}
           onSimTypeChange={(value) => updateSimType(value, true)}
           onKindFilterChange={updateKindFilter}
           onDeckFilterChange={updateDeckFilter}
+          onRunSettingsChange={updateRunSettings}
         />
       )}
 
@@ -233,6 +240,11 @@ export function CardDatabasePanel({ workerVersion }: CardDatabasePanelProps) {
                 </select>
               </label>
             </div>
+            <RunSettingsFilterBar
+              value={runSettings}
+              available={availableRunSettings}
+              onChange={updateRunSettings}
+            />
           </div>
 
           <CardDbDetailPanel className={cardDbDetailHeroPanelClass}>

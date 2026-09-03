@@ -5,11 +5,11 @@ use serde::{Serialize, Serializer};
 use ts_rs::TS;
 
 /// Manual bump when solver / model semantics change.
-pub const RULES_VERSION: u32 = 42;
+pub const RULES_VERSION: u32 = 44;
 /// Manual bump when RNG, shuffle, or seed derivation changes.
 pub const SAMPLER_VERSION: u32 = 1;
 /// Manual bump when stats attribution labels or parsing changes.
-pub const ATTRIBUTION_VERSION: u32 = 8;
+pub const ATTRIBUTION_VERSION: u32 = 9;
 
 fn serialize_u64_as_string<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&value.to_string())
@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn card_digest_is_stable() {
-        assert_eq!(compute_card_digest(), 2_213_601_815_118_129_714);
+        assert_eq!(compute_card_digest(), 2_042_105_284_130_995_394);
     }
 
     #[test]

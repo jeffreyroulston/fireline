@@ -54,9 +54,13 @@ export function HistoryPanel({
     filterDeckId,
     setFilterDeckId,
     runs,
+    allRuns,
     groups,
     simType,
     setSimType,
+    runSettings,
+    availableRunSettings,
+    updateRunSettings,
     selectedGroupKey,
     setSelectedGroupKey,
     pooled,
@@ -141,9 +145,9 @@ export function HistoryPanel({
     <div className={historyModeClass}>
       <PanelTopline kicker="CROSS-RUN ANALYSIS">
         Review completed sims, then pool damage and card rates only within one
-        engine version. Simulation types stay on separate charts. Filter the
-        bars and card board by damage. Pooled mean, P10, P50, P90, and ending
-        influence stay on the full set.
+        engine version. Simulation types stay on separate charts. Filter runs by
+        turn order and horizon, then filter the bars and card board by damage.
+        Pooled mean, P10, P50, P90, and ending influence stay on the full set.
       </PanelTopline>
 
       <HistoryControls
@@ -153,6 +157,8 @@ export function HistoryPanel({
         selectedDeck={selectedDeck}
         groups={groups}
         selectedGroupKey={selectedGroupKey}
+        runSettings={runSettings}
+        availableRunSettings={availableRunSettings}
         onFilterDeckChange={(deckId) => {
           setFilterDeckId(deckId);
           if (deckId) {
@@ -167,6 +173,7 @@ export function HistoryPanel({
           setSelectedGroupKey(value);
           replaceQuery((current) => historyQueryPatch(current, { vg: value }));
         }}
+        onRunSettingsChange={updateRunSettings}
       />
 
       {!selectedDeck && (
@@ -271,7 +278,7 @@ export function HistoryPanel({
       {selectedDeck && (
         <RatioHistoryPanel
           deck={selectedDeck}
-          runs={runs}
+          runs={allRuns}
           refreshToken={dataEpoch}
           onSaveDecklist={onSaveDecklist}
           onOpenRun={onOpenRatioRun}

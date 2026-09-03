@@ -485,6 +485,15 @@ export const CARDS: Record<string, CardDef> = {
     element: "fire",
     aliases: ["aenean_flurry_of_fire"],
   },
+  creative_shock: {
+    id: "creative_shock",
+    name: "Creative Shock",
+    short: "Shock",
+    kind: "action",
+    cost: 3,
+    element: "fire",
+    fast: true,
+  },
 };
 
 export let CARD_LIST: CardDef[] = Object.values(CARDS);

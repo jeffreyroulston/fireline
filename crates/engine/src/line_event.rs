@@ -53,7 +53,7 @@ impl ActionOp {
             Action::MaterializeHammer => Self::MaterializeHammer,
             Action::MaterializeDagger => Self::MaterializeDagger,
             Action::MaterializeZanderMemory { .. } => Self::MaterializeZanderMemory,
-            Action::MaterializeTristanMemory => Self::MaterializeTristanMemory,
+            Action::MaterializeTristanMemory { .. } => Self::MaterializeTristanMemory,
             Action::TristanRecollect => Self::TristanRecollect,
             Action::SkipAgility => Self::SkipAgility,
             Action::MaterializeSoulknife => Self::MaterializeSoulknife,
@@ -723,7 +723,13 @@ pub fn format_line_event(event: &LineEvent) -> String {
                 "Mem Cost for Tristan Lvl 1 (Float from GY)".to_string()
             }
         }
-        EventKind::LevelTristan => "Tristan Lvl 1 Prep".to_string(),
+        EventKind::LevelTristan => {
+            if event.kindle == Some(3) {
+                "Tristan Lvl 1 Agility 3".to_string()
+            } else {
+                "Tristan Lvl 1 Prep".to_string()
+            }
+        }
         EventKind::TristanRecollect => {
             let mut parts = Vec::new();
             if let Some(id) = event.card {
@@ -784,6 +790,7 @@ pub fn format_line_event(event: &LineEvent) -> String {
                         | "smoke_out"
                         | "spark_alight"
                         | "flurry_of_fire"
+                        | "creative_shock"
                 )
             ) {
                 card_name
@@ -804,6 +811,24 @@ pub fn format_line_event(event: &LineEvent) -> String {
                 && let Some(drawn) = event.drawn
             {
                 s = format!("Undeniable Truth (draw {}, +1 prep)", short(Some(drawn)));
+            }
+            if event.card == Some("creative_shock") {
+                s = match (event.drawn, event.memory_draw, event.discarded) {
+                    (Some(first), Some(second), Some(discarded)) => {
+                        let prefix = if event.fast {
+                            "Fast Activate Creative Shock"
+                        } else {
+                            "Creative Shock"
+                        };
+                        format!(
+                            "{prefix} (draw {}, {} / discard {})",
+                            short(Some(first)),
+                            short(Some(second)),
+                            short(Some(discarded))
+                        )
+                    }
+                    _ => s,
+                };
             }
             if event.prepared == Some(true) {
                 if event.card == Some("ignited_stab") {

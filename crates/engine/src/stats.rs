@@ -41,6 +41,32 @@ const MAT_SOULKNIFE: usize = 5;
 const MAT_TRISTAN: usize = 6;
 const MAT_RIPPER: usize = 7;
 const MAT_RING: usize = 8;
+/// Bit for each `MATERIAL_IDS` slot. Must not assume `1 << index` — model bits
+/// were assigned in a different order than this table (soulknife / Tristan /
+/// Deft Executor).
+const MATERIAL_BITS: [u16; MATERIAL_COUNT] = [
+    crate::model::MAT_HAMMER,
+    crate::model::MAT_BLADE,
+    crate::model::MAT_DAGGER,
+    crate::model::MAT_ZANDER,
+    crate::model::MAT_ZANDER_2,
+    crate::model::MAT_SOULKNIFE,
+    crate::model::MAT_TRISTAN,
+    crate::model::MAT_RIPPER,
+    crate::model::MAT_RING,
+];
+
+const _: () = {
+    assert!(MATERIAL_BITS[MAT_HAMMER] == crate::model::MAT_HAMMER);
+    assert!(MATERIAL_BITS[MAT_BLADE] == crate::model::MAT_BLADE);
+    assert!(MATERIAL_BITS[MAT_DAGGER] == crate::model::MAT_DAGGER);
+    assert!(MATERIAL_BITS[MAT_ZANDER] == crate::model::MAT_ZANDER);
+    assert!(MATERIAL_BITS[MAT_ZANDER_2] == crate::model::MAT_ZANDER_2);
+    assert!(MATERIAL_BITS[MAT_SOULKNIFE] == crate::model::MAT_SOULKNIFE);
+    assert!(MATERIAL_BITS[MAT_TRISTAN] == crate::model::MAT_TRISTAN);
+    assert!(MATERIAL_BITS[MAT_RIPPER] == crate::model::MAT_RIPPER);
+    assert!(MATERIAL_BITS[MAT_RING] == crate::model::MAT_RING);
+};
 
 #[derive(Clone, Debug)]
 pub struct LineCardStats {
@@ -149,7 +175,7 @@ impl LineCardStats {
                 self.material_plays[MAT_ZANDER] += 1;
                 self.record_draws_in_events(events);
             }
-            Action::MaterializeTristanMemory | Action::TristanRecollect => {
+            Action::MaterializeTristanMemory { .. } | Action::TristanRecollect => {
                 self.material_plays[MAT_TRISTAN] += 1;
                 self.record_draws_in_events(events);
             }
@@ -607,8 +633,7 @@ impl DeckStatAccumulator {
             .collect::<Vec<_>>();
 
         for index in 0..MATERIAL_COUNT {
-            let material_bit = 1_u16 << index;
-            if self.materials_mask & material_bit == 0 {
+            if self.materials_mask & MATERIAL_BITS[index] == 0 {
                 continue;
             }
             let plays = self.line.material_plays[index];
@@ -814,6 +839,41 @@ mod tests {
         assert_eq!(hammer.copies, 1);
         assert_eq!(hammer.seen, 1);
         assert_eq!(hammer.plays, 0);
+        let ids: Vec<&str> = rows.iter().map(|row| row.card).collect();
+        assert!(ids.contains(&"varuckan_soulknife"));
+        assert!(!ids.contains(&"zander_2"));
+        assert!(!ids.contains(&"tristan_1"));
+    }
+
+    #[test]
+    fn finish_labels_tristan_mask_as_tristan_not_deft_executor() {
+        let mask = crate::model::MAT_HAMMER
+            | crate::model::MAT_BLADE
+            | crate::model::MAT_DAGGER
+            | crate::model::MAT_ZANDER
+            | crate::model::MAT_SOULKNIFE
+            | crate::model::MAT_TRISTAN
+            | crate::model::MAT_RIPPER;
+        let mut acc = DeckStatAccumulator::with_deck_and_materials(&[Card::Arthur], mask);
+        let mut line = LineCardStats::default();
+        line.material_plays[MAT_TRISTAN] = 2;
+        line.material_plays[MAT_SOULKNIFE] = 1;
+        acc.add_sample(&[Card::Arthur], &line);
+        let rows = acc.finish();
+        let ids: Vec<&str> = rows.iter().map(|row| row.card).collect();
+        assert!(ids.contains(&"tristan_1"), "{ids:?}");
+        assert!(ids.contains(&"varuckan_soulknife"), "{ids:?}");
+        assert!(!ids.contains(&"zander_2"), "{ids:?}");
+        let tristan = rows
+            .iter()
+            .find(|row| row.card == "tristan_1")
+            .expect("tristan row");
+        assert_eq!(tristan.plays, 2);
+        let soulknife = rows
+            .iter()
+            .find(|row| row.card == "varuckan_soulknife")
+            .expect("soulknife row");
+        assert_eq!(soulknife.plays, 1);
     }
 
     #[test]

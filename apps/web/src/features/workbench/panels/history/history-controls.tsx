@@ -1,7 +1,14 @@
+"use client";
+
 import { type SimType } from "@/lib/engine";
 import type { SavedDeck } from "@/lib/decks";
 import type { VersionGroup } from "@/lib/api/client";
 import { SIM_TYPE_LABELS } from "../../types";
+import { RunSettingsFilterBar } from "../../ui/run-settings-filter-bar";
+import type {
+  AvailableRunSettings,
+  RunSettingsFilterState,
+} from "../../lib/run-settings-filter";
 import { historyControlsClass } from "./shared";
 import { formatVersionLabel, groupKey } from "./shared";
 
@@ -12,9 +19,12 @@ type HistoryControlsProps = Readonly<{
   selectedDeck: SavedDeck | null;
   groups: VersionGroup[];
   selectedGroupKey: string;
+  runSettings: RunSettingsFilterState;
+  availableRunSettings: AvailableRunSettings;
   onFilterDeckChange: (deckId: string | null) => void;
   onSimTypeChange: (simType: SimType) => void;
   onGroupKeyChange: (groupKey: string) => void;
+  onRunSettingsChange: (next: RunSettingsFilterState) => void;
 }>;
 
 export function HistoryControls({
@@ -24,9 +34,12 @@ export function HistoryControls({
   selectedDeck,
   groups,
   selectedGroupKey,
+  runSettings,
+  availableRunSettings,
   onFilterDeckChange,
   onSimTypeChange,
   onGroupKeyChange,
+  onRunSettingsChange,
 }: HistoryControlsProps) {
   return (
     <div className={historyControlsClass}>
@@ -85,6 +98,12 @@ export function HistoryControls({
             ))}
         </select>
       </label>
+      <RunSettingsFilterBar
+        value={runSettings}
+        available={availableRunSettings}
+        className="col-span-full"
+        onChange={onRunSettingsChange}
+      />
     </div>
   );
 }

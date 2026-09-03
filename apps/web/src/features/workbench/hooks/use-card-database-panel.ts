@@ -35,6 +35,14 @@ import { useWorkbenchQuery } from "./use-workbench-query";
 import { groupKey } from "../panels/card-database/shared";
 import type { PartnerMode } from "../panels/card-database/constants";
 import { formatPct } from "../panels/card-database/formatters";
+import {
+  defaultRunSettingsState,
+  parseRunSettingsParams,
+  runSettingsFilterKey,
+  runSettingsToFilter,
+  type AvailableRunSettings,
+  type RunSettingsFilterState,
+} from "../lib/run-settings-filter";
 
 type CardDatabaseDeckRow = {
   deckId: string;
@@ -69,6 +77,9 @@ export function useCardDatabasePanel({
   const [kindFilter, setKindFilter] = useState<string | null>(() =>
     parseKindParam(searchParams.get("kind")),
   );
+  const [runSettings, setRunSettings] = useState<RunSettingsFilterState>(() =>
+    parseRunSettingsParams(searchParams),
+  );
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     searchParams.get("card"),
   );
@@ -83,6 +94,7 @@ export function useCardDatabasePanel({
     setDbSource(parseCardDatabaseSource(searchParams.get("source")));
     setSimType(parseSimParam(searchParams.get("sim")) ?? "fire_brick");
     setKindFilter(parseKindParam(searchParams.get("kind")));
+    setRunSettings(parseRunSettingsParams(searchParams));
     setSelectedId(searchParams.get("card"));
   }, [searchParams]);
 
@@ -143,7 +155,13 @@ export function useCardDatabasePanel({
     return [selectedDeckId];
   }, [selectedDeckId]);
 
-  const catalogFiltersKey = `${dbSource}:${simType}:${currentEngine?.rulesVersion ?? ""}:${currentEngine?.samplerVersion ?? ""}:${currentEngine?.attributionVersion ?? ""}:${selectedDeckId ?? "all"}`;
+  const runSettingsFilter = useMemo(
+    () => runSettingsToFilter(runSettings),
+    [runSettings],
+  );
+  const runSettingsKey = runSettingsFilterKey(runSettings);
+
+  const catalogFiltersKey = `${dbSource}:${simType}:${currentEngine?.rulesVersion ?? ""}:${currentEngine?.samplerVersion ?? ""}:${currentEngine?.attributionVersion ?? ""}:${selectedDeckId ?? "all"}:${runSettingsKey}`;
 
   const catalogQuery = useCardDatabaseQuery(
     dbSource,
@@ -162,6 +180,7 @@ export function useCardDatabasePanel({
         currentSamplerVersion: currentEngine.samplerVersion,
         currentAttributionVersion: currentEngine.attributionVersion,
         deckIds: includedDeckIds,
+        runSettings: runSettingsFilter,
       });
     },
     Boolean(currentEngine),
@@ -177,6 +196,8 @@ export function useCardDatabasePanel({
   );
   const totalRuns = catalogData?.totalRuns ?? 0;
   const totalSamples = catalogData?.totalSamples ?? 0;
+  const availableRunSettings: AvailableRunSettings =
+    catalogData?.availableRunSettings ?? { goFirst: [], maxTurns: [] };
   const loading = catalogQuery.isFetching;
   const error =
     catalogQuery.error instanceof Error
@@ -219,7 +240,7 @@ export function useCardDatabasePanel({
     detailVersion.samplerVersion === currentEngine.samplerVersion &&
     detailVersion.attributionVersion === currentEngine.attributionVersion;
 
-  const detailFiltersKey = `${dbSource}:${simType}:${detailGroupKey}:${validatedDeckId ?? "all"}`;
+  const detailFiltersKey = `${dbSource}:${simType}:${detailGroupKey}:${validatedDeckId ?? "all"}:${runSettingsKey}`;
 
   const detailDecksQuery = useCardDatabaseCardDecksQuery(
     dbSource,
@@ -234,6 +255,7 @@ export function useCardDatabasePanel({
         samplerVersion: detailVersion!.samplerVersion,
         attributionVersion: detailVersion!.attributionVersion,
         deckIds: includedDeckIds,
+        runSettings: runSettingsFilter,
       }),
     Boolean(selectedCard && detailVersion),
   );
@@ -250,6 +272,7 @@ export function useCardDatabasePanel({
         samplerVersion: detailVersion!.samplerVersion,
         attributionVersion: detailVersion!.attributionVersion,
         deckIds: includedDeckIds,
+        runSettings: runSettingsFilter,
       }),
     Boolean(selectedCard && detailVersion),
   );
@@ -273,6 +296,7 @@ export function useCardDatabasePanel({
         samplerVersion: detailVersion!.samplerVersion,
         attributionVersion: detailVersion!.attributionVersion,
         deckIds: includedDeckIds,
+        runSettings: runSettingsFilter,
       });
     },
     Boolean(selectedCard && detailVersion),
@@ -292,6 +316,7 @@ export function useCardDatabasePanel({
         currentSamplerVersion: currentEngine!.samplerVersion,
         currentAttributionVersion: currentEngine!.attributionVersion,
         deckIds: includedDeckIds,
+        runSettings: runSettingsFilter,
       }),
     Boolean(
       selectedCard && detailVersion && currentEngine && !isCurrentVersion,
@@ -429,6 +454,11 @@ export function useCardDatabasePanel({
     replaceQuery((current) => cardsQueryPatch(current, { deck: deckId }));
   }
 
+  function updateRunSettings(next: RunSettingsFilterState) {
+    setRunSettings(next);
+    replaceQuery((current) => cardsQueryPatch(current, { runSettings: next }));
+  }
+
   function handlePartnerModeChange(mode: PartnerMode) {
     setPartnerMode(mode);
     setPartnerSort({ columnId: "delta", direction: "desc" });
@@ -465,12 +495,15 @@ export function useCardDatabasePanel({
     materialCards,
     ownershipSummary,
     validatedDeckId,
+    runSettings,
+    availableRunSettings,
     workerVersion,
     updateDbSource,
     selectCard,
     updateSimType,
     updateKindFilter,
     updateDeckFilter,
+    updateRunSettings,
     handlePartnerModeChange,
   };
 }

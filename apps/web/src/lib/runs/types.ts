@@ -9,6 +9,8 @@ export interface HandProgress {
   phase: HandPhase;
   rolloutsDone: number;
   totalRollouts: number;
+  /** 1-based deck index for optimize runs; omitted / 0 for evaluate. */
+  deckNumber?: number;
   /** Client-only: wall time when this hand first appeared in the UI. */
   startedAtMs?: number;
 }

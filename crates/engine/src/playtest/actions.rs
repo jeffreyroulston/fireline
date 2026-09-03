@@ -2,7 +2,7 @@
 
 use crate::cards::parse_card;
 use crate::error::{EngineError, Result};
-use crate::model::{Action, State};
+use crate::model::{Action, MAT_TRISTAN, State};
 
 use super::state::{format_attack_others_label, format_glimpse_layout, parse_weapon, weapon_id};
 use super::types::*;
@@ -19,7 +19,9 @@ pub(super) fn playtest_to_action(action: &PlaytestAction) -> Result<Action> {
                 glimpse_layout: *glimpse_layout,
             }
         }
-        PlaytestAction::MaterializeTristanMemory => Action::MaterializeTristanMemory,
+        PlaytestAction::MaterializeTristanMemory { agility } => {
+            Action::MaterializeTristanMemory { agility: *agility }
+        }
         PlaytestAction::TristanRecollect => Action::TristanRecollect,
         PlaytestAction::SkipAgility => Action::SkipAgility,
         PlaytestAction::MaterializeSoulknife => Action::MaterializeSoulknife,
@@ -37,6 +39,7 @@ pub(super) fn playtest_to_action(action: &PlaytestAction) -> Result<Action> {
             hot_cake_sacrifice,
             flagrant_level,
             flagrant_gy_return,
+            tristan_agility,
             ..
         } => Action::PlayAlly {
             card: parse_card(card).ok_or_else(|| EngineError::UnknownCard(card.clone()))?,
@@ -48,6 +51,7 @@ pub(super) fn playtest_to_action(action: &PlaytestAction) -> Result<Action> {
                 .as_ref()
                 .map(|id| parse_card(id).ok_or_else(|| EngineError::UnknownCard(id.clone())))
                 .transpose()?,
+            tristan_agility: *tristan_agility,
         },
         PlaytestAction::PlayItem { card, .. } => Action::PlayItem {
             card: parse_card(card).ok_or_else(|| EngineError::UnknownCard(card.clone()))?,
@@ -100,7 +104,9 @@ pub(super) fn action_to_playtest(action: Action) -> PlaytestAction {
         Action::MaterializeZanderMemory { glimpse_layout } => {
             PlaytestAction::MaterializeZanderMemory { glimpse_layout }
         }
-        Action::MaterializeTristanMemory => PlaytestAction::MaterializeTristanMemory,
+        Action::MaterializeTristanMemory { agility } => {
+            PlaytestAction::MaterializeTristanMemory { agility }
+        }
         Action::TristanRecollect => PlaytestAction::TristanRecollect,
         Action::SkipAgility => PlaytestAction::SkipAgility,
         Action::MaterializeSoulknife => PlaytestAction::MaterializeSoulknife,
@@ -127,6 +133,7 @@ pub(super) fn action_to_playtest(action: Action) -> PlaytestAction {
             hot_cake_sacrifice,
             flagrant_level,
             flagrant_gy_return,
+            tristan_agility,
         } => PlaytestAction::PlayAlly {
             card: card.id().to_string(),
             kindle,
@@ -134,6 +141,7 @@ pub(super) fn action_to_playtest(action: Action) -> PlaytestAction {
             hot_cake_sacrifice,
             flagrant_level,
             flagrant_gy_return: flagrant_gy_return.map(|c| c.id().to_string()),
+            tristan_agility,
             reserved: Vec::new(),
             reserved_hand_indices: Vec::new(),
             skip_discard: None,
@@ -202,7 +210,12 @@ pub(super) fn format_action(state: State, action: Action) -> String {
             ),
             None => "Materialize Zander".to_string(),
         },
-        Action::MaterializeTristanMemory => "Materialize Tristan".to_string(),
+        Action::MaterializeTristanMemory { agility: false } => {
+            "Materialize Tristan (Prep)".to_string()
+        }
+        Action::MaterializeTristanMemory { agility: true } => {
+            "Materialize Tristan (Agility 3)".to_string()
+        }
         Action::TristanRecollect => "Tristan Recollect".to_string(),
         Action::SkipAgility => "Skip Agility".to_string(),
         Action::MaterializeSoulknife => "Materialize Varuckan Soulknife".to_string(),
@@ -220,6 +233,7 @@ pub(super) fn format_action(state: State, action: Action) -> String {
             hot_cake_sacrifice,
             flagrant_level,
             flagrant_gy_return,
+            tristan_agility,
         } => {
             let mut parts = vec![format!("Play {}", card.name())];
             if kindle > 0 {
@@ -237,7 +251,15 @@ pub(super) fn format_action(state: State, action: Action) -> String {
                 parts.push("Hot Cake buff".to_string());
             }
             if let Some(level) = flagrant_level {
-                parts.push(format!("Flagrant {level}"));
+                if level == MAT_TRISTAN {
+                    parts.push(if tristan_agility {
+                        "Level Tristan (Agility 3)".to_string()
+                    } else {
+                        "Level Tristan (Prep)".to_string()
+                    });
+                } else {
+                    parts.push(format!("Flagrant {level}"));
+                }
             }
             if let Some(card) = flagrant_gy_return {
                 parts.push(format!("Return {}", card.name()));

@@ -15,6 +15,15 @@ import type { DamageRange } from "../lib/damage-range";
 import { historyQueryPatch, parseSimParam } from "../routes";
 import { useWorkbenchQuery } from "./use-workbench-query";
 import { groupKey, resolvePoolHash } from "../panels/history/shared";
+import {
+  availableRunSettingsFromRuns,
+  parseRunSettingsParams,
+  runSettingsFilterKey,
+  runSettingsToFilter,
+  runMatchesSettingsFilter,
+  type AvailableRunSettings,
+  type RunSettingsFilterState,
+} from "../lib/run-settings-filter";
 
 type HistoryPanelHookOptions = Readonly<{
   decks: SavedDeck[];
@@ -41,6 +50,9 @@ export function useHistoryPanel({
 
   const [simType, setSimType] = useState<SimType>(
     () => parseSimParam(searchParams.get("sim")) ?? "fire_brick",
+  );
+  const [runSettings, setRunSettings] = useState<RunSettingsFilterState>(() =>
+    parseRunSettingsParams(searchParams),
   );
   const [selectedGroupKey, setSelectedGroupKey] = useState(
     () => searchParams.get("vg") ?? "",
@@ -73,12 +85,26 @@ export function useHistoryPanel({
     () => historyQuery.data ?? [],
     [historyQuery.data],
   );
+  const filteredRuns = useMemo(
+    () => runs.filter((run) => runMatchesSettingsFilter(run, runSettings)),
+    [runs, runSettings],
+  );
+  const availableRunSettings: AvailableRunSettings = useMemo(
+    () => availableRunSettingsFromRuns(runs),
+    [runs],
+  );
+  const runSettingsFilter = useMemo(
+    () => runSettingsToFilter(runSettings),
+    [runSettings],
+  );
+  const runSettingsKey = runSettingsFilterKey(runSettings);
 
   const groupsQuery = useVersionGroupsQuery(
     {
       ...(deckId ? { deckId } : deckHash ? { deckHash } : {}),
       simType,
       kind: "evaluate",
+      runSettings: runSettingsFilter,
     },
     dataEpoch,
   );
@@ -126,6 +152,7 @@ export function useHistoryPanel({
           simType,
           rulesVersion: selectedGroup.rulesVersion,
           samplerVersion: selectedGroup.samplerVersion,
+          runSettings: runSettingsFilter,
         }
       : null;
 
@@ -140,6 +167,7 @@ export function useHistoryPanel({
           rulesVersion: selectedGroup.rulesVersion,
           samplerVersion: selectedGroup.samplerVersion,
           attributionVersion: selectedGroup.attributionVersion,
+          runSettings: runSettingsFilter,
         }
       : null;
 
@@ -155,6 +183,7 @@ export function useHistoryPanel({
           simType,
           rulesVersion: selectedGroup.rulesVersion,
           samplerVersion: selectedGroup.samplerVersion,
+          runSettings: runSettingsFilter,
         }
       : null;
 
@@ -174,6 +203,7 @@ export function useHistoryPanel({
           attributionVersion: selectedGroup.attributionVersion,
           damageGte: appliedRange.gte,
           damageLte: appliedRange.lte,
+          runSettings: runSettingsFilter,
         }
       : null;
 
@@ -259,6 +289,10 @@ export function useHistoryPanel({
   }, [simFromUrl]);
 
   useEffect(() => {
+    setRunSettings(parseRunSettingsParams(searchParams));
+  }, [searchParams]);
+
+  useEffect(() => {
     if (versionGroupFromUrl) {
       setSelectedGroupKey(versionGroupFromUrl);
     }
@@ -269,7 +303,7 @@ export function useHistoryPanel({
   }, [cardFromUrl]);
 
   const pooledSampleKey = pooled
-    ? `${poolHash ?? ""}:${simType}:${selectedGroupKey}:${pooled.runCount}`
+    ? `${poolHash ?? ""}:${simType}:${selectedGroupKey}:${pooled.runCount}:${runSettingsKey}`
     : "";
   const prevPooledSampleKeyRef = useRef(pooledSampleKey);
 
@@ -351,15 +385,27 @@ export function useHistoryPanel({
     setCompareGroupKey("");
   }
 
+  function updateRunSettings(next: RunSettingsFilterState) {
+    setRunSettings(next);
+    setSelectedGroupKey("");
+    replaceQuery((current) =>
+      historyQueryPatch(current, { runSettings: next, vg: "" }),
+    );
+  }
+
   return {
     searchParams,
     replaceQuery,
     filterDeckId,
     setFilterDeckId,
-    runs,
+    runs: filteredRuns,
+    allRuns: runs,
     groups,
     simType,
     setSimType,
+    runSettings,
+    availableRunSettings,
+    updateRunSettings,
     selectedGroupKey,
     setSelectedGroupKey,
     pooled,

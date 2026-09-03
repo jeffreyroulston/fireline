@@ -1141,6 +1141,42 @@ fn impact_hammer_self_damage_enables_heated_vengeance() {
 }
 
 #[test]
+fn impact_hammer_wielded_with_heated_vengeance_enables_plus_three() {
+    let mut state = State::with_queue(
+        &[Card::HeatedVengeance, Card::Brick, Card::Brick, Card::Brick],
+        false,
+        1,
+        &[],
+    );
+    state.champion_level = 1;
+    state.equip_weapon(Weapon::ImpactHammer);
+
+    let (after, steps) = apply(
+        state,
+        Action::PlayAttack {
+            card: Card::HeatedVengeance,
+            wield: Some(Weapon::ImpactHammer),
+            prepared: false,
+            doubled: false,
+            command_ally: None,
+        },
+    );
+    assert_eq!(after.damage, 7, "{steps:?}");
+    assert!(after.champion_damaged, "{steps:?}");
+    let labels: Vec<String> = steps.iter().map(format_line_event).collect();
+    assert!(
+        labels
+            .iter()
+            .any(|step| step == "Heated Vengeance (+3) with Impact Hammer"),
+        "{labels:?}"
+    );
+    assert!(
+        labels.iter().any(|step| step == "Impact Hammer self 3"),
+        "{labels:?}"
+    );
+}
+
+#[test]
 fn ally_attacks_do_not_rest_champion_for_later_weapon_swing() {
     let mut state = State::with_queue(&[], false, 2, &[]);
     state.champion_level = 1;
@@ -1305,9 +1341,10 @@ fn tristan_materialize_matches_zander_prep_flow() {
     state.memory[Card::KingdomInformant.index()] = 1;
     state.memory_len = 1;
 
-    let (after, steps) = apply(state, Action::MaterializeTristanMemory);
+    let (after, steps) = apply(state, Action::MaterializeTristanMemory { agility: false });
     assert!(after.tristan_leveled);
     assert_eq!(after.prep, 1);
+    assert_eq!(after.agility, 0);
     assert_eq!(after.champion_level, 1);
     assert!(
         steps
@@ -1322,11 +1359,69 @@ fn tristan_materialize_matches_zander_prep_flow() {
     let legal = solver_actions(state, true);
     let tristan_plays = legal
         .iter()
-        .filter(|action| matches!(action, Action::MaterializeTristanMemory))
+        .filter(|action| matches!(action, Action::MaterializeTristanMemory { .. }))
         .count();
     assert_eq!(
-        tristan_plays, 1,
-        "Tristan must not fan out Glimpse layouts: {legal:?}"
+        tristan_plays, 2,
+        "Tristan On Enter is prep or agility 3: {legal:?}"
+    );
+}
+
+#[test]
+fn tristan_on_enter_agility_grants_recollect() {
+    let mut state = State::with_queue_and_materials(
+        &[Card::Demolition, Card::Brick, Card::Brick, Card::Brick],
+        false,
+        2,
+        &[],
+        MAT_TRISTAN,
+    );
+    state.phase = Phase::Materialize;
+    state.turn = 1;
+    state.memory[Card::Brick.index()] = 1;
+    state.memory_len = 1;
+
+    let (after_level, steps) = apply(state, Action::MaterializeTristanMemory { agility: true });
+    assert!(after_level.tristan_leveled);
+    assert_eq!(after_level.prep, 0);
+    assert_eq!(after_level.agility, 3);
+    assert!(
+        steps
+            .iter()
+            .any(|step| format_line_event(step) == "Tristan Lvl 1 Agility 3"),
+        "{steps:?}"
+    );
+
+    let mut main = after_level;
+    main.phase = Phase::Main;
+    main.champion_awake = true;
+    let (after_pass, _) = apply(main, Action::Pass);
+    assert_eq!(after_pass.phase, Phase::Agility);
+    let legal = solver_actions(after_pass, false);
+    assert!(
+        !legal
+            .iter()
+            .any(|action| matches!(action, Action::TristanRecollect)),
+        "recollect still needs memory cards: {legal:?}"
+    );
+
+    let (after_demo, _) = apply(
+        after_pass,
+        Action::PlayAction {
+            card: Card::Demolition,
+            kindle: 0,
+            prepared: false,
+            imbue: false,
+            sacrifice_ally: None,
+        },
+    );
+    assert_eq!(after_demo.memory_len, 3);
+    let legal = solver_actions(after_demo, false);
+    assert!(
+        legal
+            .iter()
+            .any(|action| matches!(action, Action::TristanRecollect)),
+        "agility 3 should offer recollect once memory is filled: {legal:?}"
     );
 }
 
@@ -1813,6 +1908,7 @@ fn flagrant_guide_levels_zander2_with_prep_and_gy_return() {
             hot_cake_sacrifice: false,
             flagrant_level: Some(MAT_ZANDER_2),
             flagrant_gy_return: Some(Card::IgnitedStab),
+            tristan_agility: false,
         },
     );
     assert_eq!(after.champion_level, 2, "{steps:?}");
@@ -2597,6 +2693,63 @@ fn spark_alight_should_amplify_once_when_poisoned_dagger_is_active() {
 }
 
 #[test]
+fn creative_shock_should_draw_two_then_discard_a_brick() {
+    assert_eq!(parse_card("Creative Shock"), Some(Card::CreativeShock));
+    assert!(Card::CreativeShock.is_fast());
+    assert_eq!(Card::CreativeShock.cost(), 3);
+
+    let hand = [
+        Card::CreativeShock,
+        Card::Brick,
+        Card::Brick,
+        Card::Brick,
+        Card::Brick,
+    ];
+    let state = State::with_queue(&hand, true, 1, &[Card::SmokeOut, Card::SparkAlight]);
+    let play = solver_actions(state, false)
+        .into_iter()
+        .find(|action| {
+            matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::CreativeShock,
+                    ..
+                }
+            )
+        })
+        .expect("Creative Shock should be playable");
+    let (after, steps) = apply(state, play);
+    assert_eq!(after.damage, 0, "{steps:?}");
+    assert_eq!(after.hand_len, 2, "{steps:?}");
+    assert!(after.has(Card::SmokeOut), "{steps:?}");
+    assert!(after.has(Card::SparkAlight), "{steps:?}");
+    assert!(
+        steps.iter().any(|step| {
+            format_line_event(step) == "Creative Shock (draw Smoke, Spark / discard Brick)"
+        }),
+        "{steps:?}"
+    );
+}
+
+#[test]
+fn creative_shock_should_be_offered_during_pre_recollect() {
+    let hand = [Card::CreativeShock, Card::Brick, Card::Brick, Card::Brick];
+    let mut state = State::with_queue(&hand, true, 1, &[]);
+    state.phase = Phase::PreRecollect;
+    let legal = solver_actions(state, false);
+    assert!(
+        legal.iter().any(|action| matches!(
+            action,
+            Action::PlayAction {
+                card: Card::CreativeShock,
+                ..
+            }
+        )),
+        "fast Creative Shock should be offered in pre-recollect: {legal:?}"
+    );
+}
+
+#[test]
 fn incapacitate_class_bonus_discount_and_inert_actions() {
     let hand = [Card::Incapacitate, Card::Brick, Card::Brick];
     let unleveled = State::with_queue(&hand, true, 1, &[]);
@@ -2800,8 +2953,8 @@ fn solver_snapshot_equivalence() {
         "Recollect (draw Brick)",
         "Attack from Arthur, Young Heir",
         "USE IN BELOW ATTACK (Impact Hammer)",
-        "Ignited Stab (no prep) with Impact Hammer",
         "Impact Hammer self 3",
+        "Ignited Stab (no prep) with Impact Hammer",
         "Activate Clumsy Apprentice",
         "Clumsy On-Enter draw (Brick)",
         "Attack from Clumsy Apprentice (Arthur +1)",
@@ -2819,8 +2972,8 @@ fn solver_snapshot_equivalence() {
         "Recollect (draw Brick)",
         "Attack from Kingdom Informant",
         "USE IN BELOW ATTACK (Impact Hammer)",
-        "Rending Flames (Doubled) with Impact Hammer",
         "Impact Hammer self 3",
+        "Rending Flames (Doubled) with Impact Hammer",
         "Materialize Mercenary's Blade (prep)",
         "Main: Pass Opportunity",
         "End of Agility Phase",
@@ -3649,7 +3802,12 @@ fn cancel_flag_aborts_long_oracle_pass() {
 #[test]
 fn attack_others_two_hasty_messengers_both_draw_on_auto() {
     let mut state = State::with_queue(
-        &[Card::Brick, Card::Brick, Card::KingdomInformant, Card::IgnitedStab],
+        &[
+            Card::Brick,
+            Card::Brick,
+            Card::KingdomInformant,
+            Card::IgnitedStab,
+        ],
         true,
         1,
         &[Card::SableRemnant, Card::ClumsyApprentice],
@@ -3668,9 +3826,14 @@ fn attack_others_two_hasty_messengers_both_draw_on_auto() {
 
 #[test]
 fn attack_others_two_hasty_messengers_manual_then_auto() {
-    use crate::solver::{apply_action_with_payment, ActionPayment, DiscardPayment};
+    use crate::solver::{ActionPayment, DiscardPayment, apply_action_with_payment};
     let mut state = State::with_queue(
-        &[Card::Brick, Card::Brick, Card::KingdomInformant, Card::IgnitedStab],
+        &[
+            Card::Brick,
+            Card::Brick,
+            Card::KingdomInformant,
+            Card::IgnitedStab,
+        ],
         true,
         1,
         &[Card::SableRemnant, Card::ClumsyApprentice],

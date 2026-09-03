@@ -91,6 +91,10 @@ export function HandProgressBars({
       if (aWaiting !== bWaiting) {
         return aWaiting - bWaiting;
       }
+      const deck = (a.deckNumber ?? 0) - (b.deckNumber ?? 0);
+      if (deck !== 0) {
+        return deck;
+      }
       return a.sampleIndex - b.sampleIndex;
     });
   const needsClock = active.some(
@@ -128,7 +132,11 @@ export function HandProgressBars({
       </div>
       <div className="grid min-w-0 gap-1">
         {visible.map((hand) => (
-          <HandBar key={hand.sampleIndex} hand={hand} nowMs={nowMs} />
+          <HandBar
+            key={`${hand.deckNumber ?? 0}:${hand.sampleIndex}`}
+            hand={hand}
+            nowMs={nowMs}
+          />
         ))}
       </div>
       {overflow > 0 && (

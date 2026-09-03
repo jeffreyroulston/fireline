@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "ts")]
 use ts_rs::TS;
 
-pub const CARD_COUNT: usize = 49;
+pub const CARD_COUNT: usize = 50;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -58,6 +58,7 @@ pub enum Card {
     SparkAlight = 46,
     PackageCourier = 47,
     FlurryOfFire = 48,
+    CreativeShock = 49,
 }
 
 impl Card {
@@ -117,6 +118,7 @@ impl Card {
             Self::SparkAlight => "spark_alight",
             Self::PackageCourier => "package_courier",
             Self::FlurryOfFire => "flurry_of_fire",
+            Self::CreativeShock => "creative_shock",
         }
     }
 
@@ -171,6 +173,7 @@ impl Card {
             Self::SparkAlight => "Spark Alight",
             Self::PackageCourier => "Package Courier",
             Self::FlurryOfFire => "Aenean Flurry of Fire",
+            Self::CreativeShock => "Creative Shock",
         }
     }
 
@@ -225,6 +228,7 @@ impl Card {
             Self::SparkAlight => "Spark",
             Self::PackageCourier => "PCour",
             Self::FlurryOfFire => "Flurr",
+            Self::CreativeShock => "Shock",
         }
     }
 
@@ -253,7 +257,8 @@ impl Card {
             | Self::LurkingAssailant
             | Self::CorhaziArsonist
             | Self::IgniteFate
-            | Self::ReduceToAsh => 3,
+            | Self::ReduceToAsh
+            | Self::CreativeShock => 3,
             Self::KingdomInformant
             | Self::ClumsyApprentice
             | Self::SableRemnant
@@ -377,6 +382,7 @@ impl Card {
                 | Self::SmokeOut
                 | Self::SparkAlight
                 | Self::FlurryOfFire
+                | Self::CreativeShock
         )
     }
 
@@ -422,6 +428,7 @@ impl Card {
                 | Self::ReduceToAsh
                 | Self::SmokeOut
                 | Self::SparkAlight
+                | Self::CreativeShock
         )
     }
 
@@ -617,9 +624,10 @@ pub const ALL_CARDS: [Card; CARD_COUNT] = [
     Card::SparkAlight,
     Card::PackageCourier,
     Card::FlurryOfFire,
+    Card::CreativeShock,
 ];
 
-pub const PLAYABLE_CARDS: [Card; 48] = [
+pub const PLAYABLE_CARDS: [Card; 49] = [
     Card::Arthur,
     Card::KingdomInformant,
     Card::ClumsyApprentice,
@@ -668,6 +676,7 @@ pub const PLAYABLE_CARDS: [Card; 48] = [
     Card::SparkAlight,
     Card::PackageCourier,
     Card::FlurryOfFire,
+    Card::CreativeShock,
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -801,6 +810,7 @@ pub fn parse_card(value: &str) -> Option<Card> {
         "spark_alight" | "aenean_spark_alight" => Card::SparkAlight,
         "package_courier" => Card::PackageCourier,
         "flurry_of_fire" | "aenean_flurry_of_fire" => Card::FlurryOfFire,
+        "creative_shock" => Card::CreativeShock,
         _ => return None,
     })
 }
@@ -811,8 +821,8 @@ mod tests {
 
     #[test]
     fn card_count_matches_enum() {
-        assert_eq!(CARD_COUNT, 49);
-        assert_eq!(Card::FlurryOfFire.index(), CARD_COUNT - 1);
+        assert_eq!(CARD_COUNT, 50);
+        assert_eq!(Card::CreativeShock.index(), CARD_COUNT - 1);
     }
 
     #[test]
@@ -827,5 +837,6 @@ mod tests {
         assert_eq!(parse_card("Fire-Brick"), Some(Card::Brick));
         assert_eq!(parse_card("Arthur Young Heir"), Some(Card::Arthur));
         assert_eq!(parse_card("aenean_spark_alight"), Some(Card::SparkAlight));
+        assert_eq!(parse_card("Creative Shock"), Some(Card::CreativeShock));
     }
 }

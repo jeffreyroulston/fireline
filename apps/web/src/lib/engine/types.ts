@@ -52,7 +52,8 @@ export type CardId =
   | "smoke_out"
   | "spark_alight"
   | "package_courier"
-  | "flurry_of_fire";
+  | "flurry_of_fire"
+  | "creative_shock";
 
 export type MaterialId =
   | "impact_hammer"

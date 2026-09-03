@@ -30,7 +30,7 @@ function championBoardCard(
   board: PlaytestStateView,
 ): MaterialId | null {
   if (board.tristanLeveled) {
-    return null;
+    return "tristan_1";
   }
   if (board.championLevel === 0) {
     return "spirit_of_fire";
@@ -170,6 +170,12 @@ export function PlaytestPanel({
                   title={
                     <>
                       BOARD · <strong>Prep {board.prep}</strong>
+                      {board.agility > 0 ? (
+                        <>
+                          {" "}
+                          · <strong>Agility {board.agility}</strong>
+                        </>
+                      ) : null}
                     </>
                   }
                   meta={<strong>{boardPieceCount}</strong>}

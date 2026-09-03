@@ -44,6 +44,7 @@ import {
   type CardDatabaseSource,
 } from "./services/card-database.js";
 import { parseAttributionVersion, parseDamageBounds, parseVersionTriple } from "./lib/version.js";
+import { parseRunSettingsFilter } from "./lib/run-settings-filter.js";
 
 function parseCardDatabaseSource(value: string | null): CardDatabaseSource {
   if (value === "all" || value === "swap_sweep") {
@@ -615,12 +616,14 @@ export function createApp(options: {
     const deckId = c.req.query("deck_id") || undefined;
     const simType = c.req.query("sim_type") || undefined;
     const kind = c.req.query("kind");
+    const params = new URL(c.req.url).searchParams;
     const groups = await listVersionGroups(options.db, {
       deckHash,
       deckId,
       simType,
       kind:
         kind === "evaluate" || kind === "optimize" ? kind : undefined,
+      runSettings: parseRunSettingsFilter(params),
     });
     return c.json(groups);
   });
@@ -635,10 +638,12 @@ export function createApp(options: {
     if ("error" in version) {
       return c.json({ error: version.error }, 400);
     }
+    const params = new URL(c.req.url).searchParams;
     const result = await pooledSampleHighlights(options.db, {
       deckHash,
       simType,
       version,
+      runSettings: parseRunSettingsFilter(params),
     });
     return c.json(result);
   });
@@ -670,10 +675,12 @@ export function createApp(options: {
     if ("error" in version) {
       return c.json({ error: version.error }, 400);
     }
+    const params = new URL(c.req.url).searchParams;
     const result = await pooledDamageDistribution(options.db, {
       deckHash,
       simType,
       version,
+      runSettings: parseRunSettingsFilter(params),
     });
     return c.json(result);
   });
@@ -710,6 +717,7 @@ export function createApp(options: {
       attributionVersion,
       bounds,
       cards,
+      runSettings: parseRunSettingsFilter(params),
     });
     return c.json(result);
   });
@@ -763,6 +771,7 @@ export function createApp(options: {
       currentVersion,
       currentAttributionVersion,
       deckIds: deckFilter ? deckIdParams : undefined,
+      runSettings: parseRunSettingsFilter(params),
     });
     return c.json(result);
   });
@@ -792,6 +801,7 @@ export function createApp(options: {
       version,
       attributionVersion,
       deckIds: deckFilter ? deckIdParams : undefined,
+      runSettings: parseRunSettingsFilter(params),
     });
     return c.json({ decks });
   });
@@ -820,6 +830,7 @@ export function createApp(options: {
       version,
       attributionVersion,
       deckIds: deckFilter ? deckIdParams : undefined,
+      runSettings: parseRunSettingsFilter(params),
     });
     return c.json(matrix);
   });
@@ -848,6 +859,7 @@ export function createApp(options: {
       version,
       attributionVersion,
       deckIds: deckFilter ? deckIdParams : undefined,
+      runSettings: parseRunSettingsFilter(params),
     });
     return c.json(pairings);
   });

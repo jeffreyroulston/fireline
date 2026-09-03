@@ -113,6 +113,7 @@ fn solve_sample_hand(
             phase: HandPhase::Started,
             rollout: 0,
             total_rollouts,
+            deck_number: 0,
         },
     )
     .is_break()
@@ -160,6 +161,7 @@ fn solve_sample_hand(
                         phase: HandPhase::Rollout,
                         rollout,
                         total_rollouts,
+                        deck_number: 0,
                     },
                 )
                 .is_break()
@@ -187,6 +189,7 @@ fn solve_sample_hand(
             phase: HandPhase::Done,
             rollout: total_rollouts,
             total_rollouts,
+            deck_number: 0,
         },
     )
     .is_break()
@@ -299,6 +302,7 @@ fn solve_unique_hands(
                                 phase: HandPhase::TimedOut,
                                 rollout: 0,
                                 total_rollouts,
+                                deck_number: 0,
                             },
                         );
                         let n = u16::try_from(index + 1).unwrap_or(u16::MAX);
@@ -379,6 +383,7 @@ fn solve_unique_hands(
                                 phase: HandPhase::Throttled,
                                 rollout: 0,
                                 total_rollouts,
+                                deck_number: 0,
                             },
                         );
                     })
@@ -416,6 +421,7 @@ fn solve_unique_hands(
                                 phase: HandPhase::TimedOut,
                                 rollout: 0,
                                 total_rollouts,
+                                deck_number: 0,
                             },
                         );
                         let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
@@ -516,14 +522,7 @@ pub fn evaluate_with_hand_progress(
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
     on_hand_progress: impl FnMut(HandProgress) -> ControlFlow<()> + Send,
 ) -> Result<DeckEvalResult> {
-    evaluate_hands(
-        request,
-        on_progress,
-        on_hand_progress,
-        true,
-        None,
-        None,
-    )
+    evaluate_hands(request, on_progress, on_hand_progress, true, None, None)
 }
 
 /// Evaluate a contiguous window of opening-hand samples from the deck's fixed draw sequence.

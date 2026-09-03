@@ -11,14 +11,16 @@ import type {
 } from "@ga-fire/contracts";
 import {
   analysisQuery,
+  appendRunSettingsFilter,
   prepareRequestBody,
   readErrorMessage,
   type ApiCardRow,
+  type RunSettingsFilter,
   type WorkerVersion,
 } from "./shared";
 import { consumeSolveStream } from "./ndjson";
 
-export type { ApiCardRow, WorkerVersion } from "./shared";
+export type { ApiCardRow, RunSettingsFilter, WorkerVersion } from "./shared";
 
 const API_PREFIX = "/api";
 
@@ -368,14 +370,17 @@ export async function fetchVersionGroups(options: {
   deckId?: string;
   simType?: string;
   kind?: "evaluate" | "optimize";
+  runSettings?: RunSettingsFilter;
 }) {
+  const search = new URLSearchParams();
+  if (options.deckHash) search.set("deck_hash", options.deckHash);
+  if (options.deckId) search.set("deck_id", options.deckId);
+  if (options.simType) search.set("sim_type", options.simType);
+  if (options.kind) search.set("kind", options.kind);
+  appendRunSettingsFilter(search, options.runSettings);
+  const query = search.toString();
   const response = await apiFetch(
-    `/analysis/groups${analysisQuery({
-      deck_hash: options.deckHash,
-      deck_id: options.deckId,
-      sim_type: options.simType,
-      kind: options.kind,
-    })}`,
+    `/analysis/groups${query ? `?${query}` : ""}`,
   );
   return response.json() as Promise<VersionGroup[]>;
 }
@@ -385,15 +390,16 @@ export async function fetchPooledDamage(options: {
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
+  runSettings?: RunSettingsFilter;
 }) {
-  const response = await apiFetch(
-    `/analysis/pooled-damage${analysisQuery({
-      deck_hash: options.deckHash,
-      sim_type: options.simType,
-      rules_version: options.rulesVersion,
-      sampler_version: options.samplerVersion,
-    })}`,
-  );
+  const search = new URLSearchParams({
+    deck_hash: options.deckHash,
+    sim_type: options.simType,
+    rules_version: String(options.rulesVersion),
+    sampler_version: String(options.samplerVersion),
+  });
+  appendRunSettingsFilter(search, options.runSettings);
+  const response = await apiFetch(`/analysis/pooled-damage?${search}`);
   return response.json() as Promise<PooledDamageResponse>;
 }
 
@@ -407,20 +413,21 @@ export async function fetchCardLeaderboard(options: {
   damageGte?: number;
   damageLt?: number;
   damageLte?: number;
+  runSettings?: RunSettingsFilter;
 }) {
-  const response = await apiFetch(
-    `/analysis/card-leaderboard${analysisQuery({
-      deck_hash: options.deckHash,
-      sim_type: options.simType,
-      rules_version: options.rulesVersion,
-      sampler_version: options.samplerVersion,
-      attribution_version: options.attributionVersion,
-      damage_gt: options.damageGt,
-      damage_gte: options.damageGte,
-      damage_lt: options.damageLt,
-      damage_lte: options.damageLte,
-    })}`,
-  );
+  const search = new URLSearchParams({
+    deck_hash: options.deckHash,
+    sim_type: options.simType,
+    rules_version: String(options.rulesVersion),
+    sampler_version: String(options.samplerVersion),
+    attribution_version: String(options.attributionVersion),
+  });
+  if (options.damageGt != null) search.set("damage_gt", String(options.damageGt));
+  if (options.damageGte != null) search.set("damage_gte", String(options.damageGte));
+  if (options.damageLt != null) search.set("damage_lt", String(options.damageLt));
+  if (options.damageLte != null) search.set("damage_lte", String(options.damageLte));
+  appendRunSettingsFilter(search, options.runSettings);
+  const response = await apiFetch(`/analysis/card-leaderboard?${search}`);
   return response.json() as Promise<CardLeaderboardResponse>;
 }
 
@@ -440,14 +447,17 @@ export async function fetchPooledSampleHighlights(options: {
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
+  runSettings?: RunSettingsFilter;
 }) {
+  const search = new URLSearchParams({
+    deck_hash: options.deckHash,
+    sim_type: options.simType,
+    rules_version: String(options.rulesVersion),
+    sampler_version: String(options.samplerVersion),
+  });
+  appendRunSettingsFilter(search, options.runSettings);
   const response = await apiFetch(
-    `/analysis/pooled-sample-highlights${analysisQuery({
-      deck_hash: options.deckHash,
-      sim_type: options.simType,
-      rules_version: options.rulesVersion,
-      sampler_version: options.samplerVersion,
-    })}`,
+    `/analysis/pooled-sample-highlights?${search}`,
   );
   return response.json() as Promise<PooledSampleHighlightsResponse>;
 }
@@ -551,6 +561,10 @@ export type CardDatabaseResponse = {
   totalSamples: number;
   contributors: CardDatabaseContributor[];
   cards: CardDatabaseCard[];
+  availableRunSettings: {
+    goFirst: boolean[];
+    maxTurns: number[];
+  };
 };
 
 export type CardDatabaseSource = "all" | "evaluate" | "swap_sweep";
@@ -565,6 +579,7 @@ export async function fetchCardDatabase(options: {
   currentSamplerVersion: number;
   currentAttributionVersion: number;
   deckIds?: string[];
+  runSettings?: RunSettingsFilter;
 }): Promise<CardDatabaseResponse> {
   const search = new URLSearchParams({
     sim_type: options.simType,
@@ -584,6 +599,7 @@ export async function fetchCardDatabase(options: {
   if (options.deckIds !== undefined) {
     search.set("deck_filter", "1");
   }
+  appendRunSettingsFilter(search, options.runSettings);
   const response = await apiFetch(`/analysis/card-database?${search}`);
   return response.json() as Promise<CardDatabaseResponse>;
 }
@@ -612,6 +628,7 @@ export async function fetchCardDatabaseCardDecks(options: {
   samplerVersion: number;
   attributionVersion: number;
   deckIds?: string[];
+  runSettings?: RunSettingsFilter;
 }): Promise<CardDatabaseCardDecksResponse> {
   const search = new URLSearchParams({
     sim_type: options.simType,
@@ -628,6 +645,7 @@ export async function fetchCardDatabaseCardDecks(options: {
   if (options.deckIds !== undefined) {
     search.set("deck_filter", "1");
   }
+  appendRunSettingsFilter(search, options.runSettings);
   const response = await apiFetch(
     `/analysis/card-database/${encodeURIComponent(options.cardId)}/decks?${search}`,
   );
@@ -654,6 +672,7 @@ export async function fetchCardDatabasePlayMatrix(options: {
   samplerVersion: number;
   attributionVersion: number;
   deckIds?: string[];
+  runSettings?: RunSettingsFilter;
 }): Promise<CardPlayMatrixResponse> {
   const search = new URLSearchParams({
     sim_type: options.simType,
@@ -670,6 +689,7 @@ export async function fetchCardDatabasePlayMatrix(options: {
   if (options.deckIds !== undefined) {
     search.set("deck_filter", "1");
   }
+  appendRunSettingsFilter(search, options.runSettings);
   const response = await apiFetch(
     `/analysis/card-database/${encodeURIComponent(options.cardId)}/play-matrix?${search}`,
   );
@@ -703,6 +723,7 @@ export async function fetchCardDatabasePairings(options: {
   samplerVersion: number;
   attributionVersion: number;
   deckIds?: string[];
+  runSettings?: RunSettingsFilter;
 }): Promise<CardDatabasePairingsResponse> {
   const search = new URLSearchParams({
     sim_type: options.simType,
@@ -719,6 +740,7 @@ export async function fetchCardDatabasePairings(options: {
   if (options.deckIds !== undefined) {
     search.set("deck_filter", "1");
   }
+  appendRunSettingsFilter(search, options.runSettings);
   const response = await apiFetch(
     `/analysis/card-database/${encodeURIComponent(options.cardId)}/pairings?${search}`,
   );

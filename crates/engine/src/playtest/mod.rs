@@ -72,11 +72,7 @@ pub fn playtest_legal_actions(
                 .map(|step| PlaytestDiscardStep {
                     label: step.label,
                     discard_optional: step.optional,
-                    discard_hand: step
-                        .hand
-                        .iter()
-                        .map(|card| card.id().to_string())
-                        .collect(),
+                    discard_hand: step.hand.iter().map(|card| card.id().to_string()).collect(),
                     drawn_discard_index: step.drawn_index,
                 })
                 .collect();
@@ -96,9 +92,9 @@ pub fn playtest_legal_actions(
                 discard_hand: first_discard_step
                     .map(|step| step.discard_hand.clone())
                     .or_else(|| {
-                        discard_hand_view
-                            .as_ref()
-                            .map(|(slots, _)| slots.iter().map(|card| card.id().to_string()).collect())
+                        discard_hand_view.as_ref().map(|(slots, _)| {
+                            slots.iter().map(|card| card.id().to_string()).collect()
+                        })
                     })
                     .unwrap_or_default(),
                 drawn_discard_index: first_discard_step

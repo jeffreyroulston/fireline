@@ -37,6 +37,10 @@ struct StopJobRequest {
     save: bool,
 }
 
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 enum EvaluateStreamEvent {
@@ -55,6 +59,8 @@ enum EvaluateStreamEvent {
         phase: HandPhase,
         rollout: u16,
         total_rollouts: u16,
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        deck_number: u32,
     },
     #[serde(rename_all = "camelCase")]
     MemoryPressure {
@@ -84,6 +90,8 @@ enum OptimizeStreamEvent {
         phase: HandPhase,
         rollout: u16,
         total_rollouts: u16,
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        deck_number: u32,
     },
     #[serde(rename_all = "camelCase")]
     MemoryPressure {
@@ -336,6 +344,7 @@ async fn evaluate_handler(
                     phase: progress.phase,
                     rollout: progress.rollout,
                     total_rollouts: progress.total_rollouts,
+                    deck_number: progress.deck_number,
                 };
                 send_event_or_cancel(&tx, &event, &cancel_for_progress)
             },
@@ -405,6 +414,7 @@ async fn optimize_handler(
                     phase: progress.phase,
                     rollout: progress.rollout,
                     total_rollouts: progress.total_rollouts,
+                    deck_number: progress.deck_number,
                 };
                 send_event_or_cancel(&tx, &event, &cancel_for_progress)
             },
@@ -507,7 +517,7 @@ fn optimize_result_event(
 /// memory was climbing — when the worker died.
 #[derive(Clone)]
 struct RunLogger {
-    hands: Arc<Mutex<HashMap<u16, Instant>>>,
+    hands: Arc<Mutex<HashMap<(u32, u16), Instant>>>,
     peak_rss_mb: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
 }
@@ -545,14 +555,16 @@ impl RunLogger {
     }
 
     fn hand_event(&self, progress: &HandProgress) {
+        let key = (progress.deck_number, progress.sample_index);
         match progress.phase {
             HandPhase::Started => {
                 self.hands
                     .lock()
                     .unwrap_or_else(|err| err.into_inner())
-                    .insert(progress.sample_index, Instant::now());
+                    .insert(key, Instant::now());
                 tracing::info!(
                     sample = progress.sample_index,
+                    deck = progress.deck_number,
                     total_rollouts = progress.total_rollouts,
                     rss_mb = self.note_rss(),
                     "hand started"
@@ -563,9 +575,10 @@ impl RunLogger {
                     .hands
                     .lock()
                     .unwrap_or_else(|err| err.into_inner())
-                    .remove(&progress.sample_index);
+                    .remove(&key);
                 tracing::info!(
                     sample = progress.sample_index,
+                    deck = progress.deck_number,
                     elapsed_s = started.map(|at| at.elapsed().as_secs()),
                     rss_mb = self.note_rss(),
                     "hand done"
@@ -574,6 +587,7 @@ impl RunLogger {
             HandPhase::Throttled => {
                 tracing::info!(
                     sample = progress.sample_index,
+                    deck = progress.deck_number,
                     rss_mb = self.note_rss(),
                     "hand waiting for memory"
                 );
@@ -582,9 +596,10 @@ impl RunLogger {
                 self.hands
                     .lock()
                     .unwrap_or_else(|err| err.into_inner())
-                    .remove(&progress.sample_index);
+                    .remove(&key);
                 tracing::info!(
                     sample = progress.sample_index,
+                    deck = progress.deck_number,
                     rss_mb = self.note_rss(),
                     "hand timed out"
                 );
@@ -609,7 +624,9 @@ impl RunLogger {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .iter()
-            .map(|(index, since)| format!("#{index} {}s", since.elapsed().as_secs()))
+            .map(|((deck, sample), since)| {
+                format!("deck {deck} #{sample} {}s", since.elapsed().as_secs())
+            })
             .collect();
         tracing::info!(rss_mb = rss, peak_mb = peak, ?in_flight, "run rss");
     }
@@ -850,6 +867,7 @@ mod tests {
             phase: HandPhase::Started,
             rollout: 0,
             total_rollouts: 16,
+            deck_number: 0,
         })
         .unwrap();
         assert_eq!(hand["kind"], "handProgress");
@@ -863,6 +881,7 @@ mod tests {
             phase: HandPhase::Throttled,
             rollout: 0,
             total_rollouts: 16,
+            deck_number: 0,
         })
         .unwrap();
         assert_eq!(throttled["phase"], "throttled");

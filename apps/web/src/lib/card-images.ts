@@ -52,6 +52,7 @@ const CARD_IMAGE_PATHS: Partial<Record<CardId | MaterialId, string>> = {
   spark_alight: "/cards/images/xYuivRUbwA.jpg",
   package_courier: "/cards/images/mtvkqpheTi.jpg",
   flurry_of_fire: "/cards/images/DYAZlcBLNn.jpg",
+  creative_shock: "/cards/images/nl8zetvwmd.jpg",
   impact_hammer: "/cards/images/nkcqjdmuih.jpg",
   mercenary_blade: "/cards/images/evrbdzdhmf.jpg",
   poisoned_dagger: "/cards/images/ua6rsfsw2v.jpg",

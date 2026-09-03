@@ -287,6 +287,14 @@ pub struct HandProgress {
     pub phase: HandPhase,
     pub rollout: u16,
     pub total_rollouts: u16,
+    /// Optimize runs stamp the 1-based deck being scored so parallel lists
+    /// do not collapse onto the same sample slot in the UI.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub deck_number: u32,
+}
+
+const fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Debug, Serialize)]

@@ -5,6 +5,10 @@ import {
   computeAllHandImpacts,
   evaluateSamplesFromRows,
 } from "../lib/hand-impact.js";
+import {
+  applyRunSettingsFilter,
+  type RunSettingsFilter,
+} from "../lib/run-settings-filter.js";
 import type { VersionTriple } from "../lib/version.js";
 
 function materialIdsFromRunBody(body: Record<string, unknown>): string[] {
@@ -67,9 +71,10 @@ export async function cardLeaderboardFromSamples(
     attributionVersion: number;
     bounds: DamageBounds;
     cards: CatalogName[];
+    runSettings?: RunSettingsFilter;
   },
 ) {
-  const runs = await db
+  let runsQuery = db
     .selectFrom("runs")
     .select(["id", "deck_counts", "samples", "request_body"])
     .where("status", "in", ["complete", "partial"])
@@ -79,8 +84,11 @@ export async function cardLeaderboardFromSamples(
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
     .where("attribution_version", "=", options.attributionVersion)
-    .orderBy("started_at", "asc")
-    .execute();
+    .orderBy("started_at", "asc");
+
+  runsQuery = applyRunSettingsFilter(runsQuery, options.runSettings);
+
+  const runs = await runsQuery.execute();
 
   if (runs.length === 0) {
     return {

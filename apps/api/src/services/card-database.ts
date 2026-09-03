@@ -21,6 +21,14 @@ import {
   loadSwapSweepSlice,
   parseSwapSweepVirtualDeckId,
 } from "./card-database-swap-sweep.js";
+import {
+  applyRunSettingsFilter,
+  loadAvailableRunSettings,
+  type AvailableRunSettings,
+  type RunSettingsFilter,
+} from "../lib/run-settings-filter.js";
+
+export type { AvailableRunSettings, RunSettingsFilter } from "../lib/run-settings-filter.js";
 
 export type { CardHandImpact } from "../lib/hand-impact.js";
 
@@ -307,6 +315,7 @@ export async function cardDatabase(
     currentVersion: VersionTriple;
     currentAttributionVersion: number;
     deckIds?: string[];
+    runSettings?: RunSettingsFilter;
   },
 ) {
   const source = options.source ?? "evaluate";
@@ -324,6 +333,7 @@ export async function cardDatabase(
     currentVersion: options.currentVersion,
     currentAttributionVersion: options.currentAttributionVersion,
     deckIds: swapSweepDeckIds,
+    runSettings: options.runSettings,
   };
 
   let contributors: CardDatabaseContributor[] = [];
@@ -333,7 +343,7 @@ export async function cardDatabase(
   let totalSamples = 0;
 
   if (includesEvaluate(source) && !skipAll) {
-    const contributorRows = await db
+    let contributorQuery = db
       .selectFrom("runs as r")
       .innerJoin("decks as d", "d.id", "r.deck_id")
       .select([
@@ -348,7 +358,15 @@ export async function cardDatabase(
       .where("r.sim_type", "=", options.simType)
       .where("r.rules_version", "=", options.currentVersion.rulesVersion)
       .where("r.sampler_version", "=", options.currentVersion.samplerVersion)
-      .where("r.attribution_version", "=", options.currentAttributionVersion)
+      .where("r.attribution_version", "=", options.currentAttributionVersion);
+
+    contributorQuery = applyRunSettingsFilter(
+      contributorQuery,
+      options.runSettings,
+      "r",
+    );
+
+    const contributorRows = await contributorQuery
       .groupBy(["r.deck_id", "d.name"])
       .orderBy(sql`sum(coalesce(r.samples, 0))`, "desc")
       .execute();
@@ -399,12 +417,15 @@ export async function cardDatabase(
         statsQuery = statsQuery.where("r.deck_id", "in", evaluateDeckIds);
       }
 
+      statsQuery = applyRunSettingsFilter(statsQuery, options.runSettings, "r");
+
       const statRows = await statsQuery.execute();
       const samples = await loadEvaluateSamples(db, {
         simType: options.simType,
         version: options.version,
         attributionVersion: options.attributionVersion,
         deckIds: evaluateDeckIds,
+        runSettings: options.runSettings,
       });
       const handImpactByCard = computeAllHandImpacts(samples);
       performanceByCard = new Map(
@@ -445,6 +466,8 @@ export async function cardDatabase(
         olderQuery = olderQuery.where("r.deck_id", "in", evaluateDeckIds);
       }
 
+      olderQuery = applyRunSettingsFilter(olderQuery, options.runSettings, "r");
+
       const olderRows = await olderQuery.execute();
       olderSet = new Set(olderRows.map((row) => row.cardId));
 
@@ -474,6 +497,15 @@ export async function cardDatabase(
         runCountQuery = runCountQuery.where("deck_id", "in", evaluateDeckIds);
         samplesQuery = samplesQuery.where("deck_id", "in", evaluateDeckIds);
       }
+
+      runCountQuery = applyRunSettingsFilter(
+        runCountQuery,
+        options.runSettings,
+      );
+      samplesQuery = applyRunSettingsFilter(
+        samplesQuery,
+        options.runSettings,
+      );
 
       const [runCountRow, samplesRow] = await Promise.all([
         runCountQuery.executeTakeFirst(),
@@ -518,6 +550,18 @@ export async function cardDatabase(
     return a.name.localeCompare(b.name);
   });
 
+  let availableRunSettings: AvailableRunSettings = { goFirst: [], maxTurns: [] };
+  if (!skipAll) {
+    availableRunSettings = await loadAvailableRunSettings(db, {
+      simType: options.simType,
+      rulesVersion: options.version.rulesVersion,
+      samplerVersion: options.version.samplerVersion,
+      attributionVersion: options.attributionVersion,
+      deckIds: deckIds,
+      kind: includesEvaluate(source) ? "evaluate" : "optimize",
+    });
+  }
+
   return {
     simType: options.simType,
     version: options.version,
@@ -528,6 +572,7 @@ export async function cardDatabase(
     totalSamples,
     contributors,
     cards,
+    availableRunSettings,
   };
 }
 
@@ -539,6 +584,7 @@ async function evaluateDecksForCard(
     version: VersionTriple;
     attributionVersion: number;
     deckIds?: string[];
+    runSettings?: RunSettingsFilter;
   },
 ) {
   if (options.deckIds !== undefined && options.deckIds.length === 0) {
@@ -572,6 +618,8 @@ async function evaluateDecksForCard(
     deckQuery = deckQuery.where("r.deck_id", "in", options.deckIds);
   }
 
+  deckQuery = applyRunSettingsFilter(deckQuery, options.runSettings, "r");
+
   const decks = await deckQuery.execute();
   return decks.map((row) => ({
     deckId: row.deckId!,
@@ -592,6 +640,7 @@ export async function cardDatabaseCardDecks(
     version: VersionTriple;
     attributionVersion: number;
     deckIds?: string[];
+    runSettings?: RunSettingsFilter;
   },
 ): Promise<CardDatabaseDeckRow[]> {
   const source = options.source ?? "evaluate";
@@ -604,6 +653,7 @@ export async function cardDatabaseCardDecks(
     version: options.version,
     attributionVersion: options.attributionVersion,
     deckIds: swapSweepDeckIds,
+    runSettings: options.runSettings,
   };
 
   let rows: CardDatabaseDeckRow[] = [];
@@ -619,6 +669,7 @@ export async function cardDatabaseCardDecks(
       version: options.version,
       attributionVersion: options.attributionVersion,
       deckIds: evaluateDeckIds,
+      runSettings: options.runSettings,
     });
 
     function deckRow(
@@ -714,6 +765,7 @@ export async function cardDatabasePlayMatrix(
     version: VersionTriple;
     attributionVersion: number;
     deckIds?: string[];
+    runSettings?: RunSettingsFilter;
   },
 ): Promise<CardPlayMatrix> {
   const source = options.source ?? "evaluate";
@@ -742,6 +794,8 @@ export async function cardDatabasePlayMatrix(
   if (evaluateDeckIds && evaluateDeckIds.length > 0) {
     sampleQuery = sampleQuery.where("r.deck_id", "in", evaluateDeckIds);
   }
+
+  sampleQuery = applyRunSettingsFilter(sampleQuery, options.runSettings, "r");
 
   const sampleRow = await sampleQuery.executeTakeFirst();
   const totalSamples = sampleRow?.totalSamples ?? 0;
@@ -775,6 +829,8 @@ export async function cardDatabasePlayMatrix(
   if (evaluateDeckIds && evaluateDeckIds.length > 0) {
     playQuery = playQuery.where("r.deck_id", "in", evaluateDeckIds);
   }
+
+  playQuery = applyRunSettingsFilter(playQuery, options.runSettings, "r");
 
   if (materialKinds) {
     playQuery = playQuery.where("e.kind", "in", materialKinds);
@@ -828,6 +884,7 @@ export async function cardDatabasePairings(
     version: VersionTriple;
     attributionVersion: number;
     deckIds?: string[];
+    runSettings?: RunSettingsFilter;
   },
 ): Promise<CardDatabasePairings> {
   const source = options.source ?? "evaluate";
@@ -871,6 +928,8 @@ export async function cardDatabasePairings(
   if (evaluateDeckIds && evaluateDeckIds.length > 0) {
     sampleQuery = sampleQuery.where("r.deck_id", "in", evaluateDeckIds);
   }
+
+  sampleQuery = applyRunSettingsFilter(sampleQuery, options.runSettings, "r");
 
   const sampleRows = await sampleQuery.execute();
   const totalSamples = sampleRows.reduce(

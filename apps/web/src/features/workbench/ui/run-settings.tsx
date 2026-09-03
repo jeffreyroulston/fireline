@@ -51,7 +51,7 @@ export function RunSettings({
   turn2KillThreshold?: number;
   simType: SimType;
   rollouts: number;
-  seed?: number;
+  seed?: number | null;
   orderedPile?: boolean;
   cpuCount?: number;
   maxThreads: number | null;
@@ -69,7 +69,7 @@ export function RunSettings({
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
-  onSeedChange?: (value: number) => void;
+  onSeedChange?: (value: number | null) => void;
 }) {
   const showTurn2Kill = Boolean(onTurn2KillEnabledChange);
   const threadMax = Math.max(1, cpuCount ?? 1);
@@ -142,16 +142,22 @@ export function RunSettings({
               <span>Options</span>
             </summary>
             <div className={advancedBodyClass}>
-              {onSeedChange != null && seed != null ? (
+              {onSeedChange != null ? (
                 <label>
                   Seed
                   <input
                     type="number"
                     min={0}
                     max={4_294_967_295}
-                    value={seed}
+                    placeholder="Random"
+                    value={seed ?? ""}
                     onChange={(event) => {
-                      const next = Number(event.target.value);
+                      const raw = event.target.value.trim();
+                      if (!raw) {
+                        onSeedChange(null);
+                        return;
+                      }
+                      const next = Number(raw);
                       if (Number.isFinite(next) && next >= 0) {
                         onSeedChange(next);
                       }

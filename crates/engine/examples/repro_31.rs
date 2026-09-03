@@ -7,7 +7,12 @@ use ga_fire_engine::model::{SimType, SolveRequest};
 use ga_fire_engine::solve;
 use std::collections::BTreeMap;
 
-fn oracle(hand: &[Card], queue: &[Card], seed: u64, glimpse: bool) -> ga_fire_engine::model::SolveResult {
+fn oracle(
+    hand: &[Card],
+    queue: &[Card],
+    seed: u64,
+    glimpse: bool,
+) -> ga_fire_engine::model::SolveResult {
     let mut deck = BTreeMap::new();
     for card in hand.iter().chain(queue.iter()) {
         *deck.entry(card.id().to_string()).or_insert(0u8) += 1;
@@ -65,7 +70,10 @@ fn main() {
     for glimpse in [true, false] {
         let result = oracle(&hand, &queue, 42, glimpse);
         let labels: Vec<_> = result.events.iter().map(format_line_event).collect();
-        println!("\n=== glimpse={glimpse} damage={} nodes={} ===", result.max_damage, result.nodes);
+        println!(
+            "\n=== glimpse={glimpse} damage={} nodes={} ===",
+            result.max_damage, result.nodes
+        );
         for (i, label) in labels.iter().enumerate() {
             println!("{i:02} {label}");
         }
