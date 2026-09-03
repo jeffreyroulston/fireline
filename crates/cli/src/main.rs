@@ -66,6 +66,7 @@ fn run() -> Result<String, String> {
                 max_hand_duration_secs: None,
 
                 max_card_draw: None,
+                exhaustive_reservation: None,
             };
             let result = solve(&request).map_err(|error| error.to_string())?;
             if json {

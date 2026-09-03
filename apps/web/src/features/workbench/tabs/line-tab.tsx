@@ -41,6 +41,7 @@ type LineTabProps = Readonly<{
   glimpseEnabled: boolean;
   maxHandDurationSecs: number | null;
   maxCardDraw: number | null;
+  exhaustiveReservation: boolean;
   busy: boolean;
   error: string;
   lineResult: SolveResult | null;
@@ -65,6 +66,7 @@ type LineTabProps = Readonly<{
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
+  onExhaustiveReservationChange: (value: boolean) => void;
   onSeedChange: (value: number | null) => void;
   onSolve: () => void;
   onCancel: () => void;
@@ -96,6 +98,7 @@ export function LineTab({
   glimpseEnabled,
   maxHandDurationSecs,
   maxCardDraw,
+  exhaustiveReservation,
   busy,
   error,
   lineResult,
@@ -120,6 +123,7 @@ export function LineTab({
   onGlimpseEnabledChange,
   onMaxHandDurationSecsChange,
   onMaxCardDrawChange,
+  onExhaustiveReservationChange,
   onSeedChange,
   onSolve,
   onCancel,
@@ -147,6 +151,7 @@ export function LineTab({
     glimpseEnabled,
     maxHandDurationSecs,
     maxCardDraw,
+    exhaustiveReservation,
     materials: activeMaterialCounts,
     deck: deckCounts,
   });
@@ -194,6 +199,7 @@ export function LineTab({
         glimpseEnabled={glimpseEnabled}
         maxHandDurationSecs={maxHandDurationSecs}
         maxCardDraw={maxCardDraw}
+        exhaustiveReservation={exhaustiveReservation}
         busy={busy || playtest.busy}
         onHandChange={onHandChange}
         onSolverModeChange={onSolverModeChange}
@@ -217,6 +223,7 @@ export function LineTab({
         onGlimpseEnabledChange={onGlimpseEnabledChange}
         onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
         onMaxCardDrawChange={onMaxCardDrawChange}
+        onExhaustiveReservationChange={onExhaustiveReservationChange}
         onSeedChange={onSeedChange}
         onSolve={onSolve}
         onCancel={onCancel}

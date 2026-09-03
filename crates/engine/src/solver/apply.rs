@@ -47,6 +47,17 @@ pub(crate) fn apply_silent(state: State, action: Action) -> State {
     TAPE.with(|tape| apply_into(state, action, &mut tape.borrow_mut(), None))
 }
 
+pub(crate) fn apply_silent_with_payment(
+    state: State,
+    action: Action,
+    payment: &ActionPayment,
+) -> State {
+    thread_local! {
+        static TAPE: RefCell<EventTape> = RefCell::new(EventTape::silent());
+    }
+    TAPE.with(|tape| apply_into(state, action, &mut tape.borrow_mut(), Some(payment)))
+}
+
 /// Return freed heap pages to the OS after a heavy solve.
 ///
 /// glibc-specific: `malloc_trim` only trims the *main arena*, while rayon

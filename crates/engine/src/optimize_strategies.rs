@@ -101,6 +101,7 @@ fn build_effective(request: &OptimizeRequest, target: u32) -> EffectiveRequest {
         glimpse_enabled: request.glimpse_enabled,
         max_hand_duration_secs: request.max_hand_duration_secs,
         max_card_draw: request.max_card_draw,
+        exhaustive_reservation: None,
         eval_mode: Some(eval_mode_label(effective_eval_mode(request))),
     }
 }

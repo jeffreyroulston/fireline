@@ -1,9 +1,13 @@
 //! Payment and discard requirements for legal actions.
 
-use crate::cards::Card;
+use crate::cards::{ALL_CARDS, CARD_COUNT, Card};
 use crate::model::{Action, State};
+use rustc_hash::FxHashSet;
 
 use super::actions::action_cost;
+
+/// Max distinct reserve multisets explored per payment action.
+const MAX_RESERVATION_VARIANTS: usize = 64;
 
 /// Manual reserve / discard selection for interactive playtest.
 #[derive(Clone, Debug)]
@@ -255,4 +259,102 @@ pub fn action_payment_required(state: State, action: Action) -> Option<PaymentRe
         }),
         _ => None,
     }
+}
+
+fn reserve_multiset_key(cards: &[Card]) -> [u8; CARD_COUNT] {
+    let mut key = [0_u8; CARD_COUNT];
+    for card in cards {
+        key[card.index()] = key[card.index()].saturating_add(1);
+    }
+    key
+}
+
+fn available_reserve_counts(state: State, played: Option<Card>) -> [u8; CARD_COUNT] {
+    let mut available = state.hand;
+    if let Some(card) = played {
+        available[card.index()] = available[card.index()].saturating_sub(1);
+    }
+    available
+}
+
+fn push_reserve_variant(
+    out: &mut Vec<Vec<Card>>,
+    seen: &mut FxHashSet<[u8; CARD_COUNT]>,
+    cards: Vec<Card>,
+) {
+    let key = reserve_multiset_key(&cards);
+    if seen.insert(key) {
+        out.push(cards);
+    }
+}
+
+fn enumerate_reserve_multisets(
+    available: [u8; CARD_COUNT],
+    slots_left: u8,
+    fire_only: bool,
+    current: &mut Vec<Card>,
+    out: &mut Vec<Vec<Card>>,
+    seen: &mut FxHashSet<[u8; CARD_COUNT]>,
+) {
+    if out.len() >= MAX_RESERVATION_VARIANTS {
+        return;
+    }
+    if slots_left == 0 {
+        push_reserve_variant(out, seen, current.clone());
+        return;
+    }
+    for card in ALL_CARDS {
+        if available[card.index()] == 0 {
+            continue;
+        }
+        if fire_only && !card.is_fire() {
+            continue;
+        }
+        current.push(card);
+        let mut next_available = available;
+        next_available[card.index()] -= 1;
+        enumerate_reserve_multisets(
+            next_available,
+            slots_left - 1,
+            fire_only,
+            current,
+            out,
+            seen,
+        );
+        current.pop();
+        if out.len() >= MAX_RESERVATION_VARIANTS {
+            return;
+        }
+    }
+}
+
+/// Distinct reserve multisets for oracle branching (order ignored).
+pub fn enumerate_reservations(state: State, action: Action) -> Vec<Vec<Card>> {
+    let Some(requirement) = action_payment_required(state, action) else {
+        return Vec::new();
+    };
+    if requirement.reserve == 0 {
+        return vec![Vec::new()];
+    }
+    let available = available_reserve_counts(state, requirement.played_card);
+    let hand_available: u8 = available.iter().sum();
+    if hand_available < requirement.reserve {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut seen = FxHashSet::default();
+    let mut current = Vec::with_capacity(requirement.reserve as usize);
+    enumerate_reserve_multisets(
+        available,
+        requirement.reserve,
+        requirement.fire_only,
+        &mut current,
+        &mut out,
+        &mut seen,
+    );
+    out
+}
+
+pub(crate) fn action_needs_reserve_search(state: State, action: Action) -> bool {
+    action_payment_required(state, action).is_some_and(|requirement| requirement.reserve > 0)
 }

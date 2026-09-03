@@ -1,14 +1,17 @@
 //! Memoized search over legal action sequences.
 
-use crate::{cards::Card, line_event::EventTape, model::State};
+use crate::{cards::Card, line_event::EventTape, model::Action, model::State};
 use rustc_hash::FxHashMap;
 
 use super::actions::{
     optimistic_remaining_damage, order_actions_damage_first, reservation_budget, solver_actions,
 };
-use super::apply::{apply_into, apply_silent};
+use super::apply::{apply_into, apply_silent, apply_silent_with_payment};
 use super::hash::{opening_hand_hash, opening_hand_label};
 use super::memory::release_process_memory;
+use super::payment::{
+    ActionPayment, DiscardPayment, action_needs_reserve_search, enumerate_reservations,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Outcome {
@@ -41,6 +44,7 @@ pub(crate) struct Search {
     pub(crate) memo: FxHashMap<State, MemoValue>,
     pub(crate) nodes: u64,
     pub(crate) glimpse_enabled: bool,
+    pub(crate) exhaustive_reservation: bool,
     /// Base entry cap; live limit is scaled by pressure squeeze.
     memo_cap: usize,
     pub(crate) memo_generations: u32,
@@ -59,15 +63,24 @@ pub(crate) struct Search {
 }
 
 impl Search {
-    pub(crate) fn new(glimpse_enabled: bool) -> Self {
-        Self::with_memo_cap(glimpse_enabled, crate::pressure::memo_cap_entries())
+    pub(crate) fn new(glimpse_enabled: bool, exhaustive_reservation: bool) -> Self {
+        Self::with_memo_cap(
+            glimpse_enabled,
+            exhaustive_reservation,
+            crate::pressure::memo_cap_entries(),
+        )
     }
 
-    pub(crate) fn with_memo_cap(glimpse_enabled: bool, memo_cap: usize) -> Self {
+    pub(crate) fn with_memo_cap(
+        glimpse_enabled: bool,
+        exhaustive_reservation: bool,
+        memo_cap: usize,
+    ) -> Self {
         Self {
             memo: FxHashMap::with_capacity_and_hasher(16_384, Default::default()),
             nodes: 0,
             glimpse_enabled,
+            exhaustive_reservation,
             memo_cap: memo_cap.max(1),
             memo_generations: 0,
             aborted: false,
@@ -201,8 +214,7 @@ impl Search {
         let mut acts = solver_actions(state, self.glimpse_enabled);
         order_actions_damage_first(&state, &mut acts);
         for action in acts {
-            let next = apply_silent(state, action);
-            let outcome = self.visit(next);
+            let outcome = self.visit_action(state, action);
             if self.aborted {
                 return outcome;
             }
@@ -229,6 +241,32 @@ impl Search {
         best
     }
 
+    fn visit_action(&mut self, state: State, action: Action) -> Outcome {
+        if self.exhaustive_reservation && action_needs_reserve_search(state, action) {
+            let mut best = Outcome {
+                damage: state.damage,
+                influence: 0,
+            };
+            for reserved in enumerate_reservations(state, action) {
+                let payment = ActionPayment {
+                    reserved,
+                    discard: DiscardPayment::Auto,
+                    discards: vec![],
+                };
+                let next = apply_silent_with_payment(state, action, &payment);
+                let outcome = self.visit(next);
+                if self.aborted {
+                    return outcome;
+                }
+                if outcome.better(best) {
+                    best = outcome;
+                }
+            }
+            return best;
+        }
+        self.visit(apply_silent(state, action))
+    }
+
     pub(crate) fn reconstruct(
         &mut self,
         state: State,
@@ -244,6 +282,26 @@ impl Search {
         let mut acts = solver_actions(state, self.glimpse_enabled);
         order_actions_damage_first(&state, &mut acts);
         for action in acts {
+            if self.exhaustive_reservation && action_needs_reserve_search(state, action) {
+                for reserved in enumerate_reservations(state, action) {
+                    let saved = tape.checkpoint();
+                    let payment = ActionPayment {
+                        reserved,
+                        discard: DiscardPayment::Auto,
+                        discards: vec![],
+                    };
+                    let next = apply_into(state, action, tape, Some(&payment));
+                    if self.visit(next) == target {
+                        let burst = &tape.events[saved.events_len..];
+                        stats.record_action(action, state, next, burst);
+                        self.bound_prune = prune;
+                        self.reconstruct(next, target, tape, stats);
+                        return;
+                    }
+                    tape.restore(saved);
+                }
+                continue;
+            }
             let saved = tape.checkpoint();
             let next = apply_into(state, action, tape, None);
             if self.visit(next) == target {

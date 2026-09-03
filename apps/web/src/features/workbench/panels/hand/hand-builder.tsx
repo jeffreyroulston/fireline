@@ -50,6 +50,7 @@ export function HandBuilder({
   glimpseEnabled,
   maxHandDurationSecs,
   maxCardDraw,
+  exhaustiveReservation,
   busy,
   onHandChange,
   onSolverModeChange,
@@ -93,6 +94,7 @@ export function HandBuilder({
   glimpseEnabled: boolean;
   maxHandDurationSecs: number | null;
   maxCardDraw: number | null;
+  exhaustiveReservation: boolean;
   busy: boolean;
   onHandChange: (hand: CardId[]) => void;
   onSolverModeChange: (mode: SolverMode) => void;
@@ -110,6 +112,7 @@ export function HandBuilder({
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
+  onExhaustiveReservationChange: (value: boolean) => void;
   onSeedChange: (value: number | null) => void;
   onSolve: () => void;
   onCancel: () => void;
@@ -266,6 +269,7 @@ export function HandBuilder({
           glimpseEnabled={glimpseEnabled}
           maxHandDurationSecs={maxHandDurationSecs}
           maxCardDraw={maxCardDraw}
+          exhaustiveReservation={exhaustiveReservation}
           onFirstChange={onGoFirstChange}
           onTurnsChange={onTurnsChange}
           onTurn2KillEnabledChange={onTurn2KillEnabledChange}
@@ -276,6 +280,7 @@ export function HandBuilder({
           onGlimpseEnabledChange={onGlimpseEnabledChange}
           onMaxHandDurationSecsChange={onMaxHandDurationSecsChange}
           onMaxCardDrawChange={onMaxCardDrawChange}
+          onExhaustiveReservationChange={onExhaustiveReservationChange}
           onSeedChange={onSeedChange}
         />
         {!isPlaytestMode && (

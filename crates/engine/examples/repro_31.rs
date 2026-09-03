@@ -34,7 +34,8 @@ fn oracle(
         max_threads: None,
         glimpse_enabled: Some(glimpse),
         max_hand_duration_secs: None,
-        max_card_draw: None,
+        exhaustive_reservation: None,
+max_card_draw: None,
     })
     .expect("solve")
 }
@@ -100,7 +101,8 @@ fn oracle_turns(hand: &[Card], queue: &[Card], seed: u64, max_turns: u8) -> u8 {
         max_threads: None,
         glimpse_enabled: Some(true),
         max_hand_duration_secs: None,
-        max_card_draw: None,
+        exhaustive_reservation: None,
+max_card_draw: None,
     })
     .map(|r| r.max_damage)
     .unwrap_or(0)

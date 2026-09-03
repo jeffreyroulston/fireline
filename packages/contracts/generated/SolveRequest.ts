@@ -31,4 +31,8 @@ maxHandDurationSecs: number | null,
 /**
  * Cap known library draws; further draws become Fire Bricks. None / 0 → unlimited.
  */
-maxCardDraw: number | null, };
+maxCardDraw: number | null, 
+/**
+ * Oracle / two-pass: branch on materially different reserve payments.
+ */
+exhaustiveReservation: boolean | null, };

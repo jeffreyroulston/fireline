@@ -66,6 +66,17 @@ function advancedRunFields(
   };
 }
 
+function exhaustiveReservationField(
+  simType: SimType,
+  exhaustiveReservation: boolean,
+) {
+  const oracleOrTwoPass =
+    simType === "oracle_only" || simType === "two_pass";
+  return {
+    exhaustiveReservation: oracleOrTwoPass ? exhaustiveReservation : false,
+  };
+}
+
 type UseShellSolverOptions = Readonly<{
   deckText: string;
   activeDeck: SavedDeck | null;
@@ -96,6 +107,7 @@ export type ShellSolverState = Readonly<{
   glimpseEnabled: boolean;
   maxHandDurationSecs: number | null;
   maxCardDraw: number | null;
+  exhaustiveReservation: boolean;
   cpuCount: number;
   lineResult: SolveResult | null;
   /** Opening hand that produced `lineResult` (not the live builder hand). */
@@ -132,6 +144,7 @@ export type ShellSolverActions = Readonly<{
   setGlimpseEnabled: (value: boolean) => void;
   setMaxHandDurationSecs: (value: number | null) => void;
   setMaxCardDraw: (value: number | null) => void;
+  setExhaustiveReservation: (value: boolean) => void;
   setLineResult: (value: SolveResult | null, evaluatedHand?: CardId[]) => void;
   setSamples: (value: number) => void;
   setError: (value: string) => void;
@@ -192,6 +205,7 @@ export function useShellSolver({
     null,
   );
   const [maxCardDraw, setMaxCardDraw] = useState<number | null>(null);
+  const [exhaustiveReservation, setExhaustiveReservation] = useState(false);
   const [lineResult, setLineResultState] = useState<SolveResult | null>(null);
   const [lineHand, setLineHand] = useState<CardId[]>([]);
   const [turn2KillResults, setTurn2KillResults] =
@@ -332,6 +346,7 @@ export function useShellSolver({
           maxHandDurationSecs,
           maxCardDraw,
         ),
+        ...exhaustiveReservationField(simType, exhaustiveReservation),
       };
 
       if (turn2KillEnabled) {
@@ -346,6 +361,7 @@ export function useShellSolver({
           glimpseEnabled: simType === "fire_brick" ? false : glimpseEnabled,
           maxHandDurationSecs,
           maxCardDraw,
+          exhaustiveReservation,
         });
         const { turn2, turn3 } = await solveTurn2KillPair(turn2KillRequest);
         const detected = turn2.maxDamage >= turn2KillThreshold;
@@ -914,8 +930,12 @@ export function useShellSolver({
     setSimType(value);
     if (value === "fire_brick") {
       setGlimpseEnabled(false);
+      setExhaustiveReservation(false);
     } else if (simType === "fire_brick") {
       setGlimpseEnabled(true);
+    }
+    if (value === "monte_carlo") {
+      setExhaustiveReservation(false);
     }
     clearLineResults();
   }
@@ -938,6 +958,7 @@ export function useShellSolver({
     glimpseEnabled,
     maxHandDurationSecs,
     maxCardDraw,
+    exhaustiveReservation,
     cpuCount,
     lineResult,
     lineHand,
@@ -970,6 +991,7 @@ export function useShellSolver({
     setGlimpseEnabled,
     setMaxHandDurationSecs,
     setMaxCardDraw,
+    setExhaustiveReservation,
     setLineResult,
     setSamples,
     setError,

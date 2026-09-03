@@ -27,7 +27,9 @@ export function oracleSolveRequest(options: {
   glimpseEnabled?: boolean;
   maxHandDurationSecs?: number | null;
   maxCardDraw?: number | null;
+  exhaustiveReservation?: boolean;
 }): Omit<SolveRequest, "maxTurns"> {
+  const oracleOrTwoPass = true;
   return {
     hand: [...options.hand],
     goFirst: options.goFirst,
@@ -42,6 +44,9 @@ export function oracleSolveRequest(options: {
     glimpseEnabled: options.glimpseEnabled ?? true,
     maxHandDurationSecs: options.maxHandDurationSecs ?? null,
     maxCardDraw: options.maxCardDraw ?? null,
+    exhaustiveReservation: oracleOrTwoPass
+      ? (options.exhaustiveReservation ?? false)
+      : false,
   };
 }
 

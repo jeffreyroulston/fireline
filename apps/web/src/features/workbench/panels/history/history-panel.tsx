@@ -81,6 +81,7 @@ export function HistoryPanel({
     comparePooled,
     compareLoading,
     compareError,
+    compareAvailableRunSettings,
     appliedRange,
     setAppliedRange,
     filteredLeaderboard,
@@ -244,9 +245,12 @@ export function HistoryPanel({
                 compareGroups={compareGroups}
                 compareLoading={compareLoading}
                 compareError={compareError}
+                runSettings={runSettings}
+                availableRunSettings={compareAvailableRunSettings}
                 onCompareDeckChange={setCompareDeckId}
                 onCompareSimTypeChange={setCompareSimType}
                 onCompareGroupKeyChange={setCompareGroupKey}
+                onRunSettingsChange={updateRunSettings}
               />
             )}
           </PooledDamagePanel>

@@ -6,8 +6,8 @@ use crate::{
     line_event::EventTape,
     model::{
         DamageDistribution, EffectiveRequest, McRollout, PassResult, SimType, SolveRequest,
-        SolveResult, State, TwoPassResult, effective_glimpse, hand_duration,
-        resolve_materials_bitmask, truncate_draw_queue,
+        SolveResult, State, TwoPassResult, effective_exhaustive_reservation, effective_glimpse,
+        hand_duration, resolve_materials_bitmask, truncate_draw_queue,
     },
     random::{Rng, percentile, shuffle_cards},
 };
@@ -68,6 +68,8 @@ fn solve_with_progress_inner(
     let _deadline_guard =
         hand_duration(request.max_hand_duration_secs).map(crate::deadline::install);
     let glimpse_oracle = effective_glimpse(request.sim_type, false, request.glimpse_enabled);
+    let exhaustive_reservation =
+        effective_exhaustive_reservation(request.sim_type, request.exhaustive_reservation);
     let max_card_draw = request.max_card_draw;
     let mut result = match request.sim_type {
         SimType::FireBrick => {
@@ -113,6 +115,7 @@ fn solve_with_progress_inner(
                 ordered,
                 materials,
                 glimpse_enabled: glimpse_oracle,
+                exhaustive_reservation,
                 max_card_draw,
             })?
         }
@@ -127,6 +130,7 @@ fn solve_with_progress_inner(
                 ordered,
                 materials,
                 glimpse_enabled: glimpse_oracle,
+                exhaustive_reservation,
                 max_card_draw,
             })?
         }
@@ -148,6 +152,7 @@ fn solve_effective(request: &SolveRequest, max_turns: u8, rollouts: u16) -> Effe
         glimpse_enabled: request.glimpse_enabled,
         max_hand_duration_secs: request.max_hand_duration_secs,
         max_card_draw: request.max_card_draw,
+        exhaustive_reservation: request.exhaustive_reservation,
         ..Default::default()
     }
 }
@@ -193,7 +198,15 @@ fn solve_cards_with_queue(
     queue: &[Card],
 ) -> Result<SolveResult> {
     let started = Instant::now();
-    let (pass, line_stats) = solve_pass(hand, go_first, max_turns, queue, false, materials)?;
+    let (pass, line_stats) = solve_pass(
+        hand,
+        go_first,
+        max_turns,
+        queue,
+        false,
+        false,
+        materials,
+    )?;
     Ok(SolveResult {
         sim_type: SimType::FireBrick,
         max_damage: pass.max_damage,
@@ -223,9 +236,10 @@ pub fn solve_pass(
     max_turns: u8,
     queue: &[Card],
     glimpse_enabled: bool,
+    exhaustive_reservation: bool,
     materials: u16,
 ) -> Result<(PassResult, crate::stats::LineCardStats)> {
-    let mut search = Search::new(glimpse_enabled);
+    let mut search = Search::new(glimpse_enabled, exhaustive_reservation);
     solve_pass_with(&mut search, hand, go_first, max_turns, queue, materials)
 }
 
@@ -329,7 +343,7 @@ fn solve_monte_carlo(
     let mut total_memo = 0;
     let mut stats_acc = crate::stats::DeckStatAccumulator::with_deck_and_materials(hand, materials);
     // Reuse one Search shell; reset() drops the memo table each rollout.
-    let mut search = Search::new(config.glimpse_enabled);
+    let mut search = Search::new(config.glimpse_enabled, false);
 
     if on_rollout(0, rollouts).is_break() {
         return Err(EngineError::Cancelled);
@@ -339,8 +353,14 @@ fn solve_monte_carlo(
         let mut queue = remaining.to_vec();
         shuffle_cards(&mut queue, &mut rng);
         let queue = truncate_draw_queue(queue, config.max_card_draw);
-        let (pass, line_stats) =
-            solve_pass_with(&mut search, hand, go_first, max_turns, &queue, materials)?;
+        let (pass, line_stats) = solve_pass_with(
+            &mut search,
+            hand,
+            go_first,
+            max_turns,
+            &queue,
+            materials,
+        )?;
         total_nodes += pass.nodes;
         total_memo += pass.memo_entries;
         damages.push(pass.max_damage);
@@ -454,6 +474,7 @@ struct OracleSolveParams<'a> {
     ordered: bool,
     materials: u16,
     glimpse_enabled: bool,
+    exhaustive_reservation: bool,
     max_card_draw: Option<u16>,
 }
 
@@ -467,13 +488,22 @@ fn solve_two_pass(params: OracleSolveParams<'_>) -> Result<SolveResult> {
         ordered,
         materials,
         glimpse_enabled: glimpse_oracle,
+        exhaustive_reservation,
         max_card_draw,
     } = params;
     let started = Instant::now();
-    let (mut brick, brick_stats) = solve_pass(hand, go_first, max_turns, &[], false, materials)?;
+    let (mut brick, brick_stats) =
+        solve_pass(hand, go_first, max_turns, &[], false, false, materials)?;
     let queue = truncate_draw_queue(oracle_queue(remaining, seed, ordered), max_card_draw);
-    let (mut oracle, oracle_stats) =
-        solve_pass(hand, go_first, max_turns, &queue, glimpse_oracle, materials)?;
+    let (mut oracle, oracle_stats) = solve_pass(
+        hand,
+        go_first,
+        max_turns,
+        &queue,
+        glimpse_oracle,
+        exhaustive_reservation,
+        materials,
+    )?;
     memory::release_process_memory();
     brick.card_stats = summarize_line_stats(hand, &brick_stats, materials);
     oracle.card_stats = summarize_line_stats(hand, &oracle_stats, materials);
@@ -514,6 +544,7 @@ fn solve_oracle_only(params: OracleSolveParams<'_>) -> Result<SolveResult> {
         ordered,
         materials,
         glimpse_enabled,
+        exhaustive_reservation,
         max_card_draw,
     } = params;
     let started = Instant::now();
@@ -524,6 +555,7 @@ fn solve_oracle_only(params: OracleSolveParams<'_>) -> Result<SolveResult> {
         max_turns,
         &queue,
         glimpse_enabled,
+        exhaustive_reservation,
         materials,
     )?;
     memory::release_process_memory();
