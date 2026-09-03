@@ -198,15 +198,7 @@ fn solve_cards_with_queue(
     queue: &[Card],
 ) -> Result<SolveResult> {
     let started = Instant::now();
-    let (pass, line_stats) = solve_pass(
-        hand,
-        go_first,
-        max_turns,
-        queue,
-        false,
-        false,
-        materials,
-    )?;
+    let (pass, line_stats) = solve_pass(hand, go_first, max_turns, queue, false, false, materials)?;
     Ok(SolveResult {
         sim_type: SimType::FireBrick,
         max_damage: pass.max_damage,
@@ -353,14 +345,8 @@ fn solve_monte_carlo(
         let mut queue = remaining.to_vec();
         shuffle_cards(&mut queue, &mut rng);
         let queue = truncate_draw_queue(queue, config.max_card_draw);
-        let (pass, line_stats) = solve_pass_with(
-            &mut search,
-            hand,
-            go_first,
-            max_turns,
-            &queue,
-            materials,
-        )?;
+        let (pass, line_stats) =
+            solve_pass_with(&mut search, hand, go_first, max_turns, &queue, materials)?;
         total_nodes += pass.nodes;
         total_memo += pass.memo_entries;
         damages.push(pass.max_damage);

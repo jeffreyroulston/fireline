@@ -43,7 +43,7 @@ fn main() {
             glimpse_enabled: Some(true),
             max_hand_duration_secs: None,
             exhaustive_reservation: None,
-max_card_draw: None,
+            max_card_draw: None,
         })
         .expect("solve");
 
@@ -57,7 +57,7 @@ max_card_draw: None,
     }
 
     // After Verm→ID, Manic stays in hand; after ID→Verm, Manic is in memory.
-    use ga_fire_engine::model::{Action, Phase, State, MAT_HAMMER};
+    use ga_fire_engine::model::{Action, MAT_HAMMER, Phase, State};
     use ga_fire_engine::solver::apply_action;
 
     let opening = [

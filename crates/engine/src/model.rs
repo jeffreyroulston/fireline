@@ -854,8 +854,7 @@ impl State {
             .filter(|card| mode != PaymentMode::FireOnly || card.is_fire())
             .max_by_key(|&card| {
                 let score = self.payment_score(card);
-                let prefer_non_fire =
-                    mode == PaymentMode::Default && !card.is_fire();
+                let prefer_non_fire = mode == PaymentMode::Default && !card.is_fire();
                 (score, prefer_non_fire)
             })
     }

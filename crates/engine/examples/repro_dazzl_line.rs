@@ -101,7 +101,7 @@ fn main() {
             glimpse_enabled: Some(true),
             max_hand_duration_secs: None,
             exhaustive_reservation: None,
-max_card_draw: None,
+            max_card_draw: None,
         })
         .expect("solve");
 
