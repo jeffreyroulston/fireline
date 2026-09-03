@@ -185,13 +185,12 @@ export async function loadEvaluateSamples(
     .where("r.sampler_version", "=", options.version.samplerVersion)
     .where("r.attribution_version", "=", options.attributionVersion);
 
-  if (options.deckHash) {
+  if (options.deckIds !== undefined) {
+    query = query.where("r.deck_id", "in", options.deckIds);
+  } else if (options.deckHash) {
     query = query.where("r.deck_hash", "=", options.deckHash);
   } else {
     query = query.where("r.deck_id", "is not", null);
-    if (options.deckIds && options.deckIds.length > 0) {
-      query = query.where("r.deck_id", "in", options.deckIds);
-    }
   }
 
   query = applyRunSettingsFilter(query, options.runSettings, "r");

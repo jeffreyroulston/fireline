@@ -6,6 +6,7 @@ import {
   evaluateSamplesFromRows,
 } from "../lib/hand-impact.js";
 import {
+  applyDeckScope,
   applyRunSettingsFilter,
   type RunSettingsFilter,
 } from "../lib/run-settings-filter.js";
@@ -65,7 +66,8 @@ type CatalogName = { id: string; name: string };
 export async function cardLeaderboardFromSamples(
   db: Kysely<Database>,
   options: {
-    deckHash: string;
+    deckHash?: string;
+    deckId?: string;
     simType: string;
     version: VersionTriple;
     attributionVersion: number;
@@ -79,13 +81,13 @@ export async function cardLeaderboardFromSamples(
     .select(["id", "deck_counts", "samples", "request_body"])
     .where("status", "in", ["complete", "partial"])
     .where("kind", "=", "evaluate")
-    .where("deck_hash", "=", options.deckHash)
     .where("sim_type", "=", options.simType)
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
     .where("attribution_version", "=", options.attributionVersion)
     .orderBy("started_at", "asc");
 
+  runsQuery = applyDeckScope(runsQuery, options);
   runsQuery = applyRunSettingsFilter(runsQuery, options.runSettings);
 
   const runs = await runsQuery.execute();
@@ -96,7 +98,8 @@ export async function cardLeaderboardFromSamples(
       totalSamples: 0,
       version: options.version,
       attributionVersion: options.attributionVersion,
-      deckHash: options.deckHash,
+      deckHash: options.deckHash ?? null,
+      deckId: options.deckId ?? null,
       simType: options.simType,
       cards: [],
     };
@@ -128,7 +131,8 @@ export async function cardLeaderboardFromSamples(
       totalSamples: 0,
       version: options.version,
       attributionVersion: options.attributionVersion,
-      deckHash: options.deckHash,
+      deckHash: options.deckHash ?? null,
+      deckId: options.deckId ?? null,
       simType: options.simType,
       cards: [],
     };
@@ -337,7 +341,8 @@ export async function cardLeaderboardFromSamples(
     totalSamples,
     version: options.version,
     attributionVersion: options.attributionVersion,
-    deckHash: options.deckHash,
+    deckHash: options.deckHash ?? null,
+    deckId: options.deckId ?? null,
     simType: options.simType,
     cards,
   };

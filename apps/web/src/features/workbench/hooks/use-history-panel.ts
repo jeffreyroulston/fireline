@@ -147,9 +147,11 @@ export function useHistoryPanel({
   );
 
   const pooledParams =
-    selectedGroupKey && poolHash && selectedGroup?.attributionVersion
+    selectedGroupKey &&
+    selectedGroup?.attributionVersion != null &&
+    (deckId || poolHash)
       ? {
-          deckHash: poolHash,
+          ...(deckId ? { deckId } : { deckHash: poolHash! }),
           simType,
           rulesVersion: selectedGroup.rulesVersion,
           samplerVersion: selectedGroup.samplerVersion,
@@ -161,9 +163,11 @@ export function useHistoryPanel({
   const pooled = pooledQuery.data ?? null;
 
   const leaderboardParams =
-    selectedGroupKey && poolHash && selectedGroup?.attributionVersion
+    selectedGroupKey &&
+    selectedGroup?.attributionVersion != null &&
+    (deckId || poolHash)
       ? {
-          deckHash: poolHash,
+          ...(deckId ? { deckId } : { deckHash: poolHash! }),
           simType,
           rulesVersion: selectedGroup.rulesVersion,
           samplerVersion: selectedGroup.samplerVersion,
@@ -177,10 +181,10 @@ export function useHistoryPanel({
 
   const highlightsParams =
     selectedLeaderboardCard &&
-    poolHash &&
-    selectedGroup?.attributionVersion
+    selectedGroup?.attributionVersion != null &&
+    (deckId || poolHash)
       ? {
-          deckHash: poolHash,
+          ...(deckId ? { deckId } : { deckHash: poolHash! }),
           simType,
           rulesVersion: selectedGroup.rulesVersion,
           samplerVersion: selectedGroup.samplerVersion,
@@ -195,9 +199,11 @@ export function useHistoryPanel({
   const sampleHighlights = highlightsQuery.data ?? null;
 
   const filteredLeaderboardParams =
-    appliedRange && poolHash && selectedGroup?.attributionVersion
+    appliedRange &&
+    selectedGroup?.attributionVersion != null &&
+    (deckId || poolHash)
       ? {
-          deckHash: poolHash,
+          ...(deckId ? { deckId } : { deckHash: poolHash! }),
           simType,
           rulesVersion: selectedGroup.rulesVersion,
           samplerVersion: selectedGroup.samplerVersion,
@@ -279,9 +285,14 @@ export function useHistoryPanel({
   );
 
   const comparePooledParams =
-    compareOpen && compareGroupKey && comparePoolHash && compareGroup
+    compareOpen &&
+    compareGroupKey &&
+    compareGroup &&
+    (compareDeckId || comparePoolHash)
       ? {
-          deckHash: comparePoolHash,
+          ...(compareDeckId
+            ? { deckId: compareDeckId }
+            : { deckHash: comparePoolHash! }),
           simType: compareSimType,
           rulesVersion: compareGroup.rulesVersion,
           samplerVersion: compareGroup.samplerVersion,

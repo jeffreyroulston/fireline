@@ -3,7 +3,8 @@ import { fetchPooledSampleHighlights, type RunSettingsFilter } from "@/lib/api/c
 import { queryKeys } from "@/lib/api/query-keys";
 
 export type PooledSampleHighlightsQueryParams = {
-  deckHash: string;
+  deckHash?: string;
+  deckId?: string;
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
@@ -20,7 +21,8 @@ function runSettingsKey(filter?: RunSettingsFilter): string {
 function highlightsFiltersKey(
   params: PooledSampleHighlightsQueryParams,
 ): string {
-  return `${params.deckHash}:${params.simType}:${params.rulesVersion}:${params.samplerVersion}:${runSettingsKey(params.runSettings)}`;
+  const deck = params.deckId ?? params.deckHash ?? "";
+  return `${deck}:${params.simType}:${params.rulesVersion}:${params.samplerVersion}:${runSettingsKey(params.runSettings)}`;
 }
 
 export function usePooledSampleHighlightsQuery(
@@ -31,6 +33,6 @@ export function usePooledSampleHighlightsQuery(
   return useQuery({
     queryKey: queryKeys.pooledSampleHighlights(filtersKey, epoch),
     queryFn: () => fetchPooledSampleHighlights(params!),
-    enabled: Boolean(params),
+    enabled: Boolean(params?.deckId || params?.deckHash),
   });
 }
