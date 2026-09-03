@@ -17,6 +17,7 @@ import { useWorkbenchQuery } from "./use-workbench-query";
 import { groupKey, resolvePoolHash } from "../panels/history/shared";
 import {
   availableRunSettingsFromRuns,
+  mergeAvailableRunSettings,
   parseRunSettingsParams,
   runSettingsFilterKey,
   runSettingsToFilter,
@@ -227,12 +228,21 @@ export function useHistoryPanel({
     () => (compareOpen ? (compareHistoryQuery.data ?? []) : []),
     [compareOpen, compareHistoryQuery.data],
   );
+  const compareAvailableRunSettings: AvailableRunSettings = useMemo(
+    () =>
+      mergeAvailableRunSettings(
+        availableRunSettingsFromRuns(compareRuns),
+        availableRunSettings,
+      ),
+    [compareRuns, availableRunSettings],
+  );
 
   const compareGroupsQuery = useVersionGroupsQuery(
     {
       deckId: compareOpen && compareDeckId ? compareDeckId : undefined,
       simType: compareSimType,
       kind: "evaluate",
+      runSettings: runSettingsFilter,
     },
     dataEpoch,
   );
@@ -286,6 +296,7 @@ export function useHistoryPanel({
           simType: compareSimType,
           rulesVersion: compareGroup.rulesVersion,
           samplerVersion: compareGroup.samplerVersion,
+          runSettings: runSettingsFilter,
         }
       : null;
 
@@ -416,6 +427,7 @@ export function useHistoryPanel({
     setSimType,
     runSettings,
     availableRunSettings,
+    compareAvailableRunSettings,
     updateRunSettings,
     selectedGroupKey,
     setSelectedGroupKey,

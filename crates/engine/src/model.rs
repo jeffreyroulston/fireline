@@ -852,22 +852,27 @@ impl State {
             .copied()
             .filter(|card| self.hand[card.index()] > selected[card.index()])
             .filter(|card| mode != PaymentMode::FireOnly || card.is_fire())
-            .max_by_key(|&card| self.payment_score(card))
+            .max_by_key(|&card| {
+                let score = self.payment_score(card);
+                let prefer_non_fire =
+                    mode == PaymentMode::Default && !card.is_fire();
+                (score, prefer_non_fire)
+            })
     }
 
+    /// Greedy reserve order: Fire bricks, duplicate attacks, duplicate uniques
+    /// (except Rococo), then everything else.
     fn payment_score(self, card: Card) -> i16 {
-        let mut score = match card {
-            Card::Brick => 100,
-            Card::IgnitedStab | Card::RendingFlames | Card::HeatedVengeance => 10,
-            Card::HastyMessenger | Card::MarkTheTarget | Card::PlantedExplosive => 3,
-            Card::KingdomInformant => 2,
-            Card::SableRemnant | Card::Arthur | Card::Sadi => 1,
-            _ => 0,
-        };
-        if card.is_unique() && self.hand[card.index()] > 1 {
-            score += 20;
+        if card == Card::Brick {
+            return 100;
         }
-        score
+        if card.is_attack() && self.hand[card.index()] > 1 {
+            return 50;
+        }
+        if card.is_unique() && card != Card::Rococo && self.hand[card.index()] > 1 {
+            return 30;
+        }
+        0
     }
 
     pub fn add_ally(&mut self, card: Card, awake: bool, immortal: bool) {
@@ -1426,6 +1431,8 @@ pub struct EffectiveRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_card_draw: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub exhaustive_reservation: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(type = "string | null"))]
     pub eval_mode: Option<&'static str>,
 }
@@ -1451,6 +1458,7 @@ impl Default for EffectiveRequest {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
             max_card_draw: None,
+            exhaustive_reservation: None,
             eval_mode: None,
         }
     }
@@ -1499,6 +1507,9 @@ pub struct SolveRequest {
     /// Cap known library draws; further draws become Fire Bricks. None / 0 → unlimited.
     #[serde(default)]
     pub max_card_draw: Option<u16>,
+    /// Oracle / two-pass: branch on materially different reserve payments.
+    #[serde(default)]
+    pub exhaustive_reservation: Option<bool>,
 }
 
 /// Whether Glimpse is active for a solve pass.
@@ -1511,6 +1522,17 @@ pub fn effective_glimpse(
         return false;
     }
     glimpse_enabled.unwrap_or(true)
+}
+
+/// Exhaustive reserve search applies only to oracle-style exact passes.
+pub fn effective_exhaustive_reservation(
+    sim_type: SimType,
+    exhaustive_reservation: Option<bool>,
+) -> bool {
+    if !matches!(sim_type, SimType::OracleOnly | SimType::TwoPass) {
+        return false;
+    }
+    exhaustive_reservation.unwrap_or(false)
 }
 
 pub fn hand_duration(max_hand_duration_secs: Option<u16>) -> Option<std::time::Duration> {

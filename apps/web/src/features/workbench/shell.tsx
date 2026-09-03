@@ -320,6 +320,7 @@ export default function FizaWorkbench({
             glimpseEnabled={solver.glimpseEnabled}
             maxHandDurationSecs={solver.maxHandDurationSecs}
             maxCardDraw={solver.maxCardDraw}
+            exhaustiveReservation={solver.exhaustiveReservation}
             busy={solver.busy === "solve"}
             error={solver.error}
             lineResult={solver.lineResult}
@@ -344,6 +345,7 @@ export default function FizaWorkbench({
             onGlimpseEnabledChange={solver.setGlimpseEnabled}
             onMaxHandDurationSecsChange={solver.setMaxHandDurationSecs}
             onMaxCardDrawChange={solver.setMaxCardDraw}
+            onExhaustiveReservationChange={solver.setExhaustiveReservation}
             onSeedChange={solver.applySolveSeed}
             onSolve={solver.solveHand}
             onCancel={solver.cancelHandSolve}

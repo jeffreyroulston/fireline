@@ -29,7 +29,8 @@ fn solve_hand(
         max_threads: None,
         glimpse_enabled: Some(true),
         max_hand_duration_secs: None,
-        max_card_draw: None,
+        exhaustive_reservation: None,
+max_card_draw: None,
     })
     .expect("solve")
 }

@@ -179,7 +179,7 @@ fn parallel_progress_is_monotonic_and_reaches_total() {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
 
-            max_card_draw: None,
+        max_card_draw: None,
         },
         |progress| {
             ticks.push(progress);
@@ -234,7 +234,7 @@ fn parallel_monte_carlo_reports_hand_progress_only() {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
 
-            max_card_draw: None,
+        max_card_draw: None,
         },
         |progress| {
             ticks.push(progress);
@@ -283,7 +283,7 @@ fn monte_carlo_serial_progress_reports_rollouts() {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
 
-            max_card_draw: None,
+        max_card_draw: None,
         },
         |progress| {
             ticks.push(progress);
@@ -340,7 +340,7 @@ fn parallel_monte_carlo_emits_per_hand_progress() {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
 
-            max_card_draw: None,
+        max_card_draw: None,
         },
         |_| ControlFlow::Continue(()),
         |progress| {
@@ -419,7 +419,7 @@ fn deck_eval_omits_per_rollout_event_tapes() {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
 
-            max_card_draw: None,
+        max_card_draw: None,
         },
         |_| ControlFlow::Continue(()),
     )
@@ -461,8 +461,8 @@ fn deck_eval_omits_per_rollout_event_tapes() {
         max_threads: None,
         glimpse_enabled: None,
         max_hand_duration_secs: None,
-
         max_card_draw: None,
+        exhaustive_reservation: None,
     })
     .unwrap();
     let dist = solve.distribution.as_ref().expect("MC distribution");
@@ -633,7 +633,7 @@ fn serial_evaluate_hard_cancel_discards_hands() {
             glimpse_enabled: None,
             max_hand_duration_secs: None,
 
-            max_card_draw: None,
+        max_card_draw: None,
         },
         |progress| {
             if progress.sample >= 2 {

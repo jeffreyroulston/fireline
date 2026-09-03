@@ -730,7 +730,7 @@ fn going_second_draws_at_start_of_first_turn() {
         Card::RedHare,
         Card::PepperedChef,
     ];
-    let (pass, stats) = solve_pass(&hand, false, 2, &[Card::IgnitedStab], false, ALL_MATERIALS)
+    let (pass, stats) = solve_pass(&hand, false, 2, &[Card::IgnitedStab], false, false, ALL_MATERIALS)
         .expect("solve_pass");
     assert_eq!(
         pass.events.first().and_then(|event| event.drawn),
@@ -770,7 +770,8 @@ fn fire_brick_going_second_draws_brick_without_a_deck() {
         glimpse_enabled: None,
         max_hand_duration_secs: None,
 
-        max_card_draw: None,
+        exhaustive_reservation: None,
+max_card_draw: None,
     })
     .unwrap();
     assert_eq!(
@@ -811,7 +812,8 @@ fn fire_brick_going_second_draws_a_real_card_from_an_attached_deck() {
         glimpse_enabled: None,
         max_hand_duration_secs: None,
 
-        max_card_draw: None,
+        exhaustive_reservation: None,
+max_card_draw: None,
     })
     .unwrap();
     let drawn = result.events.first().and_then(|event| event.drawn);
@@ -836,7 +838,8 @@ fn fire_brick_going_second_draws_a_real_card_from_an_attached_deck() {
         glimpse_enabled: None,
         max_hand_duration_secs: None,
 
-        max_card_draw: None,
+        exhaustive_reservation: None,
+max_card_draw: None,
     })
     .unwrap();
     assert_eq!(
@@ -875,7 +878,8 @@ fn fire_brick_going_second_prefers_an_explicit_remaining_queue() {
         glimpse_enabled: None,
         max_hand_duration_secs: None,
 
-        max_card_draw: None,
+        exhaustive_reservation: None,
+max_card_draw: None,
     })
     .unwrap();
     assert_eq!(
@@ -2952,12 +2956,12 @@ fn solver_snapshot_equivalence() {
         "Materialization Resolves",
         "Recollect (draw Brick)",
         "Attack from Arthur, Young Heir",
-        "USE IN BELOW ATTACK (Impact Hammer)",
-        "Impact Hammer self 3",
-        "Ignited Stab (no prep) with Impact Hammer",
         "Activate Clumsy Apprentice",
         "Clumsy On-Enter draw (Brick)",
         "Attack from Clumsy Apprentice (Arthur +1)",
+        "USE IN BELOW ATTACK (Impact Hammer)",
+        "Impact Hammer self 3",
+        "Ignited Stab (no prep) with Impact Hammer",
         "Activate Kingdom Informant",
         "Attack from Kingdom Informant (Arthur +1)",
         "Main: Pass Opportunity",
@@ -2983,7 +2987,7 @@ fn solver_snapshot_equivalence() {
     let cases: [SolveCase<'_>; 3] = [
         (&drill_three, true, 3, 21, &expected_drill_three),
         (&drill_one, true, 3, 24, &[]),
-        (&ally_heavy, true, 3, 25, &[]),
+        (&ally_heavy, true, 3, 24, &[]),
     ];
     for (hand, go_first, max_turns, expected_damage, expected_actions) in cases {
         let result = solve_cards(hand, go_first, max_turns, ALL_MATERIALS).expect("solve_cards");
@@ -2998,7 +3002,7 @@ fn solver_snapshot_equivalence() {
         .map(|index| drill_three[index % drill_three.len()])
         .collect();
     let (pass, _) =
-        solve_pass(&drill_three, true, 3, &queue, true, ALL_MATERIALS).expect("solve_pass");
+        solve_pass(&drill_three, true, 3, &queue, true, false, ALL_MATERIALS).expect("solve_pass");
     assert_eq!(pass.max_damage, 21);
     assert_eq!(
         pass.events.first().map(format_line_event).as_deref(),
@@ -3059,7 +3063,7 @@ fn capture_solver_snapshots() {
         .map(|index| drill_three[index % drill_three.len()])
         .collect();
     let (pass, _) =
-        solve_pass(&drill_three, true, 3, &queue, true, ALL_MATERIALS).expect("solve_pass");
+        solve_pass(&drill_three, true, 3, &queue, true, false, ALL_MATERIALS).expect("solve_pass");
     let actions = labels(&pass.events);
     println!(
         "case oracle_16: damage={} actions={actions:?}",
@@ -3098,7 +3102,8 @@ fn solve_clamps_turns_and_rollouts_in_effective() {
         glimpse_enabled: None,
         max_hand_duration_secs: None,
 
-        max_card_draw: None,
+        exhaustive_reservation: None,
+max_card_draw: None,
     };
     let result = solve(&request).unwrap();
     assert_eq!(result.effective.max_turns, Some(5));
@@ -3459,7 +3464,8 @@ fn two_pass_exposes_brick_oracle_and_combined_card_stats() {
         glimpse_enabled: None,
         max_hand_duration_secs: None,
 
-        max_card_draw: None,
+        exhaustive_reservation: None,
+max_card_draw: None,
     })
     .expect("two-pass solve");
 
@@ -3533,7 +3539,8 @@ fn oracle_only_matches_two_pass_oracle() {
         glimpse_enabled: None,
         max_hand_duration_secs: None,
 
-        max_card_draw: None,
+        exhaustive_reservation: None,
+max_card_draw: None,
     };
     let two_pass = solve(&request(SimType::TwoPass)).expect("two-pass solve");
     let oracle = solve(&request(SimType::OracleOnly)).expect("oracle-only solve");
@@ -3563,7 +3570,8 @@ fn oracle_only_requires_a_maindeck() {
         glimpse_enabled: None,
         max_hand_duration_secs: None,
 
-        max_card_draw: None,
+        exhaustive_reservation: None,
+max_card_draw: None,
     });
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("need a maindeck"));
@@ -3588,7 +3596,8 @@ fn oracle_uses_provided_queue_without_reshuffling() {
         glimpse_enabled: None,
         max_hand_duration_secs: None,
 
-        max_card_draw: None,
+        exhaustive_reservation: None,
+max_card_draw: None,
     })
     .expect("oracle with queue");
     let seed_b = solve(&SolveRequest {
@@ -3606,7 +3615,8 @@ fn oracle_uses_provided_queue_without_reshuffling() {
         glimpse_enabled: None,
         max_hand_duration_secs: None,
 
-        max_card_draw: None,
+        exhaustive_reservation: None,
+max_card_draw: None,
     })
     .expect("oracle with same queue");
     assert_eq!(seed_a.max_damage, seed_b.max_damage);
@@ -3737,10 +3747,10 @@ fn generational_memo_reset_preserves_exact_oracle_damage() {
     let board = State::with_queue(&hand, true, 2, &[Card::Brick]);
 
     crate::pressure::force_pressure_for_test(crate::pressure::PressureLevel::Clear);
-    let mut huge = Search::with_memo_cap(true, usize::MAX / 4);
+    let mut huge = Search::with_memo_cap(true, false, usize::MAX / 4);
     let full = huge.visit(board);
 
-    let mut tiny = Search::with_memo_cap(true, 256);
+    let mut tiny = Search::with_memo_cap(true, false, 256);
     let capped = tiny.visit(board);
 
     assert_eq!(full.damage, capped.damage);
@@ -3762,11 +3772,11 @@ fn squeeze_multiplier_still_yields_exact_damage() {
     let board = State::with_queue(&hand, true, 1, &[]);
 
     crate::pressure::force_pressure_for_test(crate::pressure::PressureLevel::Clear);
-    let mut full_search = Search::with_memo_cap(false, 10_000);
+    let mut full_search = Search::with_memo_cap(false, false, 10_000);
     let full = full_search.visit(board);
 
     crate::pressure::force_pressure_for_test(crate::pressure::PressureLevel::Squeeze);
-    let mut squeezed = Search::with_memo_cap(false, 10_000);
+    let mut squeezed = Search::with_memo_cap(false, false, 10_000);
     let under_pressure = squeezed.visit(board);
     crate::pressure::force_pressure_for_test(crate::pressure::PressureLevel::Clear);
 
@@ -3794,7 +3804,7 @@ fn cancel_flag_aborts_long_oracle_pass() {
         crate::cancel::request(&flag_set);
     });
     let _guard = crate::cancel::install(flag);
-    let err = solve_pass(&hand, true, 3, &queue, true, ALL_MATERIALS).expect_err("cancelled");
+    let err = solve_pass(&hand, true, 3, &queue, true, false, ALL_MATERIALS).expect_err("cancelled");
     assert!(matches!(err, EngineError::Cancelled));
     handle.join().expect("cancel thread");
 }
@@ -3853,4 +3863,49 @@ fn attack_others_two_hasty_messengers_manual_then_auto() {
         .filter(|e| e.kind == EventKind::OnAttackDraw)
         .count();
     assert_eq!(draws, 2, "{events:?}");
+}
+
+#[test]
+fn virgil_hand_exhaustive_reservation_reaches_twenty() {
+    let hand = [
+        Card::IgnitedStab,
+        Card::DazzlingCourtesan,
+        Card::IntensifiedPyre,
+        Card::Rococo,
+        Card::VermilionDecree,
+        Card::UncannyRealization,
+        Card::Virgil,
+    ];
+    let queue = [
+        Card::IncreasingDanger,
+        Card::ManicZealot,
+        Card::SurgingBolt,
+        Card::Demolition,
+        Card::ClumsyApprentice,
+    ];
+    let mut materials = BTreeMap::new();
+    materials.insert("impact_hammer".to_string(), 1_u8);
+    let request = SolveRequest {
+        hand: hand.iter().map(|c| c.id().to_string()).collect(),
+        go_first: false,
+        max_turns: 2,
+        sim_type: SimType::OracleOnly,
+        deck: BTreeMap::new(),
+        queue: Some(queue.iter().map(|c| c.id().to_string()).collect()),
+        rollouts: 1,
+        seed: 42,
+        budget: Default::default(),
+        materials,
+        max_threads: None,
+        glimpse_enabled: Some(true),
+        max_hand_duration_secs: None,
+        max_card_draw: None,
+        exhaustive_reservation: Some(true),
+    };
+    let result = crate::solve(&request).expect("solve");
+    assert_eq!(
+        result.max_damage, 20,
+        "expected 20 with exhaustive reserves; line:\n{}",
+        labels(&result.events).join("\n")
+    );
 }

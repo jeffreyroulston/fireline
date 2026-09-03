@@ -32,6 +32,7 @@ export function RunSettings({
   glimpseEnabled,
   maxHandDurationSecs,
   maxCardDraw,
+  exhaustiveReservation = false,
   playtestMode = false,
   onFirstChange,
   onTurnsChange,
@@ -43,6 +44,7 @@ export function RunSettings({
   onGlimpseEnabledChange,
   onMaxHandDurationSecsChange,
   onMaxCardDrawChange,
+  onExhaustiveReservationChange,
   onSeedChange,
 }: {
   goFirst: boolean;
@@ -58,6 +60,7 @@ export function RunSettings({
   glimpseEnabled: boolean;
   maxHandDurationSecs: number | null;
   maxCardDraw: number | null;
+  exhaustiveReservation?: boolean;
   playtestMode?: boolean;
   onFirstChange: (value: boolean) => void;
   onTurnsChange: (value: number) => void;
@@ -69,12 +72,16 @@ export function RunSettings({
   onGlimpseEnabledChange: (value: boolean) => void;
   onMaxHandDurationSecsChange: (value: number | null) => void;
   onMaxCardDrawChange: (value: number | null) => void;
+  onExhaustiveReservationChange?: (value: boolean) => void;
   onSeedChange?: (value: number | null) => void;
 }) {
   const showTurn2Kill = Boolean(onTurn2KillEnabledChange);
   const threadMax = Math.max(1, cpuCount ?? 1);
   const threadDisplay = maxThreads ?? threadMax;
   const glimpseLocked = !playtestMode && simType === "fire_brick";
+  const exhaustiveLocked =
+    !playtestMode &&
+    (simType === "fire_brick" || simType === "monte_carlo");
 
   return (
     <div className="mt-7 grid gap-0 border-t border-border pt-5">
@@ -293,6 +300,37 @@ export function RunSettings({
                   />
                 </label>
               </div>
+              {onExhaustiveReservationChange ? (
+                <div className={cn(settingsRowClass)}>
+                  <label className={cn(exhaustiveLocked && "opacity-55")}>
+                    Exhaustive reservation search
+                    <span
+                      className={cn(
+                        "flex h-[42px] w-full items-center gap-2.5 border border-border rounded-[2px] bg-[rgba(251,253,252,0.85)] px-[11px]",
+                        exhaustiveLocked && "pointer-events-none",
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={
+                          exhaustiveLocked ? false : exhaustiveReservation
+                        }
+                        disabled={exhaustiveLocked}
+                        onChange={(event) =>
+                          onExhaustiveReservationChange(event.target.checked)
+                        }
+                      />
+                      <span className="font-mono text-[10px] tracking-[0.05em] text-foreground uppercase">
+                        {exhaustiveLocked
+                          ? "Oracle / two-pass only"
+                          : exhaustiveReservation
+                            ? "Enabled"
+                            : "Off"}
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              ) : null}
             </div>
           </details>
         </div>

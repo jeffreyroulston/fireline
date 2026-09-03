@@ -2,6 +2,11 @@ import { type SimType } from "@/lib/engine";
 import type { SavedDeck } from "@/lib/decks";
 import type { VersionGroup } from "@/lib/api/client";
 import { SIM_TYPE_LABELS } from "../../types";
+import { RunSettingsFilterBar } from "../../ui/run-settings-filter-bar";
+import type {
+  AvailableRunSettings,
+  RunSettingsFilterState,
+} from "../../lib/run-settings-filter";
 import {
   errorBannerClass,
   historyCompareKickerClass,
@@ -19,9 +24,12 @@ type HistoryComparePanelProps = Readonly<{
   compareGroups: VersionGroup[];
   compareLoading: boolean;
   compareError: string;
+  runSettings: RunSettingsFilterState;
+  availableRunSettings: AvailableRunSettings;
   onCompareDeckChange: (deckId: string) => void;
   onCompareSimTypeChange: (simType: SimType) => void;
   onCompareGroupKeyChange: (groupKey: string) => void;
+  onRunSettingsChange: (next: RunSettingsFilterState) => void;
 }>;
 
 export function HistoryComparePanel({
@@ -32,9 +40,12 @@ export function HistoryComparePanel({
   compareGroups,
   compareLoading,
   compareError,
+  runSettings,
+  availableRunSettings,
   onCompareDeckChange,
   onCompareSimTypeChange,
   onCompareGroupKeyChange,
+  onRunSettingsChange,
 }: HistoryComparePanelProps) {
   return (
     <div className={historyComparePanelClass}>
@@ -90,6 +101,12 @@ export function HistoryComparePanel({
           </select>
         </label>
       </div>
+      <RunSettingsFilterBar
+        value={runSettings}
+        available={availableRunSettings}
+        className="mt-3.5"
+        onChange={onRunSettingsChange}
+      />
       {compareLoading && <p className={simHintClass}>Loading compare pool…</p>}
       {compareError && (
         <p className={errorBannerClass} role="alert">

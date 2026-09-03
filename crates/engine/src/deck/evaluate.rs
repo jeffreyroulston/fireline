@@ -149,9 +149,10 @@ fn solve_sample_hand(
             materials: request.materials.clone(),
             max_threads: None,
             glimpse_enabled: request.glimpse_enabled,
-            max_hand_duration_secs: request.max_hand_duration_secs,
-            max_card_draw: request.max_card_draw,
-        },
+        max_hand_duration_secs: request.max_hand_duration_secs,
+        max_card_draw: request.max_card_draw,
+        exhaustive_reservation: None,
+    },
         |rollout, total_rollouts| {
             if rollout > 0
                 && report_hand_progress(

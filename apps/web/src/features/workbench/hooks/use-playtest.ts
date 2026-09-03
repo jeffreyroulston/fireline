@@ -71,6 +71,7 @@ type UsePlaytestOptions = Readonly<{
   glimpseEnabled: boolean;
   maxHandDurationSecs: number | null;
   maxCardDraw: number | null;
+  exhaustiveReservation: boolean;
   materials: DeckCounts;
   deck: DeckCounts | undefined;
 }>;
@@ -88,6 +89,7 @@ export function usePlaytest({
   glimpseEnabled,
   maxHandDurationSecs,
   maxCardDraw,
+  exhaustiveReservation,
   materials,
   deck,
 }: UsePlaytestOptions) {
@@ -491,6 +493,7 @@ export function usePlaytest({
         glimpseEnabled,
         maxHandDurationSecs,
         maxCardDraw,
+        exhaustiveReservation,
       });
 
       if (turn2KillEnabled) {
@@ -548,6 +551,7 @@ export function usePlaytest({
     maxCardDraw,
     maxHandDurationSecs,
     maxThreads,
+    exhaustiveReservation,
     seed,
     turn2KillEnabled,
     turn2KillThreshold,
