@@ -70,6 +70,27 @@ export function applyRunSettingsFilter<Q extends FilterableQuery>(
   return next as Q;
 }
 
+type DeckScopeQuery = {
+  where: (lhs: string, op: "=", rhs: string) => DeckScopeQuery;
+};
+
+/** Prefer deck_id so identical lists on different decks stay separate. */
+export function applyDeckScope<Q extends DeckScopeQuery>(
+  query: Q,
+  options: { deckId?: string; deckHash?: string },
+  alias?: string,
+): Q {
+  const idCol = alias ? `${alias}.deck_id` : "deck_id";
+  const hashCol = alias ? `${alias}.deck_hash` : "deck_hash";
+  if (options.deckId) {
+    return query.where(idCol, "=", options.deckId) as Q;
+  }
+  if (options.deckHash) {
+    return query.where(hashCol, "=", options.deckHash) as Q;
+  }
+  return query;
+}
+
 export type AvailableRunSettings = {
   goFirst: boolean[];
   maxTurns: number[];

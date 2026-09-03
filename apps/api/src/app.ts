@@ -629,10 +629,14 @@ export function createApp(options: {
   });
 
   app.get("/analysis/pooled-sample-highlights", async (c) => {
-    const deckHash = c.req.query("deck_hash");
+    const deckHash = c.req.query("deck_hash") || undefined;
+    const deckId = c.req.query("deck_id") || undefined;
     const simType = c.req.query("sim_type");
-    if (!deckHash || !simType) {
-      return c.json({ error: "deck_hash and sim_type are required" }, 400);
+    if ((!deckHash && !deckId) || !simType) {
+      return c.json(
+        { error: "sim_type and either deck_id or deck_hash are required" },
+        400,
+      );
     }
     const version = parseVersionTriple(new URL(c.req.url).searchParams);
     if ("error" in version) {
@@ -641,6 +645,7 @@ export function createApp(options: {
     const params = new URL(c.req.url).searchParams;
     const result = await pooledSampleHighlights(options.db, {
       deckHash,
+      deckId,
       simType,
       version,
       runSettings: parseRunSettingsFilter(params),
@@ -666,10 +671,14 @@ export function createApp(options: {
   });
 
   app.get("/analysis/pooled-damage", async (c) => {
-    const deckHash = c.req.query("deck_hash");
+    const deckHash = c.req.query("deck_hash") || undefined;
+    const deckId = c.req.query("deck_id") || undefined;
     const simType = c.req.query("sim_type");
-    if (!deckHash || !simType) {
-      return c.json({ error: "deck_hash and sim_type are required" }, 400);
+    if ((!deckHash && !deckId) || !simType) {
+      return c.json(
+        { error: "sim_type and either deck_id or deck_hash are required" },
+        400,
+      );
     }
     const version = parseVersionTriple(new URL(c.req.url).searchParams);
     if ("error" in version) {
@@ -678,6 +687,7 @@ export function createApp(options: {
     const params = new URL(c.req.url).searchParams;
     const result = await pooledDamageDistribution(options.db, {
       deckHash,
+      deckId,
       simType,
       version,
       runSettings: parseRunSettingsFilter(params),
@@ -686,10 +696,14 @@ export function createApp(options: {
   });
 
   app.get("/analysis/card-leaderboard", async (c) => {
-    const deckHash = c.req.query("deck_hash");
+    const deckHash = c.req.query("deck_hash") || undefined;
+    const deckId = c.req.query("deck_id") || undefined;
     const simType = c.req.query("sim_type");
-    if (!deckHash || !simType) {
-      return c.json({ error: "deck_hash and sim_type are required" }, 400);
+    if ((!deckHash && !deckId) || !simType) {
+      return c.json(
+        { error: "sim_type and either deck_id or deck_hash are required" },
+        400,
+      );
     }
     const params = new URL(c.req.url).searchParams;
     const version = parseVersionTriple(params);
@@ -712,6 +726,7 @@ export function createApp(options: {
     const cards = filtered ? await getCards(options.db) : undefined;
     const result = await cardLeaderboard(options.db, {
       deckHash,
+      deckId,
       simType,
       version,
       attributionVersion,

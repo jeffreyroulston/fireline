@@ -386,25 +386,28 @@ export async function fetchVersionGroups(options: {
 }
 
 export async function fetchPooledDamage(options: {
-  deckHash: string;
+  deckHash?: string;
+  deckId?: string;
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
   runSettings?: RunSettingsFilter;
 }) {
   const search = new URLSearchParams({
-    deck_hash: options.deckHash,
     sim_type: options.simType,
     rules_version: String(options.rulesVersion),
     sampler_version: String(options.samplerVersion),
   });
+  if (options.deckId) search.set("deck_id", options.deckId);
+  else if (options.deckHash) search.set("deck_hash", options.deckHash);
   appendRunSettingsFilter(search, options.runSettings);
   const response = await apiFetch(`/analysis/pooled-damage?${search}`);
   return response.json() as Promise<PooledDamageResponse>;
 }
 
 export async function fetchCardLeaderboard(options: {
-  deckHash: string;
+  deckHash?: string;
+  deckId?: string;
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
@@ -416,12 +419,13 @@ export async function fetchCardLeaderboard(options: {
   runSettings?: RunSettingsFilter;
 }) {
   const search = new URLSearchParams({
-    deck_hash: options.deckHash,
     sim_type: options.simType,
     rules_version: String(options.rulesVersion),
     sampler_version: String(options.samplerVersion),
     attribution_version: String(options.attributionVersion),
   });
+  if (options.deckId) search.set("deck_id", options.deckId);
+  else if (options.deckHash) search.set("deck_hash", options.deckHash);
   if (options.damageGt != null) search.set("damage_gt", String(options.damageGt));
   if (options.damageGte != null) search.set("damage_gte", String(options.damageGte));
   if (options.damageLt != null) search.set("damage_lt", String(options.damageLt));
@@ -443,18 +447,20 @@ export interface PooledSampleResponse {
 }
 
 export async function fetchPooledSampleHighlights(options: {
-  deckHash: string;
+  deckHash?: string;
+  deckId?: string;
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
   runSettings?: RunSettingsFilter;
 }) {
   const search = new URLSearchParams({
-    deck_hash: options.deckHash,
     sim_type: options.simType,
     rules_version: String(options.rulesVersion),
     sampler_version: String(options.samplerVersion),
   });
+  if (options.deckId) search.set("deck_id", options.deckId);
+  else if (options.deckHash) search.set("deck_hash", options.deckHash);
   appendRunSettingsFilter(search, options.runSettings);
   const response = await apiFetch(
     `/analysis/pooled-sample-highlights?${search}`,

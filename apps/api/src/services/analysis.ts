@@ -26,6 +26,7 @@ import {
   type DamageBounds,
 } from "./filtered-leaderboard.js";
 import {
+  applyDeckScope,
   applyRunSettingsFilter,
   type RunSettingsFilter,
 } from "../lib/run-settings-filter.js";
@@ -78,7 +79,8 @@ export async function listVersionGroups(
 export async function pooledDamageDistribution(
   db: Kysely<Database>,
   options: {
-    deckHash: string;
+    deckHash?: string;
+    deckId?: string;
     simType: string;
     version: VersionTriple;
     runSettings?: RunSettingsFilter;
@@ -99,13 +101,13 @@ export async function pooledDamageDistribution(
     ])
     .where("status", "in", DONE_STATUSES)
     .where("kind", "=", "evaluate")
-    .where("deck_hash", "=", options.deckHash)
     .where("sim_type", "=", options.simType)
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
     .where("damage_histogram", "is not", null)
     .orderBy("started_at", "asc");
 
+  runsQuery = applyDeckScope(runsQuery, options);
   runsQuery = applyRunSettingsFilter(runsQuery, options.runSettings);
 
   const runs = await runsQuery.execute();
@@ -116,7 +118,8 @@ export async function pooledDamageDistribution(
       distribution: null,
       runs: [],
       version: options.version,
-      deckHash: options.deckHash,
+      deckHash: options.deckHash ?? null,
+      deckId: options.deckId ?? null,
       simType: options.simType,
     };
   }
@@ -195,7 +198,8 @@ export async function pooledDamageDistribution(
     distribution,
     runs: trimRunsToRecentBarSamples(parsed.map((entry) => entry.sampleRun)),
     version: options.version,
-    deckHash: options.deckHash,
+    deckHash: options.deckHash ?? null,
+    deckId: options.deckId ?? null,
     simType: options.simType,
   };
 }
@@ -351,7 +355,8 @@ export async function getPooledSample(
 export async function pooledSampleHighlights(
   db: Kysely<Database>,
   options: {
-    deckHash: string;
+    deckHash?: string;
+    deckId?: string;
     simType: string;
     version: VersionTriple;
     runSettings?: RunSettingsFilter;
@@ -368,12 +373,12 @@ export async function pooledSampleHighlights(
     ])
     .where("status", "in", DONE_STATUSES)
     .where("kind", "=", "evaluate")
-    .where("deck_hash", "=", options.deckHash)
     .where("sim_type", "=", options.simType)
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
     .orderBy("started_at", "asc");
 
+  runsQuery = applyDeckScope(runsQuery, options);
   runsQuery = applyRunSettingsFilter(runsQuery, options.runSettings);
 
   const runs = await runsQuery.execute();
@@ -518,7 +523,8 @@ export async function pooledSampleHighlights(
 export async function cardLeaderboard(
   db: Kysely<Database>,
   options: {
-    deckHash: string;
+    deckHash?: string;
+    deckId?: string;
     simType: string;
     version: VersionTriple;
     attributionVersion: number;
@@ -530,6 +536,7 @@ export async function cardLeaderboard(
   if (hasDamageBounds(options.bounds) && options.cards) {
     return cardLeaderboardFromSamples(db, {
       deckHash: options.deckHash,
+      deckId: options.deckId,
       simType: options.simType,
       version: options.version,
       attributionVersion: options.attributionVersion,
@@ -544,12 +551,12 @@ export async function cardLeaderboard(
     .select(sql<number>`count(*)::int`.as("runCount"))
     .where("status", "in", DONE_STATUSES)
     .where("kind", "=", "evaluate")
-    .where("deck_hash", "=", options.deckHash)
     .where("sim_type", "=", options.simType)
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
     .where("attribution_version", "=", options.attributionVersion);
 
+  runCountQuery = applyDeckScope(runCountQuery, options);
   runCountQuery = applyRunSettingsFilter(runCountQuery, options.runSettings);
 
   const runCountRow = await runCountQuery.executeTakeFirst();
@@ -571,7 +578,6 @@ export async function cardLeaderboard(
     ])
     .where("r.status", "in", DONE_STATUSES)
     .where("r.kind", "=", "evaluate")
-    .where("r.deck_hash", "=", options.deckHash)
     .where("r.sim_type", "=", options.simType)
     .where("r.rules_version", "=", options.version.rulesVersion)
     .where("r.sampler_version", "=", options.version.samplerVersion)
@@ -579,6 +585,7 @@ export async function cardLeaderboard(
     .groupBy("cs.card_id")
     .orderBy(sql`sum(cs.damage) desc`);
 
+  statsQuery = applyDeckScope(statsQuery, options, "r");
   statsQuery = applyRunSettingsFilter(statsQuery, options.runSettings, "r");
 
   const rows = await statsQuery.execute();
@@ -588,12 +595,12 @@ export async function cardLeaderboard(
     .select(sql<number>`sum(coalesce(samples, 0))::int`.as("totalSamples"))
     .where("status", "in", DONE_STATUSES)
     .where("kind", "=", "evaluate")
-    .where("deck_hash", "=", options.deckHash)
     .where("sim_type", "=", options.simType)
     .where("rules_version", "=", options.version.rulesVersion)
     .where("sampler_version", "=", options.version.samplerVersion)
     .where("attribution_version", "=", options.attributionVersion);
 
+  sampleQuery = applyDeckScope(sampleQuery, options);
   sampleQuery = applyRunSettingsFilter(sampleQuery, options.runSettings);
 
   const sampleRow = await sampleQuery.executeTakeFirst();
@@ -603,7 +610,8 @@ export async function cardLeaderboard(
   const runCount = runCountRow?.runCount ?? 0;
 
   const evaluateSamples = await loadEvaluateSamples(db, {
-    deckHash: options.deckHash,
+    deckHash: options.deckId ? undefined : options.deckHash,
+    deckIds: options.deckId ? [options.deckId] : undefined,
     simType: options.simType,
     version: options.version,
     attributionVersion: options.attributionVersion,
@@ -616,7 +624,8 @@ export async function cardLeaderboard(
     totalSamples,
     version: options.version,
     attributionVersion: options.attributionVersion,
-    deckHash: options.deckHash,
+    deckHash: options.deckHash ?? null,
+    deckId: options.deckId ?? null,
     simType: options.simType,
     cards: rows.map((row) => {
       const seen = row.seen;

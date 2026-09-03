@@ -3,7 +3,8 @@ import { fetchCardLeaderboard, type RunSettingsFilter } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/query-keys";
 
 export type CardLeaderboardQueryParams = {
-  deckHash: string;
+  deckHash?: string;
+  deckId?: string;
   simType: string;
   rulesVersion: number;
   samplerVersion: number;
@@ -25,7 +26,8 @@ function cardLeaderboardFiltersKey(params: CardLeaderboardQueryParams): string {
     params.damageGte != null || params.damageLte != null
       ? `:${params.damageGte ?? ""}:${params.damageLte ?? ""}`
       : "";
-  return `${params.deckHash}:${params.simType}:${params.rulesVersion}:${params.samplerVersion}:${params.attributionVersion}${range}:${runSettingsKey(params.runSettings)}`;
+  const deck = params.deckId ?? params.deckHash ?? "";
+  return `${deck}:${params.simType}:${params.rulesVersion}:${params.samplerVersion}:${params.attributionVersion}${range}:${runSettingsKey(params.runSettings)}`;
 }
 
 export function useCardLeaderboardQuery(
@@ -36,6 +38,6 @@ export function useCardLeaderboardQuery(
   return useQuery({
     queryKey: queryKeys.cardLeaderboard(filtersKey, epoch),
     queryFn: () => fetchCardLeaderboard(params!),
-    enabled: Boolean(params),
+    enabled: Boolean(params?.deckId || params?.deckHash),
   });
 }
