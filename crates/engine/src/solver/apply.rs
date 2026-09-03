@@ -732,10 +732,10 @@ pub(crate) fn advance_attack_ally_silent(state: &mut State, index: usize, discar
     }
     if card == Card::CorhaziCourier && state.is_assassin() {
         let _drawn = state.draw_unknown();
-        if let Some(discarded) = resolve_discard(state, discard) {
-            if discarded.is_fire() {
-                state.add_damage(1);
-            }
+        if let Some(discarded) = resolve_discard(state, discard)
+            && discarded.is_fire()
+        {
+            state.add_damage(1);
         }
     }
 }
