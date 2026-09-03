@@ -275,12 +275,7 @@ pub(crate) fn apply_into(
             while index < state.ally_len as usize {
                 if state.allies[index].card() != Card::Arthur && state.can_ally_attack(index) {
                     let card = state.allies[index].card();
-                    let pay = next_discard_payment(
-                        &mut discard_queue,
-                        &mut discard,
-                        state,
-                        card,
-                    );
+                    let pay = next_discard_payment(&mut discard_queue, &mut discard, state, card);
                     attack_ally(&mut state, index, tape, pay);
                 }
                 index += 1;
@@ -690,7 +685,8 @@ pub fn attack_discard_steps(mut state: State, action: Action) -> Vec<AttackDisca
                 if state.allies[index].card() != Card::Arthur && state.can_ally_attack(index) {
                     let card = state.allies[index].card();
                     if let Some(req) = ally_attack_discard_requirement(state, card) {
-                        let (hand, drawn_index) = preview_hand_for_attack_discard(state, index, req);
+                        let (hand, drawn_index) =
+                            preview_hand_for_attack_discard(state, index, req);
                         let step_no = steps.len() + 1;
                         steps.push(AttackDiscardStep {
                             label: format!("{} ({step_no})", card.id()),
@@ -710,11 +706,7 @@ pub fn attack_discard_steps(mut state: State, action: Action) -> Vec<AttackDisca
 }
 
 /// Apply ally attack state changes without recording tape events (preview simulation).
-pub(crate) fn advance_attack_ally_silent(
-    state: &mut State,
-    index: usize,
-    discard: DiscardPayment,
-) {
+pub(crate) fn advance_attack_ally_silent(state: &mut State, index: usize, discard: DiscardPayment) {
     let ally = state.allies[index];
     let card = ally.card();
     let hot_cake_buff = ally.attack_buff();
@@ -1000,6 +992,7 @@ fn play_action(params: PlayActionParams<'_>) {
 
     let mut drawn = None;
     let mut memory_draw = None;
+    let mut discarded = None;
     let damage = match card {
         Card::FieryInterference => 2,
         Card::MarkTheTarget => {
@@ -1029,6 +1022,12 @@ fn play_action(params: PlayActionParams<'_>) {
         Card::IncreasingDanger => {
             drawn = Some(state.draw_unknown());
             memory_draw = Some(state.draw_to_memory());
+            0
+        }
+        Card::CreativeShock => {
+            drawn = Some(state.draw_unknown());
+            memory_draw = Some(state.draw_unknown());
+            discarded = state.discard_for_effect();
             0
         }
         Card::UndeniableTruth => {
@@ -1062,6 +1061,9 @@ fn play_action(params: PlayActionParams<'_>) {
     }
     if let Some(memory_draw) = memory_draw {
         fields = fields.with_memory_draw(memory_draw);
+    }
+    if let Some(discarded) = discarded {
+        fields = fields.with_discarded(discarded);
     }
     if card.is_fast() && is_fast_phase(state.phase) {
         fields = fields.fast();

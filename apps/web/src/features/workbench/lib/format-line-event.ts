@@ -23,6 +23,7 @@ const PLAY_NO_ACTIVATE = new Set([
   "smoke_out",
   "spark_alight",
   "flurry_of_fire",
+  "creative_shock",
 ]);
 
 function weaponName(id: string | null | undefined): string {
@@ -170,6 +171,17 @@ export function formatLineEvent(
       }
       if (event.card === "undeniable_truth" && event.drawn) {
         s = `Undeniable Truth (draw ${short(event.drawn)}, +1 prep)`;
+      }
+      if (
+        event.card === "creative_shock" &&
+        event.drawn &&
+        event.memoryDraw &&
+        event.discarded
+      ) {
+        const prefix = event.fast
+          ? "Fast Activate Creative Shock"
+          : "Creative Shock";
+        s = `${prefix} (draw ${short(event.drawn)}, ${short(event.memoryDraw)} / discard ${short(event.discarded)})`;
       }
       if (event.prepared === true) {
         if (event.card === "ignited_stab") {

@@ -395,9 +395,7 @@ impl State {
             return 0;
         }
         match self.phase {
-            Phase::Materialize | Phase::PreRecollect => {
-                self.max_turns.saturating_sub(self.turn)
-            }
+            Phase::Materialize | Phase::PreRecollect => self.max_turns.saturating_sub(self.turn),
             Phase::Main | Phase::Agility => {
                 self.max_turns.saturating_sub(self.turn.saturating_add(1))
             }

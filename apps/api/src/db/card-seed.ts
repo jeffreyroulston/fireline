@@ -554,6 +554,16 @@ export const CARD_SEED: CardSeed[] = [
     element: "fire",
     aliases: ["aenean_flurry_of_fire"],
   },
+  {
+    id: "creative_shock",
+    name: "Creative Shock",
+    short: "Shock",
+    kind: "action",
+    cost: 3,
+    element: "fire",
+    fast: true,
+    aliases: [],
+  },
 ];
 
 /** Material-deck cards. Not in the engine Card enum; persist under these ids. */

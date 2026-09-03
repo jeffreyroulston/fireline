@@ -244,9 +244,7 @@ fn screen_counts_against_reference(
             |_| ControlFlow::Continue(()),
             on_eval_hand,
         )?;
-        state.hands_simulated = state
-            .hands_simulated
-            .saturating_add(u64::from(batch_hands));
+        state.hands_simulated = state.hands_simulated.saturating_add(u64::from(batch_hands));
         report_search_progress(state, ctx, on_progress)?;
         completed = batch_end;
 
@@ -1204,31 +1202,34 @@ fn optimize_genetic(
                     let score = metric_score(&eval, request.metric);
                     state.record(score, child.clone(), eval.card_stats);
                     next_generation.push((score, child));
-                    if next_generation.len() >= pop_size as usize || !search_can_continue(state, ctx)
+                    if next_generation.len() >= pop_size as usize
+                        || !search_can_continue(state, ctx)
                     {
                         break;
                     }
                 }
             } else {
-            children.sort_by_key(counts_key);
-            let results = score_decks_parallel(
-                children,
-                ctx,
-                &mut state.decks_scored,
-                state.best_score,
-                on_progress,
-            )?;
-            for (child, eval) in results {
-                let score = metric_score(&eval, request.metric);
-                state.record(score, child.clone(), eval.card_stats);
-                state.hands_simulated = state
-                    .hands_simulated
-                    .saturating_add(u64::from(ctx.request.samples));
-                next_generation.push((score, child));
-                if next_generation.len() >= pop_size as usize || !search_can_continue(state, ctx) {
-                    break;
+                children.sort_by_key(counts_key);
+                let results = score_decks_parallel(
+                    children,
+                    ctx,
+                    &mut state.decks_scored,
+                    state.best_score,
+                    on_progress,
+                )?;
+                for (child, eval) in results {
+                    let score = metric_score(&eval, request.metric);
+                    state.record(score, child.clone(), eval.card_stats);
+                    state.hands_simulated = state
+                        .hands_simulated
+                        .saturating_add(u64::from(ctx.request.samples));
+                    next_generation.push((score, child));
+                    if next_generation.len() >= pop_size as usize
+                        || !search_can_continue(state, ctx)
+                    {
+                        break;
+                    }
                 }
-            }
             }
             if save_keep_partial() {
                 break;

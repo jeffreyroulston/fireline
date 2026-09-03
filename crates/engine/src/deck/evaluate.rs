@@ -522,14 +522,7 @@ pub fn evaluate_with_hand_progress(
     on_progress: impl FnMut(EvalProgress) -> ControlFlow<()> + Send,
     on_hand_progress: impl FnMut(HandProgress) -> ControlFlow<()> + Send,
 ) -> Result<DeckEvalResult> {
-    evaluate_hands(
-        request,
-        on_progress,
-        on_hand_progress,
-        true,
-        None,
-        None,
-    )
+    evaluate_hands(request, on_progress, on_hand_progress, true, None, None)
 }
 
 /// Evaluate a contiguous window of opening-hand samples from the deck's fixed draw sequence.

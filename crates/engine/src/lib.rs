@@ -7,11 +7,11 @@ pub mod error;
 pub mod line_event;
 pub mod model;
 pub mod optimize_strategies;
-mod sprt;
 pub mod playtest;
 pub mod pressure;
 mod random;
 pub mod solver;
+mod sprt;
 pub mod stats;
 pub mod version;
 

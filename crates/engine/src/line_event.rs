@@ -790,6 +790,7 @@ pub fn format_line_event(event: &LineEvent) -> String {
                         | "smoke_out"
                         | "spark_alight"
                         | "flurry_of_fire"
+                        | "creative_shock"
                 )
             ) {
                 card_name
@@ -810,6 +811,24 @@ pub fn format_line_event(event: &LineEvent) -> String {
                 && let Some(drawn) = event.drawn
             {
                 s = format!("Undeniable Truth (draw {}, +1 prep)", short(Some(drawn)));
+            }
+            if event.card == Some("creative_shock") {
+                s = match (event.drawn, event.memory_draw, event.discarded) {
+                    (Some(first), Some(second), Some(discarded)) => {
+                        let prefix = if event.fast {
+                            "Fast Activate Creative Shock"
+                        } else {
+                            "Creative Shock"
+                        };
+                        format!(
+                            "{prefix} (draw {}, {} / discard {})",
+                            short(Some(first)),
+                            short(Some(second)),
+                            short(Some(discarded))
+                        )
+                    }
+                    _ => s,
+                };
             }
             if event.prepared == Some(true) {
                 if event.card == Some("ignited_stab") {

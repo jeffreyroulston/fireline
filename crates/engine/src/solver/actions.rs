@@ -18,7 +18,7 @@ pub(crate) fn is_fast_phase(phase: Phase) -> bool {
     matches!(phase, Phase::PreRecollect | Phase::Agility)
 }
 
-const ACTION_CARDS: [Card; 15] = [
+const ACTION_CARDS: [Card; 16] = [
     Card::FieryInterference,
     Card::IntensifiedPyre,
     Card::MarkTheTarget,
@@ -34,6 +34,7 @@ const ACTION_CARDS: [Card; 15] = [
     Card::SmokeOut,
     Card::SparkAlight,
     Card::FlurryOfFire,
+    Card::CreativeShock,
 ];
 
 /// Action cards that deal modeled positive damage (excludes pure-draw / no-effect actions).
@@ -52,7 +53,10 @@ const DAMAGE_ACTION_CARDS: [Card; 11] = [
 ];
 
 fn is_pure_draw_card(card: Card) -> bool {
-    matches!(card, Card::IncreasingDanger | Card::UndeniableTruth)
+    matches!(
+        card,
+        Card::IncreasingDanger | Card::UndeniableTruth | Card::CreativeShock
+    )
 }
 
 /// Mate recollects memory before Main; ignore the Mate draw (unknown / not yet taken).

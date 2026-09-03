@@ -2693,6 +2693,63 @@ fn spark_alight_should_amplify_once_when_poisoned_dagger_is_active() {
 }
 
 #[test]
+fn creative_shock_should_draw_two_then_discard_a_brick() {
+    assert_eq!(parse_card("Creative Shock"), Some(Card::CreativeShock));
+    assert!(Card::CreativeShock.is_fast());
+    assert_eq!(Card::CreativeShock.cost(), 3);
+
+    let hand = [
+        Card::CreativeShock,
+        Card::Brick,
+        Card::Brick,
+        Card::Brick,
+        Card::Brick,
+    ];
+    let state = State::with_queue(&hand, true, 1, &[Card::SmokeOut, Card::SparkAlight]);
+    let play = solver_actions(state, false)
+        .into_iter()
+        .find(|action| {
+            matches!(
+                action,
+                Action::PlayAction {
+                    card: Card::CreativeShock,
+                    ..
+                }
+            )
+        })
+        .expect("Creative Shock should be playable");
+    let (after, steps) = apply(state, play);
+    assert_eq!(after.damage, 0, "{steps:?}");
+    assert_eq!(after.hand_len, 2, "{steps:?}");
+    assert!(after.has(Card::SmokeOut), "{steps:?}");
+    assert!(after.has(Card::SparkAlight), "{steps:?}");
+    assert!(
+        steps.iter().any(|step| {
+            format_line_event(step) == "Creative Shock (draw Smoke, Spark / discard Brick)"
+        }),
+        "{steps:?}"
+    );
+}
+
+#[test]
+fn creative_shock_should_be_offered_during_pre_recollect() {
+    let hand = [Card::CreativeShock, Card::Brick, Card::Brick, Card::Brick];
+    let mut state = State::with_queue(&hand, true, 1, &[]);
+    state.phase = Phase::PreRecollect;
+    let legal = solver_actions(state, false);
+    assert!(
+        legal.iter().any(|action| matches!(
+            action,
+            Action::PlayAction {
+                card: Card::CreativeShock,
+                ..
+            }
+        )),
+        "fast Creative Shock should be offered in pre-recollect: {legal:?}"
+    );
+}
+
+#[test]
 fn incapacitate_class_bonus_discount_and_inert_actions() {
     let hand = [Card::Incapacitate, Card::Brick, Card::Brick];
     let unleveled = State::with_queue(&hand, true, 1, &[]);
@@ -3745,7 +3802,12 @@ fn cancel_flag_aborts_long_oracle_pass() {
 #[test]
 fn attack_others_two_hasty_messengers_both_draw_on_auto() {
     let mut state = State::with_queue(
-        &[Card::Brick, Card::Brick, Card::KingdomInformant, Card::IgnitedStab],
+        &[
+            Card::Brick,
+            Card::Brick,
+            Card::KingdomInformant,
+            Card::IgnitedStab,
+        ],
         true,
         1,
         &[Card::SableRemnant, Card::ClumsyApprentice],
@@ -3764,9 +3826,14 @@ fn attack_others_two_hasty_messengers_both_draw_on_auto() {
 
 #[test]
 fn attack_others_two_hasty_messengers_manual_then_auto() {
-    use crate::solver::{apply_action_with_payment, ActionPayment, DiscardPayment};
+    use crate::solver::{ActionPayment, DiscardPayment, apply_action_with_payment};
     let mut state = State::with_queue(
-        &[Card::Brick, Card::Brick, Card::KingdomInformant, Card::IgnitedStab],
+        &[
+            Card::Brick,
+            Card::Brick,
+            Card::KingdomInformant,
+            Card::IgnitedStab,
+        ],
         true,
         1,
         &[Card::SableRemnant, Card::ClumsyApprentice],

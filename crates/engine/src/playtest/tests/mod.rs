@@ -496,6 +496,96 @@ fn playtest_increasing_danger_manual_reserve_labels_correctly() {
 }
 
 #[test]
+fn playtest_creative_shock_draws_two_then_discards() {
+    use crate::line_event::format_line_event;
+
+    let init = playtest_init(&PlaytestInitRequest {
+        hand: vec![
+            Card::CreativeShock.id().to_string(),
+            Card::Brick.id().to_string(),
+            Card::Brick.id().to_string(),
+            Card::Brick.id().to_string(),
+            Card::Brick.id().to_string(),
+        ],
+        go_first: true,
+        max_turns: 1,
+        materials: BTreeMap::new(),
+        queue: vec![
+            Card::SmokeOut.id().to_string(),
+            Card::SparkAlight.id().to_string(),
+        ],
+    })
+    .expect("init");
+    let mut engine = init.state.engine;
+    engine.turn = 1;
+
+    let legal = playtest_legal_actions(&PlaytestLegalActionsRequest {
+        state: engine.clone(),
+    })
+    .expect("legal");
+    let shock = legal
+        .actions
+        .iter()
+        .find(|opt| {
+            matches!(
+                &opt.action,
+                PlaytestAction::PlayAction {
+                    card,
+                    kindle: 0,
+                    imbue: false,
+                    ..
+                } if card == Card::CreativeShock.id()
+            )
+        })
+        .expect("play Creative Shock");
+    assert_eq!(shock.reserve_count, 3);
+
+    let mut action = shock.action.clone();
+    if let PlaytestAction::PlayAction {
+        reserved_hand_indices,
+        ..
+    } = &mut action
+    {
+        *reserved_hand_indices = vec![1, 2, 3];
+    } else {
+        panic!("expected play action");
+    }
+
+    let applied = playtest_apply(&PlaytestApplyRequest {
+        state: engine,
+        action,
+    })
+    .expect("apply Creative Shock");
+    let play_event = applied
+        .events
+        .iter()
+        .find(|event| event.card == Some(Card::CreativeShock.id()))
+        .expect("Creative Shock play event");
+    assert_eq!(
+        format_line_event(play_event),
+        "Creative Shock (draw Smoke, Spark / discard Brick)"
+    );
+    assert!(
+        applied
+            .state
+            .hand
+            .iter()
+            .any(|id| id == Card::SmokeOut.id()),
+        "{:?}",
+        applied.state.hand
+    );
+    assert!(
+        applied
+            .state
+            .hand
+            .iter()
+            .any(|id| id == Card::SparkAlight.id()),
+        "{:?}",
+        applied.state.hand
+    );
+}
+
+#[test]
 fn playtest_attack_others_two_hasty_discard_steps() {
     use crate::line_event::EventKind;
 
@@ -528,7 +618,8 @@ fn playtest_attack_others_two_hasty_discard_steps() {
 
     let mut action = attack.action.clone();
     if let PlaytestAction::AttackOthers {
-        discard_hand_indices, ..
+        discard_hand_indices,
+        ..
     } = &mut action
     {
         *discard_hand_indices = vec![Some(2), Some(3)];
@@ -536,8 +627,11 @@ fn playtest_attack_others_two_hasty_discard_steps() {
         panic!("expected attack others");
     }
 
-    let applied = playtest_apply(&PlaytestApplyRequest { state: engine, action })
-        .expect("apply two attack discards");
+    let applied = playtest_apply(&PlaytestApplyRequest {
+        state: engine,
+        action,
+    })
+    .expect("apply two attack discards");
     let draws = applied
         .events
         .iter()
@@ -578,10 +672,7 @@ fn playtest_tristan_on_enter_offers_prep_or_agility() {
     })
     .expect("legal");
     let labels: Vec<&str> = legal.actions.iter().map(|opt| opt.label.as_str()).collect();
-    assert!(
-        labels.contains(&"Materialize Tristan (Prep)"),
-        "{labels:?}"
-    );
+    assert!(labels.contains(&"Materialize Tristan (Prep)"), "{labels:?}");
     assert!(
         labels.contains(&"Materialize Tristan (Agility 3)"),
         "{labels:?}"
