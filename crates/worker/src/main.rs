@@ -232,7 +232,7 @@ async fn solve_handler(
             cancel.clone(),
             SolveStreamEvent::Heartbeat,
         );
-        let _cancel_guard = ga_fire_engine::install_cancel(cancel.clone());
+        let _cancel_guard = ga_fire_engine::install_cancel(cancel);
         let result = solve(&request);
         pressure_stop.store(true, Ordering::Relaxed);
         let event = match result {

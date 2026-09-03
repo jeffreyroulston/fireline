@@ -17,9 +17,7 @@ fn oracle(
     for card in hand.iter().chain(queue.iter()) {
         *deck.entry(card.id().to_string()).or_insert(0u8) += 1;
     }
-    for id in ["brick"] {
-        *deck.entry(id.to_string()).or_insert(0) += 40;
-    }
+    *deck.entry("brick".to_string()).or_insert(0) += 40;
     solve(&SolveRequest {
         hand: hand.iter().map(|c| c.id().to_string()).collect(),
         go_first: true,
@@ -35,7 +33,7 @@ fn oracle(
         glimpse_enabled: Some(glimpse),
         max_hand_duration_secs: None,
         exhaustive_reservation: None,
-max_card_draw: None,
+        max_card_draw: None,
     })
     .expect("solve")
 }
@@ -79,31 +77,4 @@ fn main() {
             println!("{i:02} {label}");
         }
     }
-}
-
-fn oracle_turns(hand: &[Card], queue: &[Card], seed: u64, max_turns: u8) -> u8 {
-    let mut deck = BTreeMap::new();
-    for card in hand.iter().chain(queue.iter()) {
-        *deck.entry(card.id().to_string()).or_insert(0u8) += 1;
-    }
-    *deck.entry("brick".to_string()).or_insert(0) += 40;
-    solve(&SolveRequest {
-        hand: hand.iter().map(|c| c.id().to_string()).collect(),
-        go_first: true,
-        max_turns,
-        sim_type: SimType::OracleOnly,
-        deck,
-        queue: Some(queue.iter().map(|c| c.id().to_string()).collect()),
-        rollouts: 1,
-        seed,
-        budget: Default::default(),
-        materials: BTreeMap::new(),
-        max_threads: None,
-        glimpse_enabled: Some(true),
-        max_hand_duration_secs: None,
-        exhaustive_reservation: None,
-max_card_draw: None,
-    })
-    .map(|r| r.max_damage)
-    .unwrap_or(0)
 }

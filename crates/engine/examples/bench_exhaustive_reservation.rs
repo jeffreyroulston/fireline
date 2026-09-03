@@ -71,7 +71,11 @@ fn run_pass_once(exhaustive: bool) -> (u8, u64, f64) {
         ga_fire_engine::model::ALL_MATERIALS,
     )
     .expect("solve_pass");
-    (pass.max_damage, pass.nodes, start.elapsed().as_secs_f64() * 1000.0)
+    (
+        pass.max_damage,
+        pass.nodes,
+        start.elapsed().as_secs_f64() * 1000.0,
+    )
 }
 
 fn main() {

@@ -730,8 +730,16 @@ fn going_second_draws_at_start_of_first_turn() {
         Card::RedHare,
         Card::PepperedChef,
     ];
-    let (pass, stats) = solve_pass(&hand, false, 2, &[Card::IgnitedStab], false, false, ALL_MATERIALS)
-        .expect("solve_pass");
+    let (pass, stats) = solve_pass(
+        &hand,
+        false,
+        2,
+        &[Card::IgnitedStab],
+        false,
+        false,
+        ALL_MATERIALS,
+    )
+    .expect("solve_pass");
     assert_eq!(
         pass.events.first().and_then(|event| event.drawn),
         Some("ignited_stab"),
@@ -771,7 +779,7 @@ fn fire_brick_going_second_draws_brick_without_a_deck() {
         max_hand_duration_secs: None,
 
         exhaustive_reservation: None,
-max_card_draw: None,
+        max_card_draw: None,
     })
     .unwrap();
     assert_eq!(
@@ -813,7 +821,7 @@ fn fire_brick_going_second_draws_a_real_card_from_an_attached_deck() {
         max_hand_duration_secs: None,
 
         exhaustive_reservation: None,
-max_card_draw: None,
+        max_card_draw: None,
     })
     .unwrap();
     let drawn = result.events.first().and_then(|event| event.drawn);
@@ -839,7 +847,7 @@ max_card_draw: None,
         max_hand_duration_secs: None,
 
         exhaustive_reservation: None,
-max_card_draw: None,
+        max_card_draw: None,
     })
     .unwrap();
     assert_eq!(
@@ -879,7 +887,7 @@ fn fire_brick_going_second_prefers_an_explicit_remaining_queue() {
         max_hand_duration_secs: None,
 
         exhaustive_reservation: None,
-max_card_draw: None,
+        max_card_draw: None,
     })
     .unwrap();
     assert_eq!(
@@ -3103,7 +3111,7 @@ fn solve_clamps_turns_and_rollouts_in_effective() {
         max_hand_duration_secs: None,
 
         exhaustive_reservation: None,
-max_card_draw: None,
+        max_card_draw: None,
     };
     let result = solve(&request).unwrap();
     assert_eq!(result.effective.max_turns, Some(5));
@@ -3465,7 +3473,7 @@ fn two_pass_exposes_brick_oracle_and_combined_card_stats() {
         max_hand_duration_secs: None,
 
         exhaustive_reservation: None,
-max_card_draw: None,
+        max_card_draw: None,
     })
     .expect("two-pass solve");
 
@@ -3540,7 +3548,7 @@ fn oracle_only_matches_two_pass_oracle() {
         max_hand_duration_secs: None,
 
         exhaustive_reservation: None,
-max_card_draw: None,
+        max_card_draw: None,
     };
     let two_pass = solve(&request(SimType::TwoPass)).expect("two-pass solve");
     let oracle = solve(&request(SimType::OracleOnly)).expect("oracle-only solve");
@@ -3571,7 +3579,7 @@ fn oracle_only_requires_a_maindeck() {
         max_hand_duration_secs: None,
 
         exhaustive_reservation: None,
-max_card_draw: None,
+        max_card_draw: None,
     });
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("need a maindeck"));
@@ -3597,7 +3605,7 @@ fn oracle_uses_provided_queue_without_reshuffling() {
         max_hand_duration_secs: None,
 
         exhaustive_reservation: None,
-max_card_draw: None,
+        max_card_draw: None,
     })
     .expect("oracle with queue");
     let seed_b = solve(&SolveRequest {
@@ -3616,7 +3624,7 @@ max_card_draw: None,
         max_hand_duration_secs: None,
 
         exhaustive_reservation: None,
-max_card_draw: None,
+        max_card_draw: None,
     })
     .expect("oracle with same queue");
     assert_eq!(seed_a.max_damage, seed_b.max_damage);
@@ -3804,7 +3812,8 @@ fn cancel_flag_aborts_long_oracle_pass() {
         crate::cancel::request(&flag_set);
     });
     let _guard = crate::cancel::install(flag);
-    let err = solve_pass(&hand, true, 3, &queue, true, false, ALL_MATERIALS).expect_err("cancelled");
+    let err =
+        solve_pass(&hand, true, 3, &queue, true, false, ALL_MATERIALS).expect_err("cancelled");
     assert!(matches!(err, EngineError::Cancelled));
     handle.join().expect("cancel thread");
 }
@@ -3904,7 +3913,8 @@ fn virgil_hand_exhaustive_reservation_reaches_twenty() {
     };
     let result = crate::solve(&request).expect("solve");
     assert_eq!(
-        result.max_damage, 20,
+        result.max_damage,
+        20,
         "expected 20 with exhaustive reserves; line:\n{}",
         labels(&result.events).join("\n")
     );
