@@ -1,12 +1,18 @@
 "use client";
 
-import type {
-  PlaytestAction,
-  PlaytestStateView,
-} from "@ga-fire/contracts";
+import type { PlaytestAction } from "@ga-fire/contracts";
 import { CARDS, type CardId } from "@/lib/engine";
 import { cn, buttonVariants } from "@/lib/utils";
 import { SectionHeading, HandCard } from "../../ui";
+
+export {
+  hasReserveSelection,
+  inferReserveRequirement,
+  reserveCountFor,
+  reserveOptionMeta,
+  resolveReserveRequirement,
+  withReservedHandIndices,
+} from "@ga-fire/game";
 
 export type ReservePrompt = Readonly<{
   label: string;
@@ -16,149 +22,6 @@ export type ReservePrompt = Readonly<{
   playedCard: string | null;
   hand: string[];
 }>;
-
-export function reserveCountFor(option: {
-  reserveCount?: number;
-  reserve_count?: number;
-}): number {
-  return option.reserveCount ?? option.reserve_count ?? 0;
-}
-
-export function reserveOptionMeta(option: {
-  reserveCount?: number;
-  reserve_count?: number;
-  fireOnly?: boolean;
-  fire_only?: boolean;
-  playedCard?: string | null;
-  played_card?: string | null;
-}) {
-  return {
-    reserveCount: reserveCountFor(option),
-    fireOnly: option.fireOnly ?? option.fire_only ?? false,
-    playedCard: option.playedCard ?? option.played_card ?? null,
-  };
-}
-
-function actionCardCost(cardId: string): number {
-  return CARDS[cardId as CardId]?.cost ?? 0;
-}
-
-export function inferReserveRequirement(
-  action: PlaytestAction,
-  board: PlaytestStateView,
-): {
-  reserveCount: number;
-  fireOnly: boolean;
-  playedCard: string | null;
-} | null {
-  switch (action.op) {
-    case "playAlly": {
-      const cost = actionCardCost(action.card);
-      const kindle = Math.min(action.kindle, cost, board.fireGy);
-      return {
-        reserveCount: Math.max(0, cost - kindle),
-        fireOnly: false,
-        playedCard: action.card,
-      };
-    }
-    case "playItem": {
-      return {
-        reserveCount: actionCardCost(action.card),
-        fireOnly: false,
-        playedCard: action.card,
-      };
-    }
-    case "playAttack": {
-      return {
-        reserveCount: actionCardCost(action.card),
-        fireOnly: false,
-        playedCard: action.card,
-      };
-    }
-    case "playAction": {
-      const cost = actionCardCost(action.card);
-      const kindle = Math.min(action.kindle, cost, board.fireGy);
-      return {
-        reserveCount: Math.max(0, cost - kindle),
-        fireOnly: action.imbue,
-        playedCard: action.card,
-      };
-    }
-    case "blazingThrow":
-      return {
-        reserveCount: 1,
-        fireOnly: false,
-        playedCard: "blazing_throw",
-      };
-    default:
-      return null;
-  }
-}
-
-function reservedHandIndicesFor(action: PlaytestAction): number[] {
-  const raw = action as PlaytestAction & {
-    reservedHandIndices?: number[];
-    reserved_hand_indices?: number[];
-  };
-  return raw.reservedHandIndices ?? raw.reserved_hand_indices ?? [];
-}
-
-export function hasReserveSelection(action: PlaytestAction): boolean {
-  switch (action.op) {
-    case "playAlly":
-    case "playItem":
-    case "playAttack":
-    case "playAction":
-    case "blazingThrow":
-      return (
-        reservedHandIndicesFor(action).length > 0 ||
-        (action.reserved?.length ?? 0) > 0
-      );
-    default:
-      return false;
-  }
-}
-
-export function resolveReserveRequirement(
-  action: PlaytestAction,
-  option: {
-    reserveCount?: number;
-    reserve_count?: number;
-    fireOnly?: boolean;
-    fire_only?: boolean;
-    playedCard?: string | null;
-    played_card?: string | null;
-  },
-  board: PlaytestStateView,
-) {
-  const meta = reserveOptionMeta(option);
-  const inferred = inferReserveRequirement(action, board);
-  return {
-    reserveCount: Math.max(meta.reserveCount, inferred?.reserveCount ?? 0),
-    fireOnly: meta.fireOnly || (inferred?.fireOnly ?? false),
-    playedCard: meta.playedCard ?? inferred?.playedCard ?? null,
-  };
-}
-
-export function withReservedHandIndices(
-  action: PlaytestAction,
-  reservedHandIndices: number[],
-): PlaytestAction {
-  switch (action.op) {
-    case "playAlly":
-    case "playItem":
-    case "playAttack":
-    case "playAction":
-    case "blazingThrow":
-      return {
-        ...action,
-        reserved: [],
-        reserved_hand_indices: reservedHandIndices,
-      };
-    default:
-      return action;
-  }
-}
 
 export function ReservePicker({
   prompt,

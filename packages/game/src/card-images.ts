@@ -1,4 +1,4 @@
-import type { CardId, MaterialId } from "@/lib/engine/types";
+import type { CardId, MaterialId } from "./types";
 
 const GATCG_ORIGIN = "https://api.gatcg.com";
 

@@ -19,24 +19,62 @@ use super::payment::{
     next_discard_payment, preview_hand_for_attack_discard, resolve_discard,
 };
 
-pub fn apply_action(state: State, action: Action) -> (State, Vec<LineEvent>) {
-    apply_action_with_payment(state, action, None)
+/// Whether turn advance runs solver opponent-cull before wake.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TurnAdvancePolicy {
+    /// Wake and enter Materialize only — no automatic opponent cull.
+    RulesWake,
+    /// Solver horizon: cull threatened allies, then wake.
+    #[default]
+    SolverCullThenWake,
 }
 
-/// Apply one action with optional manual reserve payment (playtest).
+/// Options for [`apply_action_with_opts`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ApplyOpts {
+    pub turn_advance: TurnAdvancePolicy,
+}
+
+impl ApplyOpts {
+    /// Interactive / Full rules: no enemy cull on turn advance.
+    pub const FULL: Self = Self {
+        turn_advance: TurnAdvancePolicy::RulesWake,
+    };
+    /// Solver search and legacy playtest apply path.
+    pub const SOLVER: Self = Self {
+        turn_advance: TurnAdvancePolicy::SolverCullThenWake,
+    };
+}
+
+impl Default for ApplyOpts {
+    fn default() -> Self {
+        Self::SOLVER
+    }
+}
+
+pub fn apply_action(state: State, action: Action) -> (State, Vec<LineEvent>) {
+    apply_action_with_opts(state, action, None, ApplyOpts::SOLVER)
+}
+
+/// Apply one action with optional manual reserve payment (playtest / step API).
 pub fn apply_action_with_payment(
     state: State,
     action: Action,
     payment: Option<ActionPayment>,
 ) -> (State, Vec<LineEvent>) {
-    let mut tape = EventTape::new();
-    let next = apply_into(state, action, &mut tape, payment.as_ref());
-    (next, tape.events)
+    apply_action_with_opts(state, action, payment, ApplyOpts::SOLVER)
 }
 
-#[cfg(test)]
-pub(crate) fn apply(state: State, action: Action) -> (State, Vec<LineEvent>) {
-    apply_action(state, action)
+/// Apply with explicit turn-advance policy.
+pub fn apply_action_with_opts(
+    state: State,
+    action: Action,
+    payment: Option<ActionPayment>,
+    opts: ApplyOpts,
+) -> (State, Vec<LineEvent>) {
+    let mut tape = EventTape::new();
+    let next = apply_into(state, action, &mut tape, payment.as_ref(), opts);
+    (next, tape.events)
 }
 
 /// Search expansion: mutate the board without allocating combat-tape snapshots.
@@ -44,7 +82,7 @@ pub(crate) fn apply_silent(state: State, action: Action) -> State {
     thread_local! {
         static TAPE: RefCell<EventTape> = RefCell::new(EventTape::silent());
     }
-    TAPE.with(|tape| apply_into(state, action, &mut tape.borrow_mut(), None))
+    TAPE.with(|tape| apply_into(state, action, &mut tape.borrow_mut(), None, ApplyOpts::SOLVER))
 }
 
 pub(crate) fn apply_silent_with_payment(
@@ -55,7 +93,15 @@ pub(crate) fn apply_silent_with_payment(
     thread_local! {
         static TAPE: RefCell<EventTape> = RefCell::new(EventTape::silent());
     }
-    TAPE.with(|tape| apply_into(state, action, &mut tape.borrow_mut(), Some(payment)))
+    TAPE.with(|tape| {
+        apply_into(
+            state,
+            action,
+            &mut tape.borrow_mut(),
+            Some(payment),
+            ApplyOpts::SOLVER,
+        )
+    })
 }
 
 /// Return freed heap pages to the OS after a heavy solve.
@@ -69,13 +115,14 @@ pub(crate) fn apply_into(
     action: Action,
     tape: &mut EventTape,
     payment: Option<&ActionPayment>,
+    opts: ApplyOpts,
 ) -> State {
     let reserved = payment.map(|payment| payment.reserved.as_slice());
     let mut discard = payment.map(|p| p.discard).unwrap_or(DiscardPayment::Auto);
     tape.begin_action(ActionOp::from_action(action));
     match action {
-        Action::Pass => begin_agility_after_pass(&mut state, tape),
-        Action::SkipAgility => finish_agility_phase(&mut state, tape),
+        Action::Pass => begin_agility_after_pass(&mut state, tape, opts),
+        Action::SkipAgility => finish_agility_phase(&mut state, tape, opts),
         Action::SkipMaterialize => begin_pre_recollection(&mut state, tape),
         Action::SkipPreRecollect => finish_pre_recollection(&mut state, tape),
         Action::MaterializeHammer => {
@@ -517,16 +564,8 @@ fn play_ally(
             EventKind::Immortalize,
             EventFields::default(),
         );
-    } else if card == Card::ClumsyApprentice {
-        let drawn = state.draw_unknown();
-        tape.push(
-            *state,
-            phase,
-            EventKind::OnEnterDraw,
-            EventFields::default().with_drawn(drawn),
-        );
     } else if card == Card::PackageCourier {
-        // On Enter: You may discard a card. If you do, draw a card.
+        // Snowflake: optional discard → draw (interactive payment).
         if let Some(discarded) = resolve_discard(state, discard) {
             let drawn = state.draw_unknown();
             tape.push(
@@ -538,18 +577,8 @@ fn play_ally(
                     .with_drawn(drawn),
             );
         }
-    } else if card == Card::Rococo {
-        let influence = state.influence();
-        if influence <= 4 {
-            state.add_damage(2);
-            tape.push(
-                *state,
-                phase,
-                EventKind::OnEnterDamage,
-                EventFields::card(Card::Rococo),
-            );
-        }
     } else if card == Card::FlagrantGuide {
+        // Snowflake: level material choice.
         if let Some(mat) = flagrant_level {
             apply_flagrant_level(
                 state,
@@ -562,8 +591,11 @@ fn play_ally(
             );
         }
     } else if card == Card::PepperedChef && sacrificed {
+        // Snowflake: sacrifice-tied agility (not a plain on_enter).
         state.agility = state.agility.saturating_add(2);
         tape.push(*state, phase, EventKind::ChefBuff, EventFields::default());
+    } else {
+        let _ = super::apply_effect::apply_ally_on_enter(state, card, phase, tape);
     }
     if hot_cake_sacrifice && state.hot_cake > 0 {
         state.hot_cake -= 1;
@@ -1001,64 +1033,7 @@ fn play_action(params: PlayActionParams<'_>) {
     }
     state.send_to_gy(card);
 
-    let mut drawn = None;
-    let mut memory_draw = None;
-    let mut discarded = None;
-    let damage = match card {
-        Card::FieryInterference => 2,
-        Card::MarkTheTarget => {
-            if state.is_assassin() {
-                state.prep = state.prep.saturating_add(1);
-            }
-            1
-        }
-        Card::PlantedExplosive if prepared => 4,
-        Card::PlantedExplosive => 2,
-        Card::IntensifiedPyre if state.gy_total >= 8 => 6,
-        Card::IntensifiedPyre => 2,
-        Card::VermilionDecree if imbued => {
-            drawn = Some(state.draw_unknown());
-            3
-        }
-        Card::VermilionDecree => 3,
-        Card::Demolition => 3,
-        Card::SurgingBolt if imbued => 4,
-        Card::SurgingBolt => 3,
-        Card::IgniteFate => {
-            // Hits each champion; only the opponent's life is scored, but ours
-            // registering damage enables Heated Vengeance.
-            state.champion_damaged = true;
-            2
-        }
-        Card::IncreasingDanger => {
-            drawn = Some(state.draw_unknown());
-            memory_draw = Some(state.draw_to_memory());
-            0
-        }
-        Card::CreativeShock => {
-            drawn = Some(state.draw_unknown());
-            memory_draw = Some(state.draw_unknown());
-            discarded = state.discard_for_effect();
-            0
-        }
-        Card::UndeniableTruth => {
-            drawn = Some(state.draw_unknown());
-            state.prep = state.prep.saturating_add(1);
-            0
-        }
-        Card::SmokeOut => 1,
-        Card::SparkAlight => 2,
-        Card::FlurryOfFire => 1,
-        // Incapacitate and Reduce to Ash have no modeled effect.
-        _ => 0,
-    };
-    // Flurry of Fire deals 1 twice so Poisoned Dagger amplify applies per hit.
-    if card == Card::FlurryOfFire {
-        state.add_damage(1);
-        state.add_damage(1);
-    } else {
-        state.add_damage(damage);
-    }
+    let effect = super::apply_effect::apply_action_on_play(state, card, prepared, imbued);
 
     let mut fields = EventFields::card(card).with_kindle(kindle);
     if card.prepare() > 0 {
@@ -1067,19 +1042,19 @@ fn play_action(params: PlayActionParams<'_>) {
     if imbued {
         fields = fields.with_imbue(true);
     }
-    if let Some(drawn) = drawn {
+    if let Some(drawn) = effect.drawn {
         fields = fields.with_drawn(drawn);
     }
-    if let Some(memory_draw) = memory_draw {
+    if let Some(memory_draw) = effect.memory_draw {
         fields = fields.with_memory_draw(memory_draw);
     }
-    if let Some(discarded) = discarded {
+    if let Some(discarded) = effect.discarded {
         fields = fields.with_discarded(discarded);
     }
     if card.is_fast() && is_fast_phase(state.phase) {
         fields = fields.fast();
     }
-    if card == Card::IntensifiedPyre && damage == 6 {
+    if effect.gy_threshold {
         fields = fields.gy_threshold();
     }
 
@@ -1186,7 +1161,7 @@ fn finish_pre_recollection(state: &mut State, tape: &mut EventTape) {
     );
 }
 
-fn begin_agility_after_pass(state: &mut State, tape: &mut EventTape) {
+fn begin_agility_after_pass(state: &mut State, tape: &mut EventTape, opts: ApplyOpts) {
     tape.push(
         *state,
         TapePhase::Agility,
@@ -1197,20 +1172,20 @@ fn begin_agility_after_pass(state: &mut State, tape: &mut EventTape) {
         state.phase = Phase::Agility;
         return;
     }
-    finish_agility_phase(state, tape);
+    finish_agility_phase(state, tape, opts);
 }
 
-fn finish_agility_phase(state: &mut State, tape: &mut EventTape) {
+fn finish_agility_phase(state: &mut State, tape: &mut EventTape, opts: ApplyOpts) {
     tape.push(
         *state,
         TapePhase::End,
         EventKind::EndAgility,
         EventFields::default(),
     );
-    advance_after_agility(state, tape);
+    advance_after_agility(state, tape, opts);
 }
 
-fn advance_after_agility(state: &mut State, tape: &mut EventTape) {
+fn advance_after_agility(state: &mut State, tape: &mut EventTape, opts: ApplyOpts) {
     state.phase = Phase::Main;
     tape.push(
         *state,
@@ -1224,13 +1199,15 @@ fn advance_after_agility(state: &mut State, tape: &mut EventTape) {
     if state.is_terminal() {
         return;
     }
-    state.enemy_cull(Some(tape));
-    tape.push(
-        *state,
-        TapePhase::EnemyEnd,
-        EventKind::EnemyMain,
-        EventFields::default(),
-    );
+    if matches!(opts.turn_advance, TurnAdvancePolicy::SolverCullThenWake) {
+        state.enemy_cull(Some(tape));
+        tape.push(
+            *state,
+            TapePhase::EnemyEnd,
+            EventKind::EnemyMain,
+            EventFields::default(),
+        );
+    }
     tape.push(
         *state,
         TapePhase::Wake,

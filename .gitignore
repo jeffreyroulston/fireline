@@ -47,3 +47,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# GA knowledge RAG (local LanceDB + downloaded corpus)
+knowledge/ga/index/
+knowledge/ga/raw/rules/**
+!knowledge/ga/raw/rules/.gitkeep
+knowledge/ga/raw/cards/**
+!knowledge/ga/raw/cards/.gitkeep

@@ -8,6 +8,7 @@ use crate::model::{
 };
 use rustc_hash::FxHashMap;
 
+use super::RulesMode;
 use super::apply::apply_silent;
 
 /// Optimistic damage per influence-reservation (3), as rational 3/1.
@@ -18,45 +19,14 @@ pub(crate) fn is_fast_phase(phase: Phase) -> bool {
     matches!(phase, Phase::PreRecollect | Phase::Agility)
 }
 
-const ACTION_CARDS: [Card; 16] = [
-    Card::FieryInterference,
-    Card::IntensifiedPyre,
-    Card::MarkTheTarget,
-    Card::PlantedExplosive,
-    Card::VermilionDecree,
-    Card::Demolition,
-    Card::SurgingBolt,
-    Card::Incapacitate,
-    Card::UndeniableTruth,
-    Card::IgniteFate,
-    Card::IncreasingDanger,
-    Card::ReduceToAsh,
-    Card::SmokeOut,
-    Card::SparkAlight,
-    Card::FlurryOfFire,
-    Card::CreativeShock,
-];
-
-/// Action cards that deal modeled positive damage (excludes pure-draw / no-effect actions).
-const DAMAGE_ACTION_CARDS: [Card; 11] = [
-    Card::FieryInterference,
-    Card::IntensifiedPyre,
-    Card::MarkTheTarget,
-    Card::PlantedExplosive,
-    Card::VermilionDecree,
-    Card::Demolition,
-    Card::SurgingBolt,
-    Card::IgniteFate,
-    Card::SmokeOut,
-    Card::SparkAlight,
-    Card::FlurryOfFire,
-];
+fn play_action_cards() -> impl Iterator<Item = Card> {
+    ALL_CARDS
+        .into_iter()
+        .filter(|card| card.is_play_action())
+}
 
 fn is_pure_draw_card(card: Card) -> bool {
-    matches!(
-        card,
-        Card::IncreasingDanger | Card::UndeniableTruth | Card::CreativeShock
-    )
+    card.is_pure_draw_action()
 }
 
 /// Mate recollects memory before Main; ignore the Mate draw (unknown / not yet taken).
@@ -141,8 +111,8 @@ fn has_positive_damage_main_play(state: State) -> bool {
         }
     }
 
-    for card in DAMAGE_ACTION_CARDS {
-        if can_afford_action(&state, card) {
+    for card in ALL_CARDS {
+        if card.is_play_action() && card.on_play_deals_damage() && can_afford_action(&state, card) {
             return true;
         }
     }
@@ -208,7 +178,7 @@ pub(crate) fn action_cost(state: &State, card: Card) -> u8 {
 }
 
 /// Undeniable Truth: additional cost sacrifices an ally, so offer one play per ally.
-fn push_undeniable_truth_plays(state: State, result: &mut Vec<Action>) {
+fn push_undeniable_truth_plays(state: State, mode: RulesMode, result: &mut Vec<Action>) {
     if !state.has(Card::UndeniableTruth) || state.hand_len < 2 {
         return;
     }
@@ -218,7 +188,7 @@ fn push_undeniable_truth_plays(state: State, result: &mut Vec<Action>) {
         else {
             continue;
         };
-        if refuse_last_hand_pure_draw(state, after) {
+        if matches!(mode, RulesMode::SolverReduced) && refuse_last_hand_pure_draw(state, after) {
             continue;
         }
         result.push(Action::PlayAction {
@@ -231,13 +201,13 @@ fn push_undeniable_truth_plays(state: State, result: &mut Vec<Action>) {
     }
 }
 
-fn push_action_plays(state: State, result: &mut Vec<Action>) {
-    for card in ACTION_CARDS {
+fn push_action_plays(state: State, mode: RulesMode, result: &mut Vec<Action>) {
+    for card in play_action_cards() {
         if !state.has(card) {
             continue;
         }
         if card == Card::UndeniableTruth {
-            push_undeniable_truth_plays(state, result);
+            push_undeniable_truth_plays(state, mode, result);
             continue;
         }
         let cost = action_cost(&state, card);
@@ -251,7 +221,9 @@ fn push_action_plays(state: State, result: &mut Vec<Action>) {
                 let Some(after) = simulate_pure_draw_payment(state, card, kindle, None) else {
                     continue;
                 };
-                if refuse_last_hand_pure_draw(state, after) {
+                if matches!(mode, RulesMode::SolverReduced)
+                    && refuse_last_hand_pure_draw(state, after)
+                {
                     continue;
                 }
             }
@@ -432,13 +404,13 @@ fn flagrant_guide_actions(
     result
 }
 
-fn push_fast_action_plays(state: State, result: &mut Vec<Action>) {
-    for card in ACTION_CARDS {
+fn push_fast_action_plays(state: State, mode: RulesMode, result: &mut Vec<Action>) {
+    for card in play_action_cards() {
         if !card.is_fast() || !state.has(card) {
             continue;
         }
         if card == Card::UndeniableTruth {
-            push_undeniable_truth_plays(state, result);
+            push_undeniable_truth_plays(state, mode, result);
             continue;
         }
         let cost = action_cost(&state, card);
@@ -483,9 +455,9 @@ fn push_fast_action_plays(state: State, result: &mut Vec<Action>) {
     }
 }
 
-fn push_fast_plays(state: State, result: &mut Vec<Action>) {
+fn push_fast_plays(state: State, mode: RulesMode, result: &mut Vec<Action>) {
     push_fast_ally_plays(state, result);
-    push_fast_action_plays(state, result);
+    push_fast_action_plays(state, mode, result);
 }
 
 /// Influence-reservation budget: current influence × Mains left (including now).
@@ -654,13 +626,13 @@ pub(crate) fn collapse_mate_ending_siblings(state: State, endings: Vec<Action>) 
     order.into_iter().map(|key| best[&key].0).collect()
 }
 
-fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
+fn actions(state: State, mode: RulesMode, glimpse_enabled: bool) -> Vec<Action> {
     if state.phase == Phase::Agility {
         let mut result = Vec::with_capacity(24);
         if state.tristan_leveled && state.agility >= 3 && state.memory_len > 0 {
             result.push(Action::TristanRecollect);
         }
-        push_fast_plays(state, &mut result);
+        push_fast_plays(state, mode, &mut result);
         result.push(Action::SkipAgility);
         return result;
     }
@@ -676,8 +648,10 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
                 endings.push(Action::MercenaryBlade);
             }
         }
-        // Solver reduction: Poisoned Dagger is always taken on the first Materialize window.
-        if state.turn == 1 && state.has_material(MAT_DAGGER) {
+        // Solver reduction: Poisoned Dagger only offered on the first Materialize window.
+        let offer_dagger = state.has_material(MAT_DAGGER)
+            && (matches!(mode, RulesMode::Full) || state.turn == 1);
+        if offer_dagger && state.turn >= 1 {
             endings.push(Action::MaterializeDagger);
         }
         if state.turn >= 1
@@ -724,7 +698,11 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
             endings.push(Action::MaterializeRing);
         }
         endings.push(Action::SkipMaterialize);
-        let endings = collapse_mate_ending_siblings(state, endings);
+        let endings = if matches!(mode, RulesMode::SolverReduced) {
+            collapse_mate_ending_siblings(state, endings)
+        } else {
+            endings
+        };
 
         // Preserve prior order: materializes → Skip.
         let mut result = Vec::with_capacity(endings.len().saturating_add(8));
@@ -744,13 +722,15 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
 
     if state.phase == Phase::PreRecollect {
         // Safe reduction: activating Poisoned Dagger first always weakly dominates.
-        // Amplify sticks for the rest of the turn and buffs every later damage hit.
-        if state.dagger && state.dagger_ready {
+        if matches!(mode, RulesMode::SolverReduced) && state.dagger && state.dagger_ready {
             return vec![Action::ActivateDagger];
         }
 
         let mut result = Vec::with_capacity(24);
-        push_fast_plays(state, &mut result);
+        if state.dagger && state.dagger_ready {
+            result.push(Action::ActivateDagger);
+        }
+        push_fast_plays(state, mode, &mut result);
         result.push(Action::SkipPreRecollect);
         return result;
     }
@@ -768,12 +748,18 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
         if state.allies[index].card() == Card::Arthur && state.can_ally_attack(index) {
             result.push(Action::AttackArthur(index as u8));
             arthur_ready = true;
-            break;
+            if matches!(mode, RulesMode::SolverReduced) {
+                break;
+            }
         }
     }
     // Safe reduction: never attack other allies while Arthur can still attack.
-    // Resting Arthur first always dominates for the +1 rested buff.
-    if !arthur_ready
+    let offer_attack_others = if matches!(mode, RulesMode::SolverReduced) {
+        !arthur_ready
+    } else {
+        true
+    };
+    if offer_attack_others
         && (0..state.ally_len as usize)
             .any(|index| state.allies[index].card() != Card::Arthur && state.can_ally_attack(index))
     {
@@ -893,7 +879,7 @@ fn actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
         }
     }
 
-    push_action_plays(state, &mut result);
+    push_action_plays(state, mode, &mut result);
 
     if state.has(Card::BlazingThrow)
         && state.any_weapon()
@@ -947,11 +933,20 @@ pub(crate) fn tape_phase(state: &State) -> TapePhase {
     }
 }
 
-/// Legal player actions for interactive playtest.
+/// Legal player actions for interactive play (`RulesMode::Full`).
 pub fn legal_actions(state: State) -> Vec<Action> {
-    actions(state, true)
+    legal_actions_with_mode(state, RulesMode::Full)
+}
+
+/// Legal actions under an explicit [`RulesMode`].
+///
+/// Takes `State` by value because `State` is `Copy`; prefer copying from `&State`
+/// at call sites that still hold the board.
+pub fn legal_actions_with_mode(state: State, mode: RulesMode) -> Vec<Action> {
+    let glimpse = matches!(mode, RulesMode::Full);
+    actions(state, mode, glimpse)
 }
 
 pub(crate) fn solver_actions(state: State, glimpse_enabled: bool) -> Vec<Action> {
-    actions(state, glimpse_enabled)
+    actions(state, RulesMode::SolverReduced, glimpse_enabled)
 }

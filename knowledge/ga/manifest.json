@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "embeddingModel": "Xenova/all-MiniLM-L6-v2",
+  "embeddingDims": 384,
+  "tableName": "chunks",
+  "sources": {
+    "rules": {
+      "origin": "https://rules.gatcg.com/llms.txt",
+      "lastIngestedAt": null,
+      "pageCount": 0,
+      "chunkCount": 0
+    },
+    "cards": {
+      "origin": "https://api.gatcg.com/cards/search",
+      "lastIngestedAt": null,
+      "cardCount": 0,
+      "chunkCount": 0
+    },
+    "rulings": {
+      "origin": "knowledge/ga/rulings",
+      "lastIngestedAt": "2026-09-05T04:00:05.110Z",
+      "fileCount": 0,
+      "chunkCount": 0
+    }
+  }
+}

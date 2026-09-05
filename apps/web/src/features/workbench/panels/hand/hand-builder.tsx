@@ -68,6 +68,7 @@ export function HandBuilder({
   onGlimpseEnabledChange,
   onMaxHandDurationSecsChange,
   onMaxCardDrawChange,
+  onExhaustiveReservationChange,
   onSeedChange,
   onSolve,
   onCancel,

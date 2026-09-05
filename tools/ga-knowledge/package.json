@@ -1,0 +1,26 @@
+{
+  "name": "@ga-fire/ga-knowledge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ga-knowledge": "./src/cli.ts"
+  },
+  "scripts": {
+    "ga-knowledge": "tsx src/cli.ts",
+    "status": "tsx src/cli.ts status",
+    "search": "tsx src/cli.ts search",
+    "remember": "tsx src/cli.ts remember",
+    "ingest": "tsx src/cli.ts ingest",
+    "index": "tsx src/cli.ts index"
+  },
+  "dependencies": {
+    "@lancedb/lancedb": "^0.19.0",
+    "@xenova/transformers": "^2.17.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

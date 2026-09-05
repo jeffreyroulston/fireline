@@ -154,6 +154,11 @@ async fn main() {
             post(playtest_legal_actions_handler),
         )
         .route("/playtest/apply", post(playtest_apply_handler))
+        // Rules step protocol (Full legality, no solver cull). Same wire types as
+        // playtest for v1; clients should prefer these paths.
+        .route("/game/v1/init", post(playtest_init_handler))
+        .route("/game/v1/legal", post(playtest_legal_actions_handler))
+        .route("/game/v1/apply", post(playtest_apply_handler))
         .route("/evaluate", post(evaluate_handler))
         .route("/optimize", post(optimize_handler))
         .route("/jobs/{id}/stop", post(stop_job_handler))

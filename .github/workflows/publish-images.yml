@@ -24,6 +24,8 @@ jobs:
             file: docker/Dockerfile.api
           - name: web
             file: docker/Dockerfile.web
+          - name: play
+            file: docker/Dockerfile.play
     steps:
       - uses: actions/checkout@v4
 

@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
-use super::actions::{
+use crate::rules::{
     collapse_mate_ending_siblings, optimistic_remaining_from_reserve, order_actions_damage_first,
     reservation_budget, solver_actions,
 };
-use super::apply::apply;
+use crate::rules::apply_action as apply;
 use super::hash::hex_lower;
 use super::search::Search;
 use super::*;

@@ -1,4 +1,7 @@
 //! Interactive playtest protocol between the worker and the engine.
+//!
+//! Legal actions use [`crate::rules::RulesMode::Full`]. Apply uses
+//! [`crate::rules::ApplyOpts::FULL`] (no solver enemy cull on turn advance).
 
 mod actions;
 mod payment;
@@ -12,9 +15,9 @@ pub use types::*;
 
 use crate::error::Result;
 use crate::line_event::EventTape;
-use crate::solver::{
-    action_discard_hand, action_discard_required, action_payment_required,
-    apply_action_with_payment, attack_discard_steps, legal_actions,
+use crate::rules::{
+    ApplyOpts, RulesMode, action_discard_hand, action_discard_required, action_payment_required,
+    apply_action_with_opts, attack_discard_steps, legal_actions_with_mode,
 };
 
 use actions::{action_to_playtest, format_action, playtest_to_action};
@@ -60,7 +63,8 @@ pub fn playtest_legal_actions(
     request: &PlaytestLegalActionsRequest,
 ) -> Result<PlaytestLegalActionsResult> {
     let state = engine_to_state(&request.state);
-    let actions = legal_actions(state)
+    // Interactive clients (play + workbench line) must never see SolverReduced.
+    let actions = legal_actions_with_mode(state, RulesMode::Full)
         .into_iter()
         .map(|action| {
             let payment = action_payment_required(state, action);
@@ -117,7 +121,7 @@ pub fn playtest_apply(request: &PlaytestApplyRequest) -> Result<PlaytestApplyRes
     let state = engine_to_state(&request.state);
     let action = playtest_to_action(&request.action)?;
     let payment = payment_from_playtest_action(&request.action, state, action)?;
-    let (next, events) = apply_action_with_payment(state, action, payment);
+    let (next, events) = apply_action_with_opts(state, action, payment, ApplyOpts::FULL);
     Ok(PlaytestApplyResult {
         state: state_view(next),
         events,

@@ -3,15 +3,13 @@
 use crate::{cards::Card, line_event::EventTape, model::Action, model::State};
 use rustc_hash::FxHashMap;
 
-use super::actions::{
-    optimistic_remaining_damage, order_actions_damage_first, reservation_budget, solver_actions,
+use crate::rules::{
+    ActionPayment, DiscardPayment, action_needs_reserve_search, apply_into, apply_silent,
+    apply_silent_with_payment, enumerate_reservations, optimistic_remaining_damage,
+    order_actions_damage_first, reservation_budget, solver_actions, ApplyOpts,
 };
-use super::apply::{apply_into, apply_silent, apply_silent_with_payment};
 use super::hash::{opening_hand_hash, opening_hand_label};
 use super::memory::release_process_memory;
-use super::payment::{
-    ActionPayment, DiscardPayment, action_needs_reserve_search, enumerate_reservations,
-};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Outcome {
@@ -290,7 +288,7 @@ impl Search {
                         discard: DiscardPayment::Auto,
                         discards: vec![],
                     };
-                    let next = apply_into(state, action, tape, Some(&payment));
+                    let next = apply_into(state, action, tape, Some(&payment), ApplyOpts::SOLVER);
                     if self.visit(next) == target {
                         let burst = &tape.events[saved.events_len..];
                         stats.record_action(action, state, next, burst);
@@ -303,7 +301,7 @@ impl Search {
                 continue;
             }
             let saved = tape.checkpoint();
-            let next = apply_into(state, action, tape, None);
+            let next = apply_into(state, action, tape, None, ApplyOpts::SOLVER);
             if self.visit(next) == target {
                 let burst = &tape.events[saved.events_len..];
                 stats.record_action(action, state, next, burst);

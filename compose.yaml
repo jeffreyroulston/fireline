@@ -82,6 +82,16 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  play:
+    image: ghcr.io/jeffreyroulston/fireline-play:${FIRELINE_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.play
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
   proxy:
     image: caddy:2-alpine
     ports:
@@ -90,6 +100,7 @@ services:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
       - web
+      - play
       - api
     restart: unless-stopped
 

@@ -71,7 +71,7 @@ export async function solve(
 export async function playtestInit(
   request: PlaytestInitRequest,
 ): Promise<PlaytestInitResult> {
-  const response = await apiFetch("/playtest/init", {
+  const response = await apiFetch("/game/v1/init", {
     method: "POST",
     body: JSON.stringify(request),
   });
@@ -81,7 +81,7 @@ export async function playtestInit(
 export async function playtestLegalActions(
   request: PlaytestLegalActionsRequest,
 ): Promise<PlaytestLegalActionsResult> {
-  const response = await apiFetch("/playtest/legal-actions", {
+  const response = await apiFetch("/game/v1/legal", {
     method: "POST",
     body: JSON.stringify(request),
   });
@@ -91,7 +91,7 @@ export async function playtestLegalActions(
 export async function playtestApply(
   request: PlaytestApplyRequest,
 ): Promise<PlaytestApplyResult> {
-  const response = await apiFetch("/playtest/apply", {
+  const response = await apiFetch("/game/v1/apply", {
     method: "POST",
     body: JSON.stringify(request),
   });

@@ -10,6 +10,7 @@ pub mod optimize_strategies;
 pub mod playtest;
 pub mod pressure;
 mod random;
+pub mod rules;
 pub mod solver;
 mod sprt;
 pub mod stats;
@@ -46,6 +47,10 @@ pub use playtest::{
     playtest_legal_actions,
 };
 pub use pressure::{PressureLevel, current_pressure, memory_config};
+pub use rules::{
+    ActionPayment, ApplyOpts, RulesError, RulesMode, TurnAdvancePolicy, apply as rules_apply,
+    legal_actions_with_mode,
+};
 pub use solver::{
     apply_action, legal_actions, opening_hand_hash, solve, solve_cards, solve_pass,
     solve_with_progress,

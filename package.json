@@ -6,14 +6,22 @@
   "scripts": {
     "dev": "pnpm --filter @ga-fire/web dev",
     "dev:api": "pnpm --filter @ga-fire/api dev",
+    "dev:play": "pnpm --filter @ga-fire/play dev",
     "build": "pnpm --filter @ga-fire/web build",
+    "build:play": "pnpm --filter @ga-fire/play build",
     "lint": "pnpm --filter @ga-fire/web lint",
     "migrate": "pnpm --filter @ga-fire/api migrate",
-    "clean": "rm -rf .next apps/web/.next target tsconfig.tsbuildinfo apps/web/tsconfig.tsbuildinfo node_modules apps/*/node_modules packages/*/node_modules",
+    "clean": "rm -rf .next apps/web/.next apps/play/.next target tsconfig.tsbuildinfo apps/web/tsconfig.tsbuildinfo apps/play/tsconfig.tsbuildinfo node_modules apps/*/node_modules packages/*/node_modules",
     "compose:up": "docker compose up --build",
     "compose:down": "docker compose down",
     "update:stack": "node scripts/update-stack.mjs",
     "build:contracts": "cargo test -p ga-fire-engine --features ts export_typescript -- --nocapture && node scripts/fix-contracts.mjs",
+    "sync:cards": "node scripts/sync-card-catalog.mjs",
+    "ga:status": "pnpm --filter @ga-fire/ga-knowledge status",
+    "ga:search": "pnpm --filter @ga-fire/ga-knowledge search",
+    "ga:remember": "pnpm --filter @ga-fire/ga-knowledge remember",
+    "ga:ingest": "pnpm --filter @ga-fire/ga-knowledge ingest",
+    "ga:index": "pnpm --filter @ga-fire/ga-knowledge index",
     "test": "cargo test --workspace --release",
     "bench": "cargo bench -p ga-fire-engine"
   }

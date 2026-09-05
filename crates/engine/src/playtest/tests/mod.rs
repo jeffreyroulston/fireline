@@ -705,3 +705,98 @@ fn playtest_tristan_on_enter_offers_prep_or_agility() {
         applied.events
     );
 }
+
+/// `/game/v1` contract: fixed hand init → legal includes Pass → apply Pass advances phase.
+#[test]
+fn game_v1_fixture_init_legal_apply_pass() {
+    let init = playtest_init(&PlaytestInitRequest {
+        hand: vec![
+            "arthur".to_string(),
+            "ignited_stab".to_string(),
+            Card::Brick.id().to_string(),
+        ],
+        go_first: true,
+        max_turns: 2,
+        materials: BTreeMap::new(),
+        queue: vec![],
+    })
+    .expect("init");
+
+    let legal = playtest_legal_actions(&PlaytestLegalActionsRequest {
+        state: init.state.engine.clone(),
+    })
+    .expect("legal");
+    let ops: Vec<&str> = legal
+        .actions
+        .iter()
+        .map(|opt| match &opt.action {
+            PlaytestAction::Pass => "pass",
+            PlaytestAction::PlayAlly { .. } => "playAlly",
+            PlaytestAction::PlayAttack { .. } => "playAttack",
+            PlaytestAction::PlayAction { .. } => "playAction",
+            PlaytestAction::PlayItem { .. } => "playItem",
+            _ => "other",
+        })
+        .collect();
+    assert!(
+        ops.contains(&"pass"),
+        "fixture legal actions must include pass: {ops:?}"
+    );
+
+    let pass = legal
+        .actions
+        .iter()
+        .find(|opt| matches!(opt.action, PlaytestAction::Pass))
+        .expect("pass option");
+    let applied = playtest_apply(&PlaytestApplyRequest {
+        state: init.state.engine.clone(),
+        action: pass.action.clone(),
+    })
+    .expect("apply pass");
+    assert_ne!(
+        applied.state.phase, init.state.phase,
+        "pass must advance phase"
+    );
+    assert!(!applied.events.is_empty(), "pass must emit events");
+}
+
+/// Playtest legal listing must match Full rules, not SolverReduced.
+#[test]
+fn playtest_legal_actions_locked_to_full_rules() {
+    let mut state = State::with_queue(&[], true, 3, &[]);
+    state.phase = Phase::Main;
+    state.turn = 1;
+    state.champion_awake = true;
+    state.add_ally(Card::Arthur, true, true);
+    state.add_ally(Card::ClumsyApprentice, true, false);
+
+    let engine = state_to_engine(state);
+    let playtest = playtest_legal_actions(&PlaytestLegalActionsRequest {
+        state: engine,
+    })
+    .expect("playtest legal");
+    let full = crate::rules::legal_actions_with_mode(state, crate::rules::RulesMode::Full);
+    let reduced =
+        crate::rules::legal_actions_with_mode(state, crate::rules::RulesMode::SolverReduced);
+
+    assert_eq!(
+        playtest.actions.len(),
+        full.len(),
+        "playtest legal count must equal Full, not SolverReduced (full={}, reduced={})",
+        full.len(),
+        reduced.len()
+    );
+    assert!(
+        playtest
+            .actions
+            .iter()
+            .any(|opt| matches!(opt.action, PlaytestAction::AttackOthers { .. })),
+        "Full/playtest must offer AttackOthers while Arthur is ready"
+    );
+    assert!(
+        !reduced
+            .iter()
+            .any(|a| matches!(a, crate::model::Action::AttackOthers)),
+        "sanity: SolverReduced omits AttackOthers"
+    );
+}

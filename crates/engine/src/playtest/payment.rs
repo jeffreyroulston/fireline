@@ -3,7 +3,7 @@
 use crate::cards::{ALL_CARDS, CARD_COUNT, Card};
 use crate::error::{EngineError, Result};
 use crate::model::{Action, State};
-use crate::solver::{
+use crate::rules::{
     ActionPayment, DiscardPayment, PaymentRequirement, action_discard_hand,
     action_discard_required, action_payment_required, advance_attack_ally_silent,
     ally_attack_discard_requirement, attack_discard_steps, preview_hand_for_attack_discard,
