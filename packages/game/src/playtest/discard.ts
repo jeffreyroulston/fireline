@@ -100,6 +100,7 @@ export function withDiscardChoices(
         discard_hand_index: choices[0] ?? null,
       };
     case "attackArthur":
+    case "attackAlly":
     case "attackOthers":
       return {
         ...action,

@@ -17,7 +17,7 @@ use crate::error::Result;
 use crate::line_event::EventTape;
 use crate::rules::{
     ApplyOpts, RulesMode, action_discard_hand, action_discard_required, action_payment_required,
-    apply_action_with_opts, attack_discard_steps, legal_actions_with_mode,
+    apply_action_with_opts, attack_discard_steps, legal_actions_with_mode, legal_attack_targets,
 };
 
 use actions::{action_to_playtest, format_action, playtest_to_action};
@@ -109,6 +109,19 @@ pub fn playtest_legal_actions(
         })
         .collect();
     Ok(PlaytestLegalActionsResult { actions })
+}
+
+/// Legal attack targets on an opponent public board for a chosen attacker.
+///
+/// # Errors
+///
+/// Returns [`EngineError::InvalidRequest`] when the serialized engine state is invalid.
+pub fn playtest_legal_targets(
+    request: &PlaytestLegalTargetsRequest,
+) -> Result<PlaytestLegalTargetsResult> {
+    let state = engine_to_state(&request.state);
+    let targets = legal_attack_targets(state, request.attacker, &request.opponent);
+    Ok(PlaytestLegalTargetsResult { targets })
 }
 
 /// Apply a playtest action and return the next state plus line events.

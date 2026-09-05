@@ -43,13 +43,15 @@ pub use model::{
 pub use playtest::{
     PlaytestAction, PlaytestActionOption, PlaytestAllyView, PlaytestApplyRequest,
     PlaytestApplyResult, PlaytestInitRequest, PlaytestInitResult, PlaytestLegalActionsRequest,
-    PlaytestLegalActionsResult, PlaytestStateView, playtest_apply, playtest_init,
-    playtest_legal_actions,
+    PlaytestLegalActionsResult, PlaytestLegalTargetsRequest, PlaytestLegalTargetsResult,
+    PlaytestStateView, playtest_apply, playtest_init, playtest_legal_actions,
+    playtest_legal_targets,
 };
 pub use pressure::{PressureLevel, current_pressure, memory_config};
 pub use rules::{
-    ActionPayment, ApplyOpts, RulesError, RulesMode, TurnAdvancePolicy, apply as rules_apply,
-    legal_actions_with_mode,
+    ActionPayment, ApplyOpts, AttackTarget, AttackerRef, OpponentAllyView, OpponentView,
+    RulesError, RulesMode, TurnAdvancePolicy, apply as rules_apply, legal_actions_with_mode,
+    legal_attack_targets,
 };
 pub use solver::{
     apply_action, legal_actions, opening_hand_hash, solve, solve_cards, solve_pass,

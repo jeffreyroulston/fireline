@@ -6,19 +6,19 @@
   "sources": {
     "rules": {
       "origin": "https://rules.gatcg.com/llms.txt",
-      "lastIngestedAt": null,
-      "pageCount": 0,
-      "chunkCount": 0
+      "lastIngestedAt": "2026-09-05T04:06:29.100Z",
+      "pageCount": 110,
+      "chunkCount": 439
     },
     "cards": {
       "origin": "https://api.gatcg.com/cards/search",
-      "lastIngestedAt": null,
-      "cardCount": 0,
-      "chunkCount": 0
+      "lastIngestedAt": "2026-09-05T04:06:29.100Z",
+      "cardCount": 2495,
+      "chunkCount": 2504
     },
     "rulings": {
       "origin": "knowledge/ga/rulings",
-      "lastIngestedAt": "2026-09-05T04:00:05.110Z",
+      "lastIngestedAt": "2026-09-05T04:06:29.100Z",
       "fileCount": 0,
       "chunkCount": 0
     }

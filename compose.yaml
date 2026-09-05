@@ -77,6 +77,9 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.web
+    environment:
+      # Next rewrites /solver/api → data API (browser never hits Caddy /api for UI calls).
+      API_ORIGIN: http://api:8080
     depends_on:
       api:
         condition: service_healthy
@@ -87,6 +90,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.play
+    environment:
+      API_ORIGIN: http://api:8080
     depends_on:
       api:
         condition: service_healthy

@@ -102,11 +102,12 @@ export function targetForAction(action: PlaytestAction): ActionTarget | null {
       return handTarget(action.card);
 
     case "attackArthur":
+    case "attackAlly":
     case "activateSadi":
     case "activateArsonist":
       return allyTarget(action.index);
 
-    // The engine picks which ally swings, so this belongs to the row, not a tile.
+    // SolverReduced bulk swing — Full uses attackAlly per unit instead.
     case "attackOthers":
       return ALLY_ROW_TARGET;
 

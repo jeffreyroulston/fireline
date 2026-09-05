@@ -15,6 +15,7 @@ import {
   ENEMY_CHAMPION_ID,
   ENEMY_CHAMPION_LIFE,
   enemyChampionDefeated,
+  materialCountFromMask,
   MERCENARY_BLADE_TARGET_ID,
   optionsForHandSlot,
   optionsForTarget,
@@ -56,6 +57,19 @@ export type BoardProps = {
   legalActions: readonly PlaytestActionOption[];
   onSelect: (option: PlaytestActionOption) => void;
   className?: string;
+  /**
+   * Champion duel: far-side playmat from the opponent's FiZa board + their
+   * champion life. When omitted, the solo Spirit of Fire placeholder is used.
+   */
+  opponent?: {
+    board: PlaytestStateView;
+    championLife: number;
+    maxLife?: number;
+  } | null;
+  /** Own champion life (duel HUD). Solo uses Spirit damage instead. */
+  championLife?: number;
+  /** Turn / life banner above the mat (duel). */
+  banner?: string | null;
 };
 
 function selectFromIndex(
@@ -131,7 +145,7 @@ function MemoryRail({
   );
 }
 
-/** Opponent side with Spirit of Fire as a placeholder champion. */
+/** Opponent side with Spirit of Fire as a placeholder champion (solo). */
 function OpponentHalf({ damage }: { damage: number }) {
   const defeated = enemyChampionDefeated(damage);
   return (
@@ -232,12 +246,153 @@ function OpponentHalf({ damage }: { damage: number }) {
   );
 }
 
+/** Far-side playmat for a real duel opponent (watch-only). */
+function OpponentSeatHalf({
+  board,
+  championLife,
+  maxLife = ENEMY_CHAMPION_LIFE,
+}: {
+  board: PlaytestStateView;
+  championLife: number;
+  maxLife?: number;
+}) {
+  const defeated = championLife <= 0;
+  const champ = championBoardCard(board);
+  const gyCards = expandZoneMap(board.gy);
+  const banishPileCards = banishCards(board);
+
+  return (
+    <div
+      aria-label="Opponent playmat"
+      className={cn(
+        "grid min-h-0 flex-1",
+        "grid-cols-[120px_minmax(0,1fr)_120px]",
+        "grid-rows-[auto_minmax(0,1fr)]",
+        "gap-x-3 gap-y-2",
+      )}
+    >
+      <div className="col-start-1 row-start-1 row-span-2 flex flex-col items-center gap-3">
+        <ZonePile
+          kind="graveyard"
+          label="Graveyard"
+          count={zoneCount(board.gy)}
+          cards={gyCards}
+          size="sm"
+          inert
+        />
+        <ZonePile
+          kind="deck"
+          label="Main Deck"
+          count={board.queueRemaining}
+          cards={[]}
+          size="sm"
+          inert
+        />
+        <div className="mt-auto flex justify-center pb-0.5">
+          <ZonePile
+            kind="banish"
+            label="Banished"
+            count={banishCount(board)}
+            cards={banishPileCards}
+            orientation="landscape"
+            size="sm"
+            inert
+          />
+        </div>
+      </div>
+
+      <div className="col-start-2 row-start-1">
+        <MemoryRail side="opponent">
+          {board.memory.length === 0
+            ? null
+            : board.memory.map((id, memIndex) => (
+                <div
+                  key={`opp-memory-${id}-${memIndex}`}
+                  className="shrink-0"
+                  style={{ width: BOARD_CARD_W }}
+                >
+                  <CardTile id={id as CardId} title="Memory zone" />
+                </div>
+              ))}
+        </MemoryRail>
+      </div>
+
+      <div className="col-start-3 row-start-1 row-span-2 flex flex-col items-center gap-3">
+        <ZonePile
+          kind="float"
+          label="Floating Memories"
+          count={board.floatGy}
+          cards={[]}
+          size="sm"
+          inert
+        />
+        <ZonePile
+          kind="deck"
+          label="Material Deck"
+          count={materialCountFromMask(board.engine.materials)}
+          cards={[]}
+          size="sm"
+          inert
+        />
+      </div>
+
+      <section
+        aria-label="Opponent battlefield"
+        className="col-start-2 row-start-2 flex min-h-0 flex-col items-start justify-center gap-2 overflow-hidden px-2"
+      >
+        <div className="flex max-h-full flex-wrap content-start items-start justify-start gap-2 overflow-y-auto [&>*]:rotate-180">
+          {champ ? (
+            <div className="relative shrink-0" style={{ width: BOARD_CARD_W }}>
+              <div className={cn(defeated && "opacity-50 grayscale")}>
+                <CardTile
+                  id={champ}
+                  title={`Opponent champion · ${championLife} / ${maxLife} life`}
+                />
+              </div>
+              <span className="pointer-events-none absolute -bottom-1.5 -left-1.5 z-[2] rotate-180 rounded-full border border-white/25 bg-black/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums text-white shadow-sm">
+                {championLife}/{maxLife}
+              </span>
+            </div>
+          ) : (
+            <div className="relative shrink-0" style={{ width: BOARD_CARD_W }}>
+              <div className={cn(defeated && "opacity-50 grayscale")}>
+                <CardTile
+                  id={ENEMY_CHAMPION_ID}
+                  title={`Opponent · ${championLife} / ${maxLife} life`}
+                />
+              </div>
+              <span className="pointer-events-none absolute -bottom-1.5 -left-1.5 z-[2] rotate-180 rounded-full border border-white/25 bg-black/70 px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums text-white shadow-sm">
+                {championLife}/{maxLife}
+              </span>
+            </div>
+          )}
+          {board.allies.map((ally, allyIndex) => (
+            <div
+              key={`opp-ally-${ally.card}-${allyIndex}`}
+              className="shrink-0"
+              style={{ width: BOARD_CARD_W }}
+            >
+              <CardTile id={ally.card as CardId} title="Opponent ally" />
+            </div>
+          ))}
+        </div>
+        <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/35">
+          Opponent · {board.hand.length} in hand
+        </span>
+      </section>
+    </div>
+  );
+}
+
 export function Board({
   board,
   events,
   legalActions,
   onSelect,
   className,
+  opponent = null,
+  championLife,
+  banner = null,
 }: BoardProps) {
   const index = useMemo(
     () => buildActionTargetIndex(legalActions),
@@ -288,7 +443,21 @@ export function Board({
             className="pointer-events-none absolute right-3 bottom-3 h-16 w-16 opacity-35 [background-image:radial-gradient(rgba(255,255,255,0.4)_1px,transparent_1px)] [background-size:7px_7px]"
           />
 
-          <OpponentHalf damage={board.damage} />
+          {banner ? (
+            <p className="mb-2 text-center font-mono text-[11px] uppercase tracking-[0.16em] text-accent">
+              {banner}
+            </p>
+          ) : null}
+
+          {opponent ? (
+            <OpponentSeatHalf
+              board={opponent.board}
+              championLife={opponent.championLife}
+              maxLife={opponent.maxLife}
+            />
+          ) : (
+            <OpponentHalf damage={board.damage} />
+          )}
 
           <div
             aria-hidden
@@ -610,7 +779,13 @@ export function Board({
         </section>
       </div>
 
-      <Hud board={board} index={index} onSelect={onPick} />
+      <Hud
+        board={board}
+        index={index}
+        onSelect={onPick}
+        championLife={championLife}
+        opponentLife={opponent?.championLife}
+      />
       <EventLog events={events} />
     </div>
   );

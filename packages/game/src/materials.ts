@@ -1,15 +1,13 @@
 import type { PlaytestAction } from "@ga-fire/contracts";
 
-import type { MaterialId } from "./types";
+import type { EngineMaterialId, MaterialId } from "./types";
 
 /**
  * Engine `State.materials` bit flags. Order matches
  * `crates/engine/src/model.rs` — not the same as `MATERIAL_IDS` table order
  * in stats (zander_2 / soulknife / tristan are shuffled there).
  */
-export const MATERIAL_BITS: Readonly<
-  Record<Exclude<MaterialId, "spirit_of_fire">, number>
-> = {
+export const MATERIAL_BITS: Readonly<Record<EngineMaterialId, number>> = {
   impact_hammer: 1 << 0,
   mercenary_blade: 1 << 1,
   poisoned_dagger: 1 << 2,
@@ -22,7 +20,7 @@ export const MATERIAL_BITS: Readonly<
 };
 
 const MATERIAL_BIT_ENTRIES = Object.entries(MATERIAL_BITS) as [
-  Exclude<MaterialId, "spirit_of_fire">,
+  EngineMaterialId,
   number,
 ][];
 

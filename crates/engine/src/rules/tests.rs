@@ -18,12 +18,16 @@ fn ally_board_with_arthur_and_sadi() -> State {
 }
 
 #[test]
-fn legal_actions_full_should_include_attack_others_when_arthur_ready() {
+fn legal_actions_full_should_include_per_ally_attack_when_arthur_ready() {
     let state = ally_board_with_arthur_and_sadi();
     let full = legal_actions_with_mode(state, RulesMode::Full);
     assert!(
-        full.iter().any(|a| matches!(a, Action::AttackOthers)),
-        "Full must offer AttackOthers alongside Arthur: {full:?}"
+        !full.iter().any(|a| matches!(a, Action::AttackOthers)),
+        "Full must not offer bulk AttackOthers: {full:?}"
+    );
+    assert!(
+        full.iter().any(|a| matches!(a, Action::AttackAlly(_))),
+        "Full must offer AttackAlly alongside Arthur: {full:?}"
     );
     assert!(
         full.iter().any(|a| matches!(a, Action::AttackArthur(_))),

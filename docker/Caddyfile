@@ -5,10 +5,17 @@
 		}
 	}
 
-	# Keep the /play prefix — Next.js basePath expects it on every request.
+	# Keep the /play and /solver prefixes — Next.js basePath expects them.
 	handle /play* {
 		reverse_proxy play:3000
 	}
 
-	reverse_proxy web:3000
+	handle /solver* {
+		reverse_proxy web:3000
+	}
+
+	# Bare / and legacy root bookmarks → solver.
+	handle {
+		redir * /solver{uri} permanent
+	}
 }

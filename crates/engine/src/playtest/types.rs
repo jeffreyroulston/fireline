@@ -64,6 +64,30 @@ pub struct PlaytestLegalActionsResult {
     feature = "ts",
     ts(export, export_to = "../../../packages/contracts/generated/")
 )]
+pub struct PlaytestLegalTargetsRequest {
+    pub state: PlaytestEngineState,
+    pub attacker: crate::rules::AttackerRef,
+    pub opponent: crate::rules::OpponentView,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
+pub struct PlaytestLegalTargetsResult {
+    pub targets: Vec<crate::rules::AttackTarget>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(TS))]
+#[cfg_attr(
+    feature = "ts",
+    ts(export, export_to = "../../../packages/contracts/generated/")
+)]
 pub struct PlaytestApplyRequest {
     pub state: PlaytestEngineState,
     pub action: PlaytestAction,
@@ -94,6 +118,7 @@ pub struct PlaytestAllyView {
     pub immortal: bool,
     pub stealth: bool,
     pub attack_buff: u8,
+    pub damage_marked: u8,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -251,6 +276,25 @@ pub enum PlaytestAction {
         index: u8,
     },
     AttackArthur {
+        index: u8,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        skip_discard: Option<bool>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            rename = "discardHandIndex",
+            alias = "discard_hand_index"
+        )]
+        discard_hand_index: Option<u8>,
+        #[serde(
+            default,
+            skip_serializing_if = "Vec::is_empty",
+            rename = "discardHandIndices",
+            alias = "discard_hand_indices"
+        )]
+        discard_hand_indices: Vec<Option<u8>>,
+    },
+    AttackAlly {
         index: u8,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         skip_discard: Option<bool>,

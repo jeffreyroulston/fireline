@@ -2,18 +2,22 @@
 
 import { useState, type ReactNode } from "react";
 import type { PlaytestInitRequest } from "@ga-fire/contracts";
-import type { CardId } from "@ga-fire/game";
 import { OPENING_HAND_SIZE } from "@ga-fire/game";
 
-import { CardTile } from "../ui/card-tile";
 import { cn } from "../ui/cn";
 import { useSetupState } from "./use-setup-state";
 
 export type SetupScreenProps = {
   onStart: (request: PlaytestInitRequest) => void;
+  onManageDecks?: () => void;
+  preferredDeckId?: string | null;
   busy?: boolean;
   error?: string | null;
   className?: string;
+  title?: string;
+  subtitle?: string;
+  submitLabel?: string;
+  submitBusyLabel?: string;
 };
 
 const panelClass =
@@ -32,19 +36,20 @@ const primaryButtonClass =
 
 export function SetupScreen({
   onStart,
+  onManageDecks,
+  preferredDeckId = null,
   busy = false,
   error = null,
   className,
+  title = "Fireline Play",
+  subtitle = "Pick a deck. Opening hand and turn order are randomized when you start.",
+  submitLabel = "Start game",
+  submitBusyLabel = "Starting…",
 }: SetupScreenProps) {
-  const setup = useSetupState();
-  const [localError, setLocalError] = useStateMessage();
+  const setup = useSetupState({ preferredDeckId });
+  const [localError, setLocalError] = useState<string | null>(null);
 
   const displayError = error ?? localError ?? setup.loadError;
-
-  function run(action: () => string | null) {
-    const message = action();
-    setLocalError(message);
-  }
 
   function handleStart() {
     const result = setup.buildStartRequest();
@@ -63,11 +68,9 @@ export function SetupScreen({
     <div className={cn("mx-auto flex w-full max-w-4xl flex-col gap-6", className)}>
       <header className="text-center">
         <h1 className="font-[family-name:var(--font-display)] text-4xl font-bold tracking-wide text-primary uppercase">
-          Fireline Play
+          {title}
         </h1>
-        <p className="mt-2 text-sm text-muted">
-          Pick a deck, shuffle with a seed, and play a hand against the engine.
-        </p>
+        <p className="mt-2 text-sm text-muted">{subtitle}</p>
       </header>
 
       <section className={panelClass}>
@@ -87,27 +90,40 @@ export function SetupScreen({
         </div>
 
         {setup.deckSource === "saved" ? (
-          <label className="flex flex-col gap-1.5">
-            <span className={labelClass}>Deck</span>
-            <select
-              className={inputClass}
-              value={setup.selectedDeckId}
-              disabled={setup.decksLoading || setup.decks.length === 0}
-              onChange={(event) => setup.setSelectedDeckId(event.target.value)}
-            >
-              {setup.decks.length === 0 ? (
-                <option value="">
-                  {setup.decksLoading ? "Loading decks…" : "No saved decks"}
-                </option>
-              ) : (
-                setup.decks.map((deck) => (
-                  <option key={deck.id} value={deck.id}>
-                    {deck.name}
+          <div className="flex flex-col gap-3">
+            <label className="flex flex-col gap-1.5">
+              <span className={labelClass}>Deck</span>
+              <select
+                className={inputClass}
+                value={setup.selectedDeckId}
+                disabled={setup.decksLoading || setup.decks.length === 0}
+                onChange={(event) => setup.setSelectedDeckId(event.target.value)}
+              >
+                {setup.decks.length === 0 ? (
+                  <option value="">
+                    {setup.decksLoading ? "Loading decks…" : "No saved decks"}
                   </option>
-                ))
-              )}
-            </select>
-          </label>
+                ) : (
+                  setup.decks.map((deck) => (
+                    <option key={deck.id} value={deck.id}>
+                      {deck.name}
+                    </option>
+                  ))
+                )}
+              </select>
+            </label>
+            {onManageDecks ? (
+              <div>
+                <button
+                  type="button"
+                  className={buttonClass}
+                  onClick={onManageDecks}
+                >
+                  Manage decks
+                </button>
+              </div>
+            ) : null}
+          </div>
         ) : (
           <label className="flex flex-col gap-1.5">
             <span className={labelClass}>Decklist</span>
@@ -130,117 +146,13 @@ export function SetupScreen({
               {setup.deckAnalysis.unrecognizedLines.length === 1 ? "" : "s"}
             </span>
           )}
-        </p>
-      </section>
-
-      <section className={panelClass}>
-        <div className="mb-4 flex flex-wrap items-end gap-3">
-          <label className="flex min-w-[10rem] flex-1 flex-col gap-1.5">
-            <span className={labelClass}>Seed</span>
-            <input
-              className={inputClass}
-              inputMode="numeric"
-              placeholder="Random on empty"
-              value={setup.seedInput}
-              onChange={(event) => setup.setSeedInput(event.target.value)}
-            />
-          </label>
-          <button
-            type="button"
-            className={buttonClass}
-            disabled={!setup.canShuffle || busy}
-            onClick={() => run(() => setup.applySeedInput())}
-          >
-            Shuffle
-          </button>
-          <button
-            type="button"
-            className={buttonClass}
-            disabled={!setup.canShuffle || busy}
-            onClick={() => run(() => setup.drawRandomHand())}
-          >
-            Draw random hand
-          </button>
-          <button
-            type="button"
-            className={buttonClass}
-            disabled={!setup.canShuffle || !setup.shuffled || busy}
-            onClick={() => run(() => setup.shuffleDeckOnly())}
-          >
-            Reshuffle pile
-          </button>
-        </div>
-
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className={labelClass}>Opening hand</h2>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm text-muted">
-              {setup.hand.length} / {OPENING_HAND_SIZE}
-              {setup.manualHand ? " · manual" : ""}
+          {setup.canStart ? (
+            <span>
+              {" "}
+              · opens with {OPENING_HAND_SIZE} random cards
             </span>
-            {setup.manualHand && (
-              <button
-                type="button"
-                className={buttonClass}
-                disabled={!setup.shuffled || busy}
-                onClick={() => run(() => setup.resetHandFromShuffle())}
-              >
-                Reset from shuffle
-              </button>
-            )}
-          </div>
-        </div>
-
-        <HandGrid hand={setup.hand} onRemove={setup.removeHandCard} />
-
-        <label className="mt-4 flex flex-col gap-1.5">
-          <span className={labelClass}>Add card to hand</span>
-          <select
-            className={inputClass}
-            defaultValue=""
-            disabled={busy}
-            onChange={(event) => {
-              const value = event.target.value as CardId;
-              if (value) {
-                setup.addHandCard(value);
-                event.target.value = "";
-              }
-            }}
-          >
-            <option value="">Choose a card…</option>
-            {setup.playableCards.map((card) => (
-              <option key={card.id} value={card.id}>
-                {card.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      </section>
-
-      <section className={cn(panelClass, "grid gap-4 sm:grid-cols-2")}>
-        <fieldset className="flex flex-col gap-2">
-          <legend className={labelClass}>Turn order</legend>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="radio"
-              name="turn-order"
-              checked={setup.goFirst}
-              disabled={busy}
-              onChange={() => setup.setGoFirst(true)}
-            />
-            Play first
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="radio"
-              name="turn-order"
-              checked={!setup.goFirst}
-              disabled={busy}
-              onChange={() => setup.setGoFirst(false)}
-            />
-            Draw first
-          </label>
-        </fieldset>
+          ) : null}
+        </p>
       </section>
 
       {displayError && (
@@ -253,10 +165,10 @@ export function SetupScreen({
         <button
           type="button"
           className={primaryButtonClass}
-          disabled={busy || setup.hand.length < 2 || !setup.shuffled}
+          disabled={busy || !setup.canStart}
           onClick={handleStart}
         >
-          {busy ? "Starting…" : "Start game"}
+          {busy ? submitBusyLabel : submitLabel}
         </button>
       </div>
     </div>
@@ -286,44 +198,4 @@ function SourceTab({
       {children}
     </button>
   );
-}
-
-function HandGrid({
-  hand,
-  onRemove,
-}: {
-  hand: readonly CardId[];
-  onRemove: (index: number) => void;
-}) {
-  if (hand.length === 0) {
-    return (
-      <p className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted">
-        Shuffle and draw {OPENING_HAND_SIZE} cards, or build a hand manually.
-      </p>
-    );
-  }
-
-  return (
-    <div
-      className={cn(
-        "grid gap-2",
-        hand.length >= 8 ? "grid-cols-4 sm:grid-cols-8" : "grid-cols-4 sm:grid-cols-7",
-      )}
-      aria-label="Opening hand"
-    >
-      {hand.map((id, index) => (
-        <CardTile
-          key={`hand-${id}-${index}`}
-          id={id}
-          title={`Remove ${id}`}
-          onClick={() => onRemove(index)}
-        />
-      ))}
-    </div>
-  );
-}
-
-function useStateMessage() {
-  const [message, setMessage] = useState<string | null>(null);
-  return [message, setMessage] as const;
 }

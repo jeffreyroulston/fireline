@@ -22,6 +22,8 @@ export function cardFromRow(row: CardsTable): CatalogCard {
     power: row.power,
     life: row.life,
     stealth: row.stealth,
+    taunt: false,
+    trueSight: false,
     unique: row.unique,
     assassinPowerBonus: row.assassin_power_bonus,
     assassinStealth: row.assassin_stealth,

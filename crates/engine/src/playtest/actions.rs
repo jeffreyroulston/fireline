@@ -31,6 +31,7 @@ pub(super) fn playtest_to_action(action: &PlaytestAction) -> Result<Action> {
         PlaytestAction::ActivateRipper => Action::ActivateRipper,
         PlaytestAction::ActivateSadi { index } => Action::ActivateSadi(*index),
         PlaytestAction::AttackArthur { index, .. } => Action::AttackArthur(*index),
+        PlaytestAction::AttackAlly { index, .. } => Action::AttackAlly(*index),
         PlaytestAction::AttackOthers { .. } => Action::AttackOthers,
         PlaytestAction::PlayAlly {
             card,
@@ -116,6 +117,12 @@ pub(super) fn action_to_playtest(action: Action) -> PlaytestAction {
         Action::ActivateRipper => PlaytestAction::ActivateRipper,
         Action::ActivateSadi(index) => PlaytestAction::ActivateSadi { index },
         Action::AttackArthur(index) => PlaytestAction::AttackArthur {
+            index,
+            skip_discard: None,
+            discard_hand_index: None,
+            discard_hand_indices: Vec::new(),
+        },
+        Action::AttackAlly(index) => PlaytestAction::AttackAlly {
             index,
             skip_discard: None,
             discard_hand_index: None,
@@ -225,6 +232,14 @@ pub(super) fn format_action(state: State, action: Action) -> String {
         Action::ActivateRipper => "Activate Assassin's Ripper".to_string(),
         Action::ActivateSadi(index) => format!("Activate Sadi (ally {index})"),
         Action::AttackArthur(index) => format!("Attack with Arthur (ally {index})"),
+        Action::AttackAlly(index) => {
+            let name = state
+                .allies
+                .get(index as usize)
+                .map(|ally| ally.card().name())
+                .unwrap_or("ally");
+            format!("Attack with {name} (ally {index})")
+        }
         Action::AttackOthers => format_attack_others_label(state),
         Action::PlayAlly {
             card,

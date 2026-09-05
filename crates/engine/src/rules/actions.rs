@@ -530,6 +530,7 @@ pub(crate) fn order_actions_damage_first(state: &State, actions: &mut [Action]) 
 fn action_deals_immediate_damage(state: &State, action: Action) -> bool {
     match action {
         Action::AttackArthur(_)
+        | Action::AttackAlly(_)
         | Action::AttackOthers
         | Action::PlayAttack { .. }
         | Action::AttackWithWeapon(_)
@@ -754,16 +755,26 @@ fn actions(state: State, mode: RulesMode, glimpse_enabled: bool) -> Vec<Action> 
         }
     }
     // Safe reduction: never attack other allies while Arthur can still attack.
-    let offer_attack_others = if matches!(mode, RulesMode::SolverReduced) {
+    let offer_other_ally_attacks = if matches!(mode, RulesMode::SolverReduced) {
         !arthur_ready
     } else {
         true
     };
-    if offer_attack_others
-        && (0..state.ally_len as usize)
-            .any(|index| state.allies[index].card() != Card::Arthur && state.can_ally_attack(index))
-    {
-        result.push(Action::AttackOthers);
+    if offer_other_ally_attacks {
+        if matches!(mode, RulesMode::SolverReduced) {
+            if (0..state.ally_len as usize).any(|index| {
+                state.allies[index].card() != Card::Arthur && state.can_ally_attack(index)
+            }) {
+                result.push(Action::AttackOthers);
+            }
+        } else {
+            // Full: one declare per ready non-Arthur ally (no bulk AttackOthers).
+            for index in 0..state.ally_len as usize {
+                if state.allies[index].card() != Card::Arthur && state.can_ally_attack(index) {
+                    result.push(Action::AttackAlly(index as u8));
+                }
+            }
+        }
     }
 
     for card in ALL_CARDS {

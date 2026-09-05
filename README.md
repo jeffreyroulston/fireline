@@ -24,7 +24,8 @@ Fireline is a small monorepo:
 
 | Service | Path | Role |
 |---------|------|------|
-| **Web UI** | `apps/web` | Next.js frontend; calls the data API |
+| **Web UI** | `apps/web` | Next.js solver/workbench at `/solver`; calls the data API |
+| **Play UI** | `apps/play` | Next.js game client at `/play` |
 | **Data API** | `apps/api` | Hono + Kysely + Postgres; decks, run history, SSE relay |
 | **Compute worker** | `crates/worker` | Stateless Rust HTTP service for solve/evaluate/optimize |
 
@@ -36,7 +37,7 @@ This repo uses [pnpm](https://pnpm.io/) workspaces (`pnpm-workspace.yaml`). Enab
 
 ## Run with Docker Compose
 
-The production stack runs behind Caddy on port 80. The worker is internal-only; only the data API holds `DATABASE_URL`. Images for `worker`, `api`, and `web` publish to GHCR on every push to `main`.
+The production stack runs behind Caddy on port 80. The worker is internal-only; only the data API holds `DATABASE_URL`. Images for `worker`, `api`, `web`, and `play` publish to GHCR on every push to `main`.
 
 ### First-time setup (published images)
 
@@ -50,7 +51,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Open [http://localhost](http://localhost). Browser requests to `/api/*` go to the data API; everything else goes to the Next.js UI.
+Open [http://localhost/solver](http://localhost/solver) (or [http://localhost](http://localhost), which redirects). Caddy routes `/solver/*` → web, `/play/*` → play, `/api/*` → data API.
 
 ### Update to latest `main`
 
@@ -122,12 +123,12 @@ cargo run -p ga-fire-worker
 pnpm migrate
 pnpm dev:api
 
-# Terminal 4 — web UI (:3000, proxies /api → :8080)
+# Terminal 4 — web UI (:3000, basePath /solver, proxies /solver/api → :8080)
 pnpm install
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000/solver](http://localhost:3000/solver).
 
 Override the API proxy target with `API_ORIGIN` when starting Next.js if the data API is not on `127.0.0.1:8080`.
 

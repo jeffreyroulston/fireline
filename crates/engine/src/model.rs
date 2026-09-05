@@ -36,6 +36,9 @@ impl Ally {
     const IMMORTAL: u32 = 1 << 9;
     /// Granted stealth until end of turn (Corhazi Arsonist activation).
     const STEALTH: u32 = 1 << 10;
+    /// Temporary combat damage marks (cleared on wake / end of turn). Bits 11–15.
+    const DAMAGE_SHIFT: u32 = 11;
+    const DAMAGE_MASK: u32 = 0x1F << Self::DAMAGE_SHIFT;
     const BUFF_SHIFT: u32 = 16;
 
     pub fn new(card: Card, awake: bool, immortal: bool, attack_buff: u8) -> Self {
@@ -70,6 +73,12 @@ impl Ally {
         self.0 & Self::STEALTH != 0
     }
 
+    /// Temporary damage marked on this ally (combat / effects).
+    #[inline]
+    pub fn damage_marked(self) -> u8 {
+        ((self.0 & Self::DAMAGE_MASK) >> Self::DAMAGE_SHIFT) as u8
+    }
+
     #[inline]
     pub fn attack_buff(self) -> u8 {
         (self.0 >> Self::BUFF_SHIFT) as u8
@@ -97,6 +106,19 @@ impl Ally {
         } else {
             self.0 &= !Self::STEALTH;
         }
+    }
+
+    pub fn set_damage_marked(&mut self, damage: u8) {
+        let capped = damage.min(31) as u32;
+        self.0 = (self.0 & !Self::DAMAGE_MASK) | (capped << Self::DAMAGE_SHIFT);
+    }
+
+    pub fn add_damage_marked(&mut self, amount: u8) {
+        self.set_damage_marked(self.damage_marked().saturating_add(amount));
+    }
+
+    pub fn clear_damage_marked(&mut self) {
+        self.set_damage_marked(0);
     }
 
     pub fn set_attack_buff(&mut self, attack_buff: u8) {
@@ -905,6 +927,34 @@ impl State {
         Some(card)
     }
 
+    /// Mark temporary combat damage on an ally. Destroys (to GY) when marks ≥ printed life
+    /// unless immortal. Returns true if the ally was destroyed.
+    pub fn mark_ally_damage(&mut self, index: usize, amount: u8) -> bool {
+        if index >= self.ally_len as usize || amount == 0 {
+            return false;
+        }
+        self.allies[index].add_damage_marked(amount);
+        self.destroy_ally_if_lethal(index)
+    }
+
+    /// Destroy ally when damage marks meet or exceed printed life (immortal survives).
+    pub fn destroy_ally_if_lethal(&mut self, index: usize) -> bool {
+        if index >= self.ally_len as usize {
+            return false;
+        }
+        let ally = self.allies[index];
+        if ally.immortal() {
+            return false;
+        }
+        let Some(life) = ally.card().life() else {
+            return false;
+        };
+        if ally.damage_marked() < life {
+            return false;
+        }
+        self.remove_ally(index, true).is_some()
+    }
+
     pub fn arthur_rested(self) -> bool {
         self.allies[..self.ally_len as usize]
             .iter()
@@ -1098,6 +1148,7 @@ impl State {
             ally.set_awake(true);
             ally.set_immortal(false);
             ally.set_stealth(false);
+            ally.clear_damage_marked();
             ally.set_attack_buff(0);
         }
         if self.dagger {
@@ -1328,6 +1379,9 @@ pub enum Action {
     ActivateRipper,
     ActivateSadi(u8),
     AttackArthur(u8),
+    /// Full rules: attack a single non-Arthur ally by index (Spirit damage in solo).
+    AttackAlly(u8),
+    /// SolverReduced bulk swing of every ready non-Arthur ally.
     AttackOthers,
     PlayAlly {
         card: Card,

@@ -8,6 +8,7 @@
 mod actions;
 mod apply;
 mod apply_effect;
+mod combat_targets;
 mod payment;
 
 #[cfg(test)]
@@ -27,6 +28,9 @@ pub use apply::{
     attack_discard_steps,
 };
 pub(crate) use apply::{apply_into, apply_silent, apply_silent_with_payment};
+pub use combat_targets::{
+    AttackTarget, AttackerRef, OpponentAllyView, OpponentView, legal_attack_targets,
+};
 pub use payment::{
     ActionPayment, AttackDiscardStep, DiscardPayment, DiscardRequirement, PaymentRequirement,
     action_discard_hand, action_discard_required, action_payment_required,

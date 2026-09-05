@@ -89,6 +89,13 @@ pub fn action_discard_required(state: State, action: Action) -> Option<DiscardRe
             }
             ally_attack_discard_requirement(state, state.allies[index].card())
         }
+        Action::AttackAlly(index) => {
+            let index = index as usize;
+            if index >= state.ally_len as usize {
+                return None;
+            }
+            ally_attack_discard_requirement(state, state.allies[index].card())
+        }
         Action::AttackOthers => {
             for index in 0..state.ally_len as usize {
                 if state.allies[index].card() == Card::Arthur || !state.can_ally_attack(index) {
@@ -170,6 +177,22 @@ fn simulate_draw_before_discard(
 ) -> Option<(Vec<Card>, Option<u8>)> {
     match action {
         Action::AttackArthur(index) => {
+            let index = index as usize;
+            if index >= state.ally_len as usize {
+                return None;
+            }
+            let card = state.allies[index].card();
+            if card == Card::CorhaziCourier && state.is_assassin() {
+                let before_count = state.hand;
+                let drawn = state.draw_unknown();
+                let slots = state.hand_slots();
+                let drawn_index = drawn_slot_index(&slots, drawn, before_count[drawn.index()]);
+                Some((slots, drawn_index))
+            } else {
+                None
+            }
+        }
+        Action::AttackAlly(index) => {
             let index = index as usize;
             if index >= state.ally_len as usize {
                 return None;

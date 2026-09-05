@@ -162,6 +162,11 @@ impl LineCardStats {
                 self.attacks[card.index()] += 1;
                 self.attribute_attack_bundle(card, events, before_damage);
             }
+            Action::AttackAlly(index) => {
+                let card = before.allies[index as usize].card();
+                self.attacks[card.index()] += 1;
+                self.attribute_attack_bundle(card, events, before_damage);
+            }
             Action::AttackOthers => self.attribute_multi_attacks(events, before_damage),
             Action::MaterializeHammer => {
                 self.material_plays[MAT_HAMMER] += 1;

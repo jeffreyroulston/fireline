@@ -325,6 +325,7 @@ pub(crate) fn apply_into(
             }
         }
         Action::AttackArthur(index) => attack_ally(&mut state, index as usize, tape, discard),
+        Action::AttackAlly(index) => attack_ally(&mut state, index as usize, tape, discard),
         Action::AttackOthers => {
             let mut discard_queue = payment
                 .map(|payment| payment.discards.clone())
@@ -710,6 +711,24 @@ pub fn attack_discard_steps(mut state: State, action: Action) -> Vec<AttackDisca
         Action::AttackArthur(index) => {
             let index = index as usize;
             if index < state.ally_len as usize && state.can_ally_attack(index) {
+                let card = state.allies[index].card();
+                if let Some(req) = ally_attack_discard_requirement(state, card) {
+                    let (hand, drawn_index) = preview_hand_for_attack_discard(state, index, req);
+                    steps.push(AttackDiscardStep {
+                        label: card.id().to_string(),
+                        optional: req.optional,
+                        hand,
+                        drawn_index,
+                    });
+                }
+            }
+        }
+        Action::AttackAlly(index) => {
+            let index = index as usize;
+            if index < state.ally_len as usize
+                && state.allies[index].card() != Card::Arthur
+                && state.can_ally_attack(index)
+            {
                 let card = state.allies[index].card();
                 if let Some(req) = ally_attack_discard_requirement(state, card) {
                     let (hand, drawn_index) = preview_hand_for_attack_discard(state, index, req);

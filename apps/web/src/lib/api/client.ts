@@ -22,7 +22,8 @@ import { consumeSolveStream } from "./ndjson";
 
 export type { ApiCardRow, RunSettingsFilter, WorkerVersion } from "./shared";
 
-const API_PREFIX = "/api";
+/** Must include next.config basePath so rewrites match `/solver/api/*`. */
+const API_PREFIX = "/solver/api";
 
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(`${API_PREFIX}${path}`, {

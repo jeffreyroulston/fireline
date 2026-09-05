@@ -293,6 +293,7 @@ fn ally_view(ally: Ally) -> PlaytestAllyView {
         immortal: ally.immortal(),
         stealth: ally.stealth(),
         attack_buff: ally.attack_buff(),
+        damage_marked: ally.damage_marked(),
     }
 }
 

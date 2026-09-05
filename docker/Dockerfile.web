@@ -21,6 +21,9 @@ COPY packages/contracts ./packages/contracts
 COPY packages/game ./packages/game
 
 ENV NEXT_TELEMETRY_DISABLED=1
+# Baked into next.config rewrites at build time (runtime env alone is not enough).
+ARG API_ORIGIN=http://api:8080
+ENV API_ORIGIN=$API_ORIGIN
 
 RUN pnpm --filter @ga-fire/web build
 
@@ -30,7 +33,8 @@ WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \
-    PORT=3000
+    PORT=3000 \
+    API_ORIGIN=http://api:8080
 
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 nextjs

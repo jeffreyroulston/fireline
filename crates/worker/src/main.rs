@@ -9,10 +9,11 @@ use ga_fire_engine::{
     Budget, CancelFlag, DeckEvalRequest, DeckEvalResult, ENGINE_VERSION, EvalProgress, HandPhase,
     HandProgress, OptimizeProgress, OptimizeRequest, OptimizeResult, PlaytestApplyRequest,
     PlaytestApplyResult, PlaytestInitRequest, PlaytestInitResult, PlaytestLegalActionsRequest,
-    PlaytestLegalActionsResult, PressureLevel, SimType, SolveRequest, SolveResult, card_catalog,
-    current_pressure, evaluate_with_hand_progress_cancel, hand_threads, is_save_requested_on,
-    memory_config, new_cancel_flag, optimize_with_hand_progress, playtest_apply, playtest_init,
-    playtest_legal_actions, request_cancel, request_save, solve,
+    PlaytestLegalActionsResult, PlaytestLegalTargetsRequest, PlaytestLegalTargetsResult,
+    PressureLevel, SimType, SolveRequest, SolveResult, card_catalog, current_pressure,
+    evaluate_with_hand_progress_cancel, hand_threads, is_save_requested_on, memory_config,
+    new_cancel_flag, optimize_with_hand_progress, playtest_apply, playtest_init,
+    playtest_legal_actions, playtest_legal_targets, request_cancel, request_save, solve,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -158,6 +159,7 @@ async fn main() {
         // playtest for v1; clients should prefer these paths.
         .route("/game/v1/init", post(playtest_init_handler))
         .route("/game/v1/legal", post(playtest_legal_actions_handler))
+        .route("/game/v1/legal-targets", post(playtest_legal_targets_handler))
         .route("/game/v1/apply", post(playtest_apply_handler))
         .route("/evaluate", post(evaluate_handler))
         .route("/optimize", post(optimize_handler))
@@ -261,6 +263,14 @@ async fn playtest_legal_actions_handler(
     Json(request): Json<PlaytestLegalActionsRequest>,
 ) -> Result<Json<PlaytestLegalActionsResult>, (StatusCode, Json<PlaytestErrorBody>)> {
     playtest_legal_actions(&request)
+        .map(Json)
+        .map_err(playtest_error)
+}
+
+async fn playtest_legal_targets_handler(
+    Json(request): Json<PlaytestLegalTargetsRequest>,
+) -> Result<Json<PlaytestLegalTargetsResult>, (StatusCode, Json<PlaytestErrorBody>)> {
+    playtest_legal_targets(&request)
         .map(Json)
         .map_err(playtest_error)
 }

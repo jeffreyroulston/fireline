@@ -6,6 +6,8 @@ import type {
   PlaytestInitResult,
   PlaytestLegalActionsRequest,
   PlaytestLegalActionsResult,
+  PlaytestLegalTargetsRequest,
+  PlaytestLegalTargetsResult,
 } from "@ga-fire/contracts";
 import { proxyPlaytestJson } from "./proxy-playtest.js";
 import type { AppDeps } from "./types.js";
@@ -51,6 +53,13 @@ export function registerGameRoutes(app: Hono, options: AppDeps): void {
       c,
       workerBase,
       "/game/v1/legal",
+    ),
+  );
+  app.post("/game/v1/legal-targets", (c) =>
+    proxyPlaytestJson<PlaytestLegalTargetsRequest, PlaytestLegalTargetsResult>(
+      c,
+      workerBase,
+      "/game/v1/legal-targets",
     ),
   );
   app.post("/game/v1/apply", (c) =>

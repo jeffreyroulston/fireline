@@ -6,6 +6,8 @@
 pub enum Keyword {
     Stealth,
     AssassinStealth,
+    Taunt,
+    TrueSight,
     Unique,
     Fast,
     FloatingMemory,
@@ -35,6 +37,28 @@ pub const fn keywords_assassin_stealth(keywords: &[Keyword]) -> bool {
     let mut index = 0;
     while index < keywords.len() {
         if matches!(keywords[index], Keyword::AssassinStealth) {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+pub const fn keywords_taunt(keywords: &[Keyword]) -> bool {
+    let mut index = 0;
+    while index < keywords.len() {
+        if matches!(keywords[index], Keyword::Taunt) {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+pub const fn keywords_true_sight(keywords: &[Keyword]) -> bool {
+    let mut index = 0;
+    while index < keywords.len() {
+        if matches!(keywords[index], Keyword::TrueSight) {
             return true;
         }
         index += 1;

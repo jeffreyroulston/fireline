@@ -24,6 +24,11 @@ fn discard_choice_from_action(action: &PlaytestAction) -> (Option<bool>, Option<
             discard_hand_index,
             ..
         }
+        | PlaytestAction::AttackAlly {
+            skip_discard,
+            discard_hand_index,
+            ..
+        }
         | PlaytestAction::AttackOthers {
             skip_discard,
             discard_hand_index,
@@ -36,6 +41,12 @@ fn discard_choice_from_action(action: &PlaytestAction) -> (Option<bool>, Option<
 fn attack_discard_choices_from_action(action: &PlaytestAction) -> Vec<Option<u8>> {
     match action {
         PlaytestAction::AttackArthur {
+            discard_hand_indices,
+            skip_discard,
+            discard_hand_index,
+            ..
+        }
+        | PlaytestAction::AttackAlly {
             discard_hand_indices,
             skip_discard,
             discard_hand_index,
@@ -112,6 +123,24 @@ fn attack_discard_payments_from_action(
     let mut choice_iter = choices.into_iter();
     match engine_action {
         Action::AttackArthur(index) => {
+            let index = index as usize;
+            if index < state.ally_len as usize && state.can_ally_attack(index) {
+                let card = state.allies[index].card();
+                if let Some(req) = ally_attack_discard_requirement(state, card) {
+                    let choice = choice_iter.next().expect("choice count checked");
+                    let slots = preview_hand_for_attack_discard(state, index, req).0;
+                    payments.push(discard_payment_from_choice(
+                        choice,
+                        state,
+                        req,
+                        reserve_requirement,
+                        action,
+                        &slots,
+                    )?);
+                }
+            }
+        }
+        Action::AttackAlly(index) => {
             let index = index as usize;
             if index < state.ally_len as usize && state.can_ally_attack(index) {
                 let card = state.allies[index].card();

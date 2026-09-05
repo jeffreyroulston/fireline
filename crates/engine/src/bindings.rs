@@ -35,6 +35,8 @@ mod export {
             <crate::playtest::PlaytestInitResult as TS>::export_all(),
             <crate::playtest::PlaytestLegalActionsRequest as TS>::export_all(),
             <crate::playtest::PlaytestLegalActionsResult as TS>::export_all(),
+            <crate::playtest::PlaytestLegalTargetsRequest as TS>::export_all(),
+            <crate::playtest::PlaytestLegalTargetsResult as TS>::export_all(),
             <crate::playtest::PlaytestApplyResult as TS>::export_all(),
             <crate::playtest::PlaytestStateView as TS>::export_all(),
             <crate::playtest::PlaytestEngineState as TS>::export_all(),
@@ -42,6 +44,10 @@ mod export {
             <crate::playtest::PlaytestActionOption as TS>::export_all(),
             <crate::playtest::PlaytestDiscardStep as TS>::export_all(),
             <crate::playtest::PlaytestAllyView as TS>::export_all(),
+            <crate::rules::AttackerRef as TS>::export_all(),
+            <crate::rules::AttackTarget as TS>::export_all(),
+            <crate::rules::OpponentView as TS>::export_all(),
+            <crate::rules::OpponentAllyView as TS>::export_all(),
         );
     }
 }

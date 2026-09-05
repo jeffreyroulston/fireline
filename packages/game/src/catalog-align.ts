@@ -15,6 +15,8 @@ export type ApiCardRow = {
   power?: number | null;
   life?: number | null;
   stealth?: boolean;
+  taunt?: boolean;
+  trueSight?: boolean;
   unique?: boolean;
   assassinPowerBonus?: number | null;
   assassinStealth?: boolean;
@@ -48,6 +50,8 @@ export function toCardDef(card: ApiCardRow): CardDef {
     ...(card.power != null ? { power: card.power } : {}),
     ...(card.life != null ? { life: card.life } : {}),
     ...(card.stealth ? { stealth: true } : {}),
+    ...(card.taunt ? { taunt: true } : {}),
+    ...(card.trueSight ? { trueSight: true } : {}),
     ...(card.unique ? { unique: true } : {}),
     ...(card.assassinPowerBonus != null
       ? { assassinPowerBonus: card.assassinPowerBonus }

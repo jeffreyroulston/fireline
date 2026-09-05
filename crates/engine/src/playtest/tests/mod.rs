@@ -586,7 +586,7 @@ fn playtest_creative_shock_draws_two_then_discards() {
 }
 
 #[test]
-fn playtest_attack_others_two_hasty_discard_steps() {
+fn playtest_attack_ally_hasty_discard_per_unit() {
     use crate::line_event::EventKind;
 
     let mut state = State::with_queue(
@@ -609,35 +609,37 @@ fn playtest_attack_others_two_hasty_discard_steps() {
         state: engine.clone(),
     })
     .expect("legal");
-    let attack = legal
+    let attacks: Vec<_> = legal
         .actions
         .iter()
-        .find(|opt| matches!(opt.action, PlaytestAction::AttackOthers { .. }))
-        .expect("attack others");
-    assert_eq!(attack.discard_steps.len(), 2);
+        .filter(|opt| matches!(opt.action, PlaytestAction::AttackAlly { .. }))
+        .collect();
+    assert_eq!(attacks.len(), 2, "Full offers one AttackAlly per ready messenger");
+    assert_eq!(attacks[0].discard_steps.len(), 1);
+    assert_eq!(attacks[1].discard_steps.len(), 1);
 
-    let mut action = attack.action.clone();
-    if let PlaytestAction::AttackOthers {
+    let mut action = attacks[0].action.clone();
+    if let PlaytestAction::AttackAlly {
         discard_hand_indices,
         ..
     } = &mut action
     {
-        *discard_hand_indices = vec![Some(2), Some(3)];
+        *discard_hand_indices = vec![Some(2)];
     } else {
-        panic!("expected attack others");
+        panic!("expected attack ally");
     }
 
     let applied = playtest_apply(&PlaytestApplyRequest {
         state: engine,
         action,
     })
-    .expect("apply two attack discards");
+    .expect("apply attack ally discard");
     let draws = applied
         .events
         .iter()
         .filter(|event| event.kind == EventKind::OnAttackDraw)
         .count();
-    assert_eq!(draws, 2, "{:?}", applied.events);
+    assert_eq!(draws, 1, "{:?}", applied.events);
 }
 
 #[test]
@@ -790,8 +792,15 @@ fn playtest_legal_actions_locked_to_full_rules() {
         playtest
             .actions
             .iter()
+            .any(|opt| matches!(opt.action, PlaytestAction::AttackAlly { .. })),
+        "Full/playtest must offer AttackAlly while Arthur is ready"
+    );
+    assert!(
+        !playtest
+            .actions
+            .iter()
             .any(|opt| matches!(opt.action, PlaytestAction::AttackOthers { .. })),
-        "Full/playtest must offer AttackOthers while Arthur is ready"
+        "Full/playtest must not offer bulk AttackOthers"
     );
     assert!(
         !reduced

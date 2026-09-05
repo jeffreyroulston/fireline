@@ -5,6 +5,8 @@ import type {
   PlaytestInitResult,
   PlaytestLegalActionsRequest,
   PlaytestLegalActionsResult,
+  PlaytestLegalTargetsRequest,
+  PlaytestLegalTargetsResult,
 } from "@ga-fire/contracts";
 import type { ApiCardRow } from "@ga-fire/game";
 
@@ -71,6 +73,16 @@ export async function playtestLegalActions(
   request: PlaytestLegalActionsRequest,
 ): Promise<PlaytestLegalActionsResult> {
   const response = await apiFetch("/game/v1/legal", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+  return response.json();
+}
+
+export async function playtestLegalTargets(
+  request: PlaytestLegalTargetsRequest,
+): Promise<PlaytestLegalTargetsResult> {
+  const response = await apiFetch("/game/v1/legal-targets", {
     method: "POST",
     body: JSON.stringify(request),
   });

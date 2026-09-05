@@ -10,7 +10,7 @@ use super::keywords::{
     Keyword, keywords_assassin_power_bonus, keywords_assassin_stealth, keywords_automaton,
     keywords_command_automaton, keywords_fast, keywords_floating_memory, keywords_imbue,
     keywords_kindle, keywords_on_death_damage, keywords_on_death_draw, keywords_on_enter_level,
-    keywords_prepare, keywords_stealth, keywords_unique,
+    keywords_prepare, keywords_stealth, keywords_taunt, keywords_true_sight, keywords_unique,
 };
 use super::kind::CardKind;
 use super::Card;
@@ -70,6 +70,14 @@ impl CatalogEntry {
 
     pub const fn assassin_stealth(self) -> bool {
         keywords_assassin_stealth(self.keywords)
+    }
+
+    pub const fn is_taunt(self) -> bool {
+        keywords_taunt(self.keywords)
+    }
+
+    pub const fn is_true_sight(self) -> bool {
+        keywords_true_sight(self.keywords)
     }
 
     pub const fn is_unique(self) -> bool {
@@ -143,6 +151,10 @@ pub struct CardDef {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stealth: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub taunt: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub true_sight: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub unique: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assassin_power_bonus: Option<u8>,
@@ -178,6 +190,8 @@ impl CardDef {
             },
             life: entry.life,
             stealth: entry.is_stealth(),
+            taunt: entry.is_taunt(),
+            true_sight: entry.is_true_sight(),
             unique: entry.is_unique(),
             assassin_power_bonus: entry.assassin_power_bonus(),
             assassin_stealth: entry.assassin_stealth(),

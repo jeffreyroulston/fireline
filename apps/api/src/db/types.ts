@@ -43,6 +43,29 @@ export interface DecksTable {
   updated_at: Date;
 }
 
+/** Play-app decks — separate from workbench/sim `decks` / `material_decks`. */
+export interface PlayMaterialDecksTable {
+  id: string;
+  name: string;
+  text: string;
+  counts: Record<string, number>;
+  material_hash: string;
+  is_system: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface PlayDecksTable {
+  id: string;
+  name: string;
+  text: string;
+  counts: Record<string, number>;
+  deck_hash: string;
+  material_deck_id: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export type RunKind = "solve" | "evaluate" | "optimize";
 export type RunStatus =
   | "queued"
@@ -162,6 +185,8 @@ export interface Database {
   cards: CardsTable;
   material_decks: MaterialDecksTable;
   decks: DecksTable;
+  play_material_decks: PlayMaterialDecksTable;
+  play_decks: PlayDecksTable;
   deck_cards: DeckCardsTable;
   runs: RunsTable;
   run_samples: RunSamplesTable;

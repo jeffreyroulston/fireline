@@ -35,6 +35,9 @@ export type HudProps = {
   index: ActionTargetIndex;
   onSelect: (option: IndexedActionOption) => void;
   className?: string;
+  /** Duel: own champion life. When set, replaces Spirit damage readout. */
+  championLife?: number;
+  opponentLife?: number;
 };
 
 function Stat({
@@ -63,11 +66,19 @@ function Stat({
   );
 }
 
-export function Hud({ board, index, onSelect, className }: HudProps) {
+export function Hud({
+  board,
+  index,
+  onSelect,
+  className,
+  championLife,
+  opponentLife,
+}: HudProps) {
   const phaseRef = useRef<HTMLButtonElement>(null);
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
   const phaseOptions = optionsForTarget(index, PHASE_TARGET);
   const phasePlayable = phaseOptions.length > 0;
+  const duel = championLife != null;
 
   const primary = phaseOptions[0];
   const buttonLabel = primary
@@ -91,11 +102,21 @@ export function Hud({ board, index, onSelect, className }: HudProps) {
       )}
     >
       <div className="flex flex-wrap gap-x-5 gap-y-2">
-        <Stat
-          label="Damage"
-          value={`${board.damage} / ${ENEMY_CHAMPION_LIFE}`}
-          accent
-        />
+        {duel ? (
+          <>
+            <Stat label="Your life" value={championLife} accent />
+            {opponentLife != null ? (
+              <Stat label="Opp life" value={opponentLife} accent />
+            ) : null}
+            <Stat label="Line dmg" value={board.damage} />
+          </>
+        ) : (
+          <Stat
+            label="Damage"
+            value={`${board.damage} / ${ENEMY_CHAMPION_LIFE}`}
+            accent
+          />
+        )}
         <Stat label="Turn" value={board.turn + 1} />
         <Stat
           label="Phase"
